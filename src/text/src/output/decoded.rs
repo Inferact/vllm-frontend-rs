@@ -6,9 +6,8 @@ use tracing::info;
 use vllm_engine_core_client::protocol::{FinishReason, StopReason};
 use vllm_llm::GenerateOutputStream;
 
-use crate::backend::TextBackend;
+use crate::backend::{IncrementalDecoder, TextBackend};
 use crate::error::Error;
-use crate::output::incremental::IncrementalTextDecoder;
 
 /// Request-neutral options for incremental text decoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +56,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
 ) {
     yield DecodedTextEvent::Start;
 
-    let mut decoder: Option<IncrementalTextDecoder<B>> = None;
+    let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
     let mut text = String::new();
     let mut token_ids = Vec::new();
 
@@ -66,8 +65,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
         let output = next?;
         token_ids.extend_from_slice(&output.token_ids);
         let decoder = decoder.get_or_insert_with(|| {
-            IncrementalTextDecoder::new(
-                backend.clone(),
+            backend.create_decode_stream(
                 &output.prompt_token_ids,
                 decode_options.skip_special_tokens,
             )
@@ -81,24 +79,18 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             // in metadata while excluding it from user-visible text.
             // TODO: when northbound stop strings are supported, mirror Python's
             // richer stop-string trimming behavior here as well.
-            output
-                .token_ids
-                .split_last()
-                .map(|(_, rest)| rest)
-                .unwrap_or(&[])
+            output.token_ids.split_last().map(|(_, rest)| rest).unwrap_or(&[])
         } else {
             &output.token_ids
         };
 
         let mut delta = String::new();
         for &token_id in decodable_token_ids {
-            if let Some(chunk) = decoder.push_token(token_id)? {
+            if let Some(chunk) = decoder.step(token_id)? {
                 delta.push_str(&chunk);
             }
         }
-        if output.finished()
-            && let Some(chunk) = decoder.flush()?
-        {
+        if output.finished() && let Some(chunk) = decoder.flush()? {
             // Flush any remaining buffered text after the final token.
             delta.push_str(&chunk);
         }
