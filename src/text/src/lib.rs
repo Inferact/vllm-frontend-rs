@@ -28,6 +28,7 @@ use vllm_llm::Llm;
 mod backend;
 pub mod backends;
 mod error;
+mod incremental;
 mod lower;
 pub mod output;
 mod request;
