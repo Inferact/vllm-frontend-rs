@@ -65,10 +65,8 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
         let output = next?;
         token_ids.extend_from_slice(&output.token_ids);
         let decoder = decoder.get_or_insert_with(|| {
-            backend.create_decode_stream(
-                &output.prompt_token_ids,
-                decode_options.skip_special_tokens,
-            )
+            backend
+                .create_decode_stream(&output.prompt_token_ids, decode_options.skip_special_tokens)
         });
 
         let suppress_terminal_stop_token = output.finished()
@@ -79,7 +77,11 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             // in metadata while excluding it from user-visible text.
             // TODO: when northbound stop strings are supported, mirror Python's
             // richer stop-string trimming behavior here as well.
-            output.token_ids.split_last().map(|(_, rest)| rest).unwrap_or(&[])
+            output
+                .token_ids
+                .split_last()
+                .map(|(_, rest)| rest)
+                .unwrap_or(&[])
         } else {
             &output.token_ids
         };
@@ -90,7 +92,9 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 delta.push_str(&chunk);
             }
         }
-        if output.finished() && let Some(chunk) = decoder.flush()? {
+        if output.finished()
+            && let Some(chunk) = decoder.flush()?
+        {
             // Flush any remaining buffered text after the final token.
             delta.push_str(&chunk);
         }

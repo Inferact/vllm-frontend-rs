@@ -44,7 +44,6 @@ pub trait TextBackend: Send + Sync {
     ///
     /// The prompt tokens provide left context for the first generated token; the decoder does not
     /// re-emit prompt text.
-    ///
     fn create_decode_stream(
         &self,
         prompt_token_ids: &[u32],
@@ -116,7 +115,11 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
         let remaining = &text[self.prefix.len()..];
         self.ids.clear();
         self.prefix.clear();
-        if remaining.is_empty() { Ok(None) } else { Ok(Some(remaining.to_string())) }
+        if remaining.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(remaining.to_string()))
+        }
     }
 }
 
@@ -213,10 +216,7 @@ mod tests {
         let mut keep_decoder = backend.create_decode_stream(&[], false);
 
         assert_eq!(skip_decoder.step(0).unwrap(), None);
-        assert_eq!(
-            keep_decoder.step(0).unwrap().as_deref(),
-            Some("<special>")
-        );
+        assert_eq!(keep_decoder.step(0).unwrap().as_deref(), Some("<special>"));
     }
 
     #[test]
