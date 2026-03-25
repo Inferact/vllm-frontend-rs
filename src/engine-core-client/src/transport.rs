@@ -120,12 +120,14 @@ async fn bind_local_sockets(
     local_input_address: Option<&str>,
     local_output_address: Option<&str>,
 ) -> Result<(String, RouterSocket, String, PullSocket)> {
-    let input_address = local_input_address
-        .map(ToOwned::to_owned)
-        .unwrap_or(allocate_tcp_address(local_host).await?);
-    let output_address = local_output_address
-        .map(ToOwned::to_owned)
-        .unwrap_or(allocate_tcp_address(local_host).await?);
+    let input_address = match local_input_address {
+        Some(addr) => addr.to_owned(),
+        None => allocate_tcp_address(local_host).await?,
+    };
+    let output_address = match local_output_address {
+        Some(addr) => addr.to_owned(),
+        None => allocate_tcp_address(local_host).await?,
+    };
 
     let mut input_socket = RouterSocket::new();
     input_socket.bind(&input_address).await?;
