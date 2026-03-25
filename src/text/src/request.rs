@@ -17,7 +17,9 @@ pub enum Prompt {
 }
 
 impl Default for Prompt {
-    fn default() -> Self { Self::TokenIds(vec![]) }
+    fn default() -> Self {
+        Self::Text(String::new()) // placeholder
+    }
 }
 
 /// User-facing sampling parameters accepted by `vllm-text`.

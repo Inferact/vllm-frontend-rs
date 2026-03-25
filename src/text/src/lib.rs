@@ -8,6 +8,7 @@
 //! and the thin generate-facing backend interface live here.
 
 use std::mem::take;
+
 pub use backend::{DynTextBackend, SamplingHints, TextBackend};
 pub use error::{Error, Result};
 use futures::Stream;
