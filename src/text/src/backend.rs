@@ -99,10 +99,9 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
         let string = self.backend.decode(&self.ids, self.skip_special_tokens)?;
         if string.len() > self.prefix.len() && !string.ends_with('\u{FFFD}') {
             let new_text = string[self.prefix.len()..].to_string();
-            let new_prefix_index = self.ids.len() - self.prefix_index;
-            self.ids = self.ids.drain(self.prefix_index..).collect();
+            self.ids.drain(..self.prefix_index);
             self.prefix = self.backend.decode(&self.ids, self.skip_special_tokens)?;
-            self.prefix_index = new_prefix_index;
+            self.prefix_index = self.ids.len();
             Ok(Some(new_text))
         } else {
             Ok(None)
