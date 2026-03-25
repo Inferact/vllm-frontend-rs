@@ -30,7 +30,7 @@ use zeromq::prelude::{Socket, SocketRecv, SocketSend};
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
 
-use super::build_router;
+use super::{build_router, build_router_with_dev_mode};
 use crate::routes::chat_completions::convert::prepare_chat_request;
 use crate::state::AppState;
 
@@ -434,7 +434,10 @@ where
 
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
     (
-        build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat))),
+        build_router_with_dev_mode(
+            Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)),
+            true,
+        ),
         engine_task,
     )
 }
@@ -2024,4 +2027,40 @@ async fn is_sleeping_route_returns_json_payload() {
         serde_json::from_slice::<serde_json::Value>(&body).expect("decode json"),
         json!({ "is_sleeping": true })
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn admin_routes_are_hidden_when_dev_mode_is_disabled() {
+    let (chat, engine_task) = test_chat_with_engine_handle().await;
+    let app = build_router_with_dev_mode(
+        Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)),
+        false,
+    );
+
+    for (method, uri) in [
+        ("GET", "/is_sleeping"),
+        ("POST", "/sleep"),
+        ("POST", "/wake_up"),
+        ("POST", "/reset_prefix_cache"),
+        ("POST", "/reset_mm_cache"),
+        ("POST", "/reset_encoder_cache"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
+    }
+
+    engine_task.abort();
+    let _ = engine_task.await;
 }
