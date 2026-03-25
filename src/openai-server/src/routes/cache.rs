@@ -3,9 +3,9 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use thiserror_ext::AsReport;
 
 use crate::error::ApiError;
+use crate::routes::utils::utility_call_error;
 use crate::state::AppState;
 
 #[derive(Debug, Default, Deserialize)]
@@ -14,10 +14,6 @@ pub(crate) struct ResetPrefixCacheParams {
     reset_running_requests: bool,
     #[serde(default)]
     reset_external: bool,
-}
-
-fn utility_call_error(method: &str, error: impl AsReport) -> ApiError {
-    ApiError::server_error(format!("failed to call {method}: {}", error.as_report()))
 }
 
 /// Reset the local prefix cache and optionally the connector-managed external cache.

@@ -4,9 +4,9 @@ use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use thiserror_ext::AsReport;
 
 use crate::error::ApiError;
+use crate::routes::utils::utility_call_error;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -34,10 +34,6 @@ const fn default_sleep_level() -> u32 {
 
 fn default_sleep_mode() -> String {
     "abort".to_string()
-}
-
-fn utility_call_error(method: &str, error: impl AsReport) -> ApiError {
-    ApiError::server_error(format!("failed to call {method}: {}", error.as_report()))
 }
 
 /// Put the engine to sleep.
