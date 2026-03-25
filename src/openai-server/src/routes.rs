@@ -1,10 +1,11 @@
+mod cache;
 mod chat_completions;
 mod completions;
 mod health;
-mod is_sleeping;
 mod load;
 mod metrics;
 mod models;
+mod sleep;
 mod utils;
 
 use std::sync::Arc;
@@ -33,7 +34,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         // Dev-mode & admin
         // TODO: only expose this endpoint when in dev mode (`VLLM_SERVER_DEV_MODE=1`)
-        .route("/is_sleeping", get(is_sleeping::is_sleeping))
+        .route("/reset_prefix_cache", post(cache::reset_prefix_cache))
+        .route("/reset_mm_cache", post(cache::reset_mm_cache))
+        .route("/reset_encoder_cache", post(cache::reset_encoder_cache))
+        .route("/sleep", post(sleep::sleep))
+        .route("/wake_up", post(sleep::wake_up))
+        .route("/is_sleeping", get(sleep::is_sleeping))
         // State & middleware
         .with_state(state.clone())
         .layer(from_fn_with_state(state, middleware::track_server_load))
