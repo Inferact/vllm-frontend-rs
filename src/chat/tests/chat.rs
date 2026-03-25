@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt as _;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use vllm_chat::{
     AssistantBlockKind, AssistantContentBlock, AssistantMessageExt as _, ChatBackend, ChatEvent,
@@ -397,8 +398,8 @@ async fn chat_streams_text_events() {
     }
     assert!(stream.next().await.is_none());
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -479,8 +480,8 @@ async fn chat_stream_waits_for_complete_utf8_before_emitting() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -562,8 +563,8 @@ async fn chat_stream_flushes_held_text_on_finish() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[test]
@@ -633,8 +634,8 @@ async fn chat_stream_reports_decode_failure_as_error_event() {
         other => panic!("unexpected event after close: {other:?}"),
     }
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -714,8 +715,8 @@ async fn chat_stream_preserves_terminal_stop_token_when_requested() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -849,8 +850,8 @@ async fn chat_stream_separates_reasoning_blocks_automatically() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -910,8 +911,8 @@ async fn chat_collectors_return_structured_message_and_visible_text() {
         bytes_to_token_ids(b"<think>inner</think>outer")
     );
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1006,8 +1007,8 @@ async fn chat_stream_parses_tool_calls_automatically() {
     assert!(saw_tool_args);
     assert!(saw_tool_end);
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1075,8 +1076,8 @@ async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode()
         r#"{"city":"Paris"}"#
     );
 
-    chat.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    chat.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1084,12 +1085,14 @@ async fn chat_rejects_tool_parsing_without_model_hint() {
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-tool-no-model".to_vec();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
     let engine_task = tokio::spawn({
         let engine_handshake = handshake_address.clone();
         let engine_identity = engine_identity.clone();
         async move {
-            let _ = setup_mock_engine(engine_handshake, engine_identity).await;
+            let _engine = setup_mock_engine(engine_handshake, engine_identity).await;
+            let _ = shutdown_rx.await;
         }
     });
 
@@ -1107,6 +1110,7 @@ async fn chat_rejects_tool_parsing_without_model_hint() {
 
     assert!(matches!(error, vllm_chat::Error::ToolParserRequiresModelId));
 
+    let _ = shutdown_tx.send(());
+    engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
-    engine_task.abort();
 }

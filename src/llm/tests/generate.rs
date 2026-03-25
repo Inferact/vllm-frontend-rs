@@ -237,8 +237,8 @@ async fn generate_streams_delta_outputs() {
     assert_eq!(second.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -289,8 +289,8 @@ async fn generate_streams_cumulative_outputs() {
     assert_eq!(second.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -338,8 +338,8 @@ async fn generate_streams_final_only_outputs() {
     assert_eq!(final_output.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -387,8 +387,8 @@ async fn generate_propagates_unexpected_close_errors() {
     ));
     assert!(stream.next().await.is_none());
 
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -427,8 +427,8 @@ async fn abort_forwards_to_engine_core_client() {
     drop(stream);
 
     llm.abort("req-abort").await.unwrap();
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -545,10 +545,9 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
             request_id
         }) if request_id == "req-dup"
     ));
-    drop(stream_1);
-
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    drop(stream_1);
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -672,8 +671,8 @@ async fn generate_records_request_metrics_in_prometheus_output() {
         "vllm:request_prefill_kv_computed_tokens_count{{model_name=\"{model_name}\",engine=\"4\"}} 1"
     )));
 
-    llm.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

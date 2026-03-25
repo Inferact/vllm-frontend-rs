@@ -484,8 +484,8 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
             .is_none()
     );
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -558,8 +558,8 @@ async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
             .unwrap()
             .is_none()
     );
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -624,8 +624,8 @@ async fn finished_requests_without_final_output_is_treated_as_unexpected_close()
             .is_none()
     );
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -749,8 +749,8 @@ async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
     };
     assert!(is_decode_error(&add_error));
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -810,8 +810,8 @@ async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
     let result = client.is_sleeping().await.unwrap();
     assert!(result);
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -875,8 +875,8 @@ async fn call_utility_failure_message_surfaces_as_error() {
         } if method == "is_sleeping" && message == "boom"
     ));
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -923,8 +923,8 @@ async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
             .expect("health error recorded")
     ));
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1031,8 +1031,8 @@ async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
         Some(Error::EngineCoreDead)
     ));
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1087,8 +1087,8 @@ async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
             .expect("health error recorded")
     ));
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1140,8 +1140,8 @@ async fn client_decodes_multipart_logprob_outputs() {
             .expect("logprobs decoded"),
     );
 
-    client.shutdown().await.unwrap();
     engine_task.await.unwrap();
+    client.shutdown().await.unwrap();
 }
 
 #[test]
