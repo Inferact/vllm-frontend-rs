@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::convert::TryFrom;
-use std::net::TcpListener;
 use std::sync::Once;
 use std::time::Duration;
 
@@ -13,6 +12,7 @@ use vllm_engine_core_client::protocol::{
     EngineCoreEvent, EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
     EngineCoreSamplingParams, FinishReason, RequestOutputKind,
 };
+use vllm_engine_core_client::test_utils::IpcNamespace;
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig};
 use vllm_llm::{Error, GenerateRequest, Llm};
 use vllm_metrics::METRICS;
@@ -21,13 +21,6 @@ use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
 
 static TRACING: Once = Once::new();
-
-fn unique_tcp_endpoint() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("tcp://127.0.0.1:{port}")
-}
 
 fn ready_message(status: &str) -> ReadyMessage {
     ReadyMessage {
@@ -151,22 +144,23 @@ async fn setup_mock_engine(
     (dealer, push)
 }
 
-async fn connect_async_llm(handshake_address: String, client_index: u32) -> Llm {
-    connect_async_llm_with_model(handshake_address, client_index, "test-model").await
-}
-
-async fn connect_async_llm_with_model(
+async fn connect_async_llm_with_ipc(
     handshake_address: String,
     client_index: u32,
     model_name: &str,
+    ipc: &IpcNamespace,
 ) -> Llm {
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: model_name.to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index,
-    })
+    let client = EngineCoreClient::connect_with_input_output_addresses(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: model_name.to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index,
+        },
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
     .await
     .unwrap();
     Llm::new(client)
@@ -190,7 +184,8 @@ fn init_tracing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_streams_delta_outputs() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-delta".to_vec();
 
     let engine_task = tokio::spawn({
@@ -221,7 +216,7 @@ async fn generate_streams_delta_outputs() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 7).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 7, "test-model", &ipc).await;
     let mut stream = llm
         .generate(sample_generate_request(
             "req-delta",
@@ -248,7 +243,8 @@ async fn generate_streams_delta_outputs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_streams_cumulative_outputs() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-cumulative".to_vec();
 
     let engine_task = tokio::spawn({
@@ -275,7 +271,7 @@ async fn generate_streams_cumulative_outputs() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
         .generate(sample_generate_request(
             "req-cumulative",
@@ -299,7 +295,8 @@ async fn generate_streams_cumulative_outputs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_streams_final_only_outputs() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-final".to_vec();
 
     let engine_task = tokio::spawn({
@@ -326,7 +323,7 @@ async fn generate_streams_final_only_outputs() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
         .generate(sample_generate_request(
             "req-final",
@@ -347,7 +344,8 @@ async fn generate_streams_final_only_outputs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_propagates_unexpected_close_errors() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-close".to_vec();
 
     let engine_task = tokio::spawn({
@@ -370,7 +368,7 @@ async fn generate_propagates_unexpected_close_errors() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
         .generate(sample_generate_request(
             "req-close",
@@ -395,7 +393,8 @@ async fn generate_propagates_unexpected_close_errors() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_forwards_to_engine_core_client() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-abort".to_vec();
 
     let engine_task = tokio::spawn({
@@ -416,7 +415,7 @@ async fn abort_forwards_to_engine_core_client() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let stream = llm
         .generate(sample_generate_request(
             "req-abort",
@@ -434,7 +433,8 @@ async fn abort_forwards_to_engine_core_client() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_a_live_generate_stream_triggers_abort() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-drop".to_vec();
 
     let engine_task = tokio::spawn({
@@ -464,7 +464,7 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
         .generate(sample_generate_request(
             "req-drop",
@@ -484,7 +484,8 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-dup".to_vec();
 
     let engine_task = tokio::spawn({
@@ -518,7 +519,7 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
         }
     });
 
-    let llm = connect_async_llm(handshake_address, 0).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let stream_1 = llm
         .generate(sample_generate_request(
             "req-dup",
@@ -552,7 +553,8 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_records_request_metrics_in_prometheus_output() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-metrics".to_vec();
     let model_name = request_metrics_model_name("metrics-model");
 
@@ -612,7 +614,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
         }
     });
 
-    let llm = connect_async_llm_with_model(handshake_address, 0, &model_name).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics", RequestOutputKind::Delta, 8);
     request.arrival_time = None;
     let mut stream = llm.generate(request).await.unwrap();
@@ -676,7 +678,8 @@ async fn generate_records_request_metrics_in_prometheus_output() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_stream_records_abort_terminal_request_metrics() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-metrics-drop".to_vec();
     let model_name = request_metrics_model_name("metrics-drop-model");
 
@@ -721,7 +724,7 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
         }
     });
 
-    let llm = connect_async_llm_with_model(handshake_address, 0, &model_name).await;
+    let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics-drop", RequestOutputKind::Delta, 8);
     request.arrival_time = None;
     let mut stream = llm.generate(request).await.unwrap();

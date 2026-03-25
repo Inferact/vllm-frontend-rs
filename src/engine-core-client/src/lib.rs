@@ -2,6 +2,8 @@ mod client;
 mod error;
 mod metrics;
 pub mod protocol;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils;
 mod transport;
 
 pub use client::{

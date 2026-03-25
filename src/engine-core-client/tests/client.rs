@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::io::Cursor;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
@@ -12,6 +11,8 @@ use rmpv::Value;
 use thiserror_ext::AsReport as _;
 use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
+#[path = "../src/test_utils.rs"]
+mod test_utils;
 use vllm_engine_core_client::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
 use vllm_engine_core_client::protocol::{
     EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, EngineCoreSamplingParams, FinishReason,
@@ -24,6 +25,8 @@ use vllm_engine_core_client::{
 use zeromq::prelude::{Socket, SocketRecv, SocketSend};
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
+
+use crate::test_utils::IpcNamespace;
 
 static TRACING: Once = Once::new();
 
@@ -63,13 +66,6 @@ fn expect_prompt_logprobs(actual: &MaybeWireLogprobs) {
         }
     "#]]
     .assert_debug_eq(actual.as_direct().expect("prompt logprobs resolved"));
-}
-
-fn unique_tcp_endpoint() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("tcp://127.0.0.1:{port}")
 }
 
 fn sample_request() -> EngineCoreRequest {
@@ -207,6 +203,19 @@ async fn setup_mock_engine(
     (dealer, push)
 }
 
+async fn connect_client_with_ipc(
+    config: EngineCoreClientConfig,
+    ipc: &IpcNamespace,
+) -> EngineCoreClient {
+    EngineCoreClient::connect_with_input_output_addresses(
+        config,
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
+    .await
+    .unwrap()
+}
+
 fn init_tracing() {
     TRACING.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
@@ -304,7 +313,8 @@ where
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_streams_outputs_per_request_and_ignores_other_messages() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-0".to_vec();
 
     let engine_task = tokio::spawn({
@@ -398,15 +408,17 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 7,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 7,
+        },
+        &ipc,
+    )
+    .await;
     assert_eq!(client.engine_identity(), b"engine-0");
     assert_eq!(
         client
@@ -479,7 +491,8 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-dup".to_vec();
 
     let engine_task = tokio::spawn({
@@ -511,15 +524,17 @@ async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let mut stream = client.call(sample_request()).await.unwrap();
     let error = match client.call(sample_request()).await {
@@ -550,7 +565,8 @@ async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn finished_requests_without_final_output_is_treated_as_unexpected_close() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-finished-only".to_vec();
 
     let engine_task = tokio::spawn({
@@ -579,15 +595,17 @@ async fn finished_requests_without_final_output_is_treated_as_unexpected_close()
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let mut stream = client.call(sample_request()).await.unwrap();
     let error = timeout(Duration::from_secs(1), stream.next())
@@ -613,7 +631,8 @@ async fn finished_requests_without_final_output_is_treated_as_unexpected_close()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_a_live_stream_triggers_abort() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-drop".to_vec();
 
     let engine_task = tokio::spawn({
@@ -642,15 +661,17 @@ async fn dropping_a_live_stream_triggers_abort() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let mut stream = client.call(sample_request()).await.unwrap();
     let first = timeout(Duration::from_secs(1), stream.next())
@@ -668,7 +689,8 @@ async fn dropping_a_live_stream_triggers_abort() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-fail".to_vec();
 
     let engine_task = tokio::spawn({
@@ -684,15 +706,17 @@ async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let mut stream_1 = client.call(sample_request_with_id("req-1")).await.unwrap();
     let mut stream_2 = client.call(sample_request_with_id("req-2")).await.unwrap();
@@ -732,7 +756,8 @@ async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-utility-success".to_vec();
 
     let engine_task = tokio::spawn({
@@ -770,15 +795,17 @@ async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 5,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 5,
+        },
+        &ipc,
+    )
+    .await;
 
     let result = client.is_sleeping().await.unwrap();
     assert!(result);
@@ -790,7 +817,8 @@ async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn call_utility_failure_message_surfaces_as_error() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-utility-fail".to_vec();
 
     let engine_task = tokio::spawn({
@@ -822,15 +850,17 @@ async fn call_utility_failure_message_surfaces_as_error() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let error = client
         .call_utility::<bool, _>("is_sleeping", ())
@@ -852,7 +882,8 @@ async fn call_utility_failure_message_surfaces_as_error() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-utility-dispatcher-fail".to_vec();
 
     let engine_task = tokio::spawn({
@@ -868,15 +899,17 @@ async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let error = client
         .call_utility::<bool, _>("is_sleeping", ())
@@ -897,7 +930,8 @@ async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_times_out_without_ready_message() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_handshake = handshake_address.clone();
     let engine_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -916,13 +950,17 @@ async fn connect_times_out_without_ready_message() {
         let _ = handshake.recv().await.unwrap();
     });
 
-    let result = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_millis(100),
-        client_index: 0,
-    })
+    let result = EngineCoreClient::connect_with_input_output_addresses(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_millis(100),
+            client_index: 0,
+        },
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
     .await;
 
     let error = match result {
@@ -939,7 +977,8 @@ async fn connect_times_out_without_ready_message() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-dead".to_vec();
 
     let engine_task = tokio::spawn({
@@ -953,15 +992,17 @@ async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     timeout(Duration::from_secs(2), async {
         while client.is_healthy() {
@@ -997,7 +1038,8 @@ async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-output-failure".to_vec();
 
     let engine_task = tokio::spawn({
@@ -1016,15 +1058,17 @@ async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     timeout(Duration::from_secs(2), async {
         while client.is_healthy() {
@@ -1050,7 +1094,8 @@ async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_decodes_multipart_logprob_outputs() {
     init_tracing();
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-multipart-logprobs".to_vec();
 
     let engine_task = tokio::spawn({
@@ -1068,15 +1113,17 @@ async fn client_decodes_multipart_logprob_outputs() {
         }
     });
 
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
-    .await
-    .unwrap();
+    let client = connect_client_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+    )
+    .await;
 
     let stream = client.call(sample_request()).await.unwrap();
     let outputs = stream.collect::<Vec<_>>().await;

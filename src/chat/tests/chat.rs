@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::fmt;
-use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +15,7 @@ use vllm_engine_core_client::protocol::handshake::{HandshakeInitMessage, ReadyMe
 use vllm_engine_core_client::protocol::{
     EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, FinishReason, StopReason,
 };
+use vllm_engine_core_client::test_utils::IpcNamespace;
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig};
 use vllm_llm::Llm;
 use vllm_text::TextBackend;
@@ -24,13 +24,6 @@ use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
 
 const SPECIAL_STOP_TOKEN_ID: u32 = 256;
-
-fn unique_tcp_endpoint() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("tcp://127.0.0.1:{port}")
-}
 
 fn ready_message(status: &str) -> ReadyMessage {
     ReadyMessage {
@@ -133,14 +126,16 @@ async fn setup_mock_engine(
     (dealer, push)
 }
 
-async fn connect_chat_llm(handshake_address: String, backend: Arc<dyn ChatTextBackend>) -> ChatLlm {
-    let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address,
-        model_name: "test-model".to_string(),
-        local_host: "127.0.0.1".to_string(),
-        ready_timeout: Duration::from_secs(2),
-        client_index: 0,
-    })
+async fn connect_chat_llm_with_ipc(
+    config: EngineCoreClientConfig,
+    ipc: &IpcNamespace,
+    backend: Arc<dyn ChatTextBackend>,
+) -> ChatLlm {
+    let client = EngineCoreClient::connect_with_input_output_addresses(
+        config,
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
     .await
     .unwrap();
     ChatLlm::from_shared_backend(Llm::new(client), backend)
@@ -284,7 +279,8 @@ fn sample_tool_request(request_id: &str) -> ChatRequest {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_streams_text_events() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat".to_vec();
 
     let engine_task = tokio::spawn({
@@ -337,7 +333,18 @@ async fn chat_streams_text_events() {
     });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig {
+            handshake_address,
+            model_name: "test-model".to_string(),
+            local_host: "127.0.0.1".to_string(),
+            ready_timeout: Duration::from_secs(2),
+            client_index: 0,
+        },
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut stream = chat.chat(sample_request("chat-1")).await.unwrap();
 
@@ -396,7 +403,8 @@ async fn chat_streams_text_events() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_waits_for_complete_utf8_before_emitting() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-utf8".to_vec();
 
     let engine_task = tokio::spawn({
@@ -426,7 +434,12 @@ async fn chat_stream_waits_for_complete_utf8_before_emitting() {
     });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut stream = chat.chat(sample_request("chat-utf8")).await.unwrap();
 
@@ -472,7 +485,8 @@ async fn chat_stream_waits_for_complete_utf8_before_emitting() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_flushes_held_text_on_finish() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-final-flush".to_vec();
 
     let engine_task = tokio::spawn({
@@ -499,7 +513,12 @@ async fn chat_stream_flushes_held_text_on_finish() {
     });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut stream = chat.chat(sample_request("chat-final-flush")).await.unwrap();
 
@@ -569,7 +588,8 @@ fn backend_requires_a_template() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_reports_decode_failure_as_error_event() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-decode-fail".to_vec();
 
     let engine_task = tokio::spawn({
@@ -592,7 +612,12 @@ async fn chat_stream_reports_decode_failure_as_error_event() {
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FailingDecodeBackend {
         inner: FakeChatBackend::new(),
     });
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut stream = chat.chat(sample_request("chat-4")).await.unwrap();
     assert_eq!(stream.request_id(), "chat-4");
@@ -614,7 +639,8 @@ async fn chat_stream_reports_decode_failure_as_error_event() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_preserves_terminal_stop_token_when_requested() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-include-stop".to_vec();
 
     let engine_task = tokio::spawn({
@@ -641,7 +667,12 @@ async fn chat_stream_preserves_terminal_stop_token_when_requested() {
     });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut request = sample_request("chat-include-stop");
     request.decode_options.include_stop_str_in_output = true;
@@ -689,7 +720,8 @@ async fn chat_stream_preserves_terminal_stop_token_when_requested() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_separates_reasoning_blocks_automatically() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-reasoning".to_vec();
 
     let engine_task = tokio::spawn({
@@ -737,7 +769,12 @@ async fn chat_stream_separates_reasoning_blocks_automatically() {
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
 
     let mut stream = chat.chat(sample_request("chat-reasoning")).await.unwrap();
 
@@ -818,7 +855,8 @@ async fn chat_stream_separates_reasoning_blocks_automatically() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_collectors_return_structured_message_and_visible_text() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-collect".to_vec();
 
     let engine_task = tokio::spawn({
@@ -846,7 +884,12 @@ async fn chat_collectors_return_structured_message_and_visible_text() {
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
-    let chat = connect_chat_llm(handshake_address.clone(), backend.clone()).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address.clone()),
+        &ipc,
+        backend.clone(),
+    )
+    .await;
 
     let message = chat
         .chat(sample_request("chat-collect"))
@@ -873,7 +916,8 @@ async fn chat_collectors_return_structured_message_and_visible_text() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_stream_parses_tool_calls_automatically() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-tool".to_vec();
 
     let engine_task = tokio::spawn({
@@ -911,7 +955,12 @@ async fn chat_stream_parses_tool_calls_automatically() {
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
     let mut stream = chat.chat(sample_tool_request("chat-tool")).await.unwrap();
 
     let mut saw_tool_start = false;
@@ -963,7 +1012,8 @@ async fn chat_stream_parses_tool_calls_automatically() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-final-only-tool".to_vec();
 
     let engine_task = tokio::spawn({
@@ -1001,7 +1051,12 @@ async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode()
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
     let mut request = sample_tool_request("chat-final-only-tool");
     request.intermediate = false;
 
@@ -1026,7 +1081,8 @@ async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_rejects_tool_parsing_without_model_hint() {
-    let handshake_address = unique_tcp_endpoint();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-tool-no-model".to_vec();
 
     let engine_task = tokio::spawn({
@@ -1038,7 +1094,12 @@ async fn chat_rejects_tool_parsing_without_model_hint() {
     });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
-    let chat = connect_chat_llm(handshake_address, backend).await;
+    let chat = connect_chat_llm_with_ipc(
+        EngineCoreClientConfig::new(handshake_address),
+        &ipc,
+        backend,
+    )
+    .await;
     let error = match chat.chat(sample_tool_request("chat-tool-no-model")).await {
         Ok(_) => panic!("tool parsing without model hint should fail"),
         Err(error) => error,
