@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::convert::TryFrom;
 use std::sync::Once;
 use std::time::Duration;
 
@@ -7,31 +6,18 @@ use futures::StreamExt as _;
 use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
-use vllm_engine_core_client::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
 use vllm_engine_core_client::protocol::{
     EngineCoreEvent, EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
     EngineCoreSamplingParams, FinishReason, RequestOutputKind,
 };
-use vllm_engine_core_client::test_utils::IpcNamespace;
+use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig};
 use vllm_llm::{Error, GenerateRequest, Llm};
 use vllm_metrics::METRICS;
-use zeromq::prelude::{Socket, SocketRecv, SocketSend};
-use zeromq::util::PeerIdentity;
-use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
+use zeromq::prelude::{SocketRecv, SocketSend};
+use zeromq::{DealerSocket, PushSocket, ZmqMessage};
 
 static TRACING: Once = Once::new();
-
-fn ready_message(status: &str) -> ReadyMessage {
-    ReadyMessage {
-        status: Some(status.to_string()),
-        local: Some(true),
-        headless: Some(true),
-        num_gpu_blocks: None,
-        dp_stats_address: None,
-        parallel_config_hash: None,
-    }
-}
 
 fn request_output(
     request_id: &str,
@@ -98,52 +84,6 @@ async fn recv_engine_message(dealer: &mut DealerSocket) -> Vec<bytes::Bytes> {
     dealer.recv().await.unwrap().into_vec()
 }
 
-async fn setup_mock_engine(
-    engine_handshake: String,
-    engine_identity: Vec<u8>,
-) -> (DealerSocket, PushSocket) {
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut options = SocketOptions::default();
-    options.peer_identity(PeerIdentity::try_from(engine_identity.clone()).unwrap());
-    let mut handshake = DealerSocket::with_options(options);
-    handshake.connect(&engine_handshake).await.unwrap();
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("HELLO")).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-    let init_frames = handshake.recv().await.unwrap().into_vec();
-    assert_eq!(init_frames.len(), 1);
-    let init: HandshakeInitMessage = rmp_serde::from_slice(init_frames[0].as_ref()).unwrap();
-
-    let engine_input = init.addresses.inputs[0].clone();
-    let engine_output = init.addresses.outputs[0].clone();
-
-    let mut input_options = SocketOptions::default();
-    input_options.peer_identity(PeerIdentity::try_from(engine_identity).unwrap());
-    let mut dealer = DealerSocket::with_options(input_options);
-    dealer.connect(&engine_input).await.unwrap();
-    dealer
-        .send(ZmqMessage::from(Vec::<u8>::new()))
-        .await
-        .unwrap();
-
-    let mut push = PushSocket::new();
-    push.connect(&engine_output).await.unwrap();
-
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("READY")).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-    (dealer, push)
-}
-
 async fn connect_async_llm_with_ipc(
     handshake_address: String,
     client_index: u32,
@@ -188,33 +128,33 @@ async fn generate_streams_delta_outputs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-delta".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.request_id, "req-delta");
+                assert_eq!(request.client_index, 7);
+                assert_eq!(request.prompt_token_ids, Some(vec![11, 22]));
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-            let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
-            assert_eq!(request.request_id, "req-delta");
-            assert_eq!(request.client_index, 7);
-            assert_eq!(request.prompt_token_ids, Some(vec![11, 22]));
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output("req-delta", vec![1, 2], None),
-                        request_output("req-delta", vec![3], Some(FinishReason::Length)),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["req-delta".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output("req-delta", vec![1, 2], None),
+                            request_output("req-delta", vec![3], Some(FinishReason::Length)),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["req-delta".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 7, "test-model", &ipc).await;
     let mut stream = llm
@@ -237,6 +177,7 @@ async fn generate_streams_delta_outputs() {
     assert_eq!(second.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -247,29 +188,33 @@ async fn generate_streams_cumulative_outputs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-cumulative".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output("req-cumulative", vec![9], None),
-                        request_output("req-cumulative", vec![10, 11], Some(FinishReason::Length)),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["req-cumulative".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output("req-cumulative", vec![9], None),
+                            request_output(
+                                "req-cumulative",
+                                vec![10, 11],
+                                Some(FinishReason::Length),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["req-cumulative".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
@@ -289,6 +234,7 @@ async fn generate_streams_cumulative_outputs() {
     assert_eq!(second.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -299,29 +245,29 @@ async fn generate_streams_final_only_outputs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-final".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output("req-final", vec![4], None),
-                        request_output("req-final", vec![5, 6], Some(FinishReason::Length)),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["req-final".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output("req-final", vec![4], None),
+                            request_output("req-final", vec![5, 6], Some(FinishReason::Length)),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["req-final".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
@@ -338,6 +284,7 @@ async fn generate_streams_final_only_outputs() {
     assert_eq!(final_output.raw.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -348,25 +295,25 @@ async fn generate_propagates_unexpected_close_errors() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-close".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    finished_requests: Some(BTreeSet::from(["req-close".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        finished_requests: Some(BTreeSet::from(["req-close".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
@@ -387,6 +334,7 @@ async fn generate_propagates_unexpected_close_errors() {
     ));
     assert!(stream.next().await.is_none());
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -397,23 +345,24 @@ async fn abort_forwards_to_engine_core_client() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-abort".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, _push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-
-            let abort = timeout(Duration::from_secs(1), recv_engine_message(&mut dealer))
-                .await
-                .unwrap();
-            assert_eq!(abort[0].as_ref(), &[0x01]);
-            let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
-            assert_eq!(aborted_ids, vec!["req-abort".to_string()]);
-        }
-    });
+                let abort = timeout(Duration::from_secs(1), recv_engine_message(dealer))
+                    .await
+                    .unwrap();
+                assert_eq!(abort[0].as_ref(), &[0x01]);
+                let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
+                assert_eq!(aborted_ids, vec!["req-abort".to_string()]);
+                let _ = push;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let stream = llm
@@ -427,6 +376,7 @@ async fn abort_forwards_to_engine_core_client() {
     drop(stream);
 
     llm.abort("req-abort").await.unwrap();
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -437,32 +387,32 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-drop".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output("req-drop", vec![99], None)],
+                        ..Default::default()
+                    },
+                )
+                .await;
 
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output("req-drop", vec![99], None)],
-                    ..Default::default()
-                },
-            )
-            .await;
-
-            let abort = timeout(Duration::from_secs(1), recv_engine_message(&mut dealer))
-                .await
-                .unwrap();
-            assert_eq!(abort[0].as_ref(), &[0x01]);
-            let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
-            assert_eq!(aborted_ids, vec!["req-drop".to_string()]);
-        }
-    });
+                let abort = timeout(Duration::from_secs(1), recv_engine_message(dealer))
+                    .await
+                    .unwrap();
+                assert_eq!(abort[0].as_ref(), &[0x01]);
+                let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
+                assert_eq!(aborted_ids, vec!["req-drop".to_string()]);
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let mut stream = llm
@@ -478,6 +428,7 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
     assert_eq!(output.token_ids, vec![99]);
     drop(stream);
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -488,36 +439,36 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-dup".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
+                assert!(
+                    timeout(Duration::from_millis(200), dealer.recv())
+                        .await
+                        .is_err()
+                );
 
-            assert!(
-                timeout(Duration::from_millis(200), dealer.recv())
-                    .await
-                    .is_err()
-            );
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output(
-                        "req-dup",
-                        vec![],
-                        Some(FinishReason::Length),
-                    )],
-                    finished_requests: Some(BTreeSet::from(["req-dup".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output(
+                            "req-dup",
+                            vec![],
+                            Some(FinishReason::Length),
+                        )],
+                        finished_requests: Some(BTreeSet::from(["req-dup".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
     let stream_1 = llm
@@ -545,6 +496,7 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
             request_id
         }) if request_id == "req-dup"
     ));
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     drop(stream_1);
     llm.shutdown().await.unwrap();
@@ -557,61 +509,61 @@ async fn generate_records_request_metrics_in_prometheus_output() {
     let engine_identity = b"engine-metrics".to_vec();
     let model_name = request_metrics_model_name("metrics-model");
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 4,
+                        timestamp: 10.0,
+                        outputs: vec![request_output_with_events(
+                            "req-metrics",
+                            vec![1],
+                            None,
+                            Some(vec![
+                                EngineCoreEvent {
+                                    r#type: EngineCoreEventType::Queued,
+                                    timestamp: 8.0,
+                                },
+                                EngineCoreEvent {
+                                    r#type: EngineCoreEventType::Scheduled,
+                                    timestamp: 9.0,
+                                },
+                            ]),
+                        )],
+                        ..Default::default()
+                    },
+                )
+                .await;
 
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 4,
-                    timestamp: 10.0,
-                    outputs: vec![request_output_with_events(
-                        "req-metrics",
-                        vec![1],
-                        None,
-                        Some(vec![
-                            EngineCoreEvent {
-                                r#type: EngineCoreEventType::Queued,
-                                timestamp: 8.0,
-                            },
-                            EngineCoreEvent {
-                                r#type: EngineCoreEventType::Scheduled,
-                                timestamp: 9.0,
-                            },
-                        ]),
-                    )],
-                    ..Default::default()
-                },
-            )
-            .await;
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 4,
-                    timestamp: 11.5,
-                    outputs: vec![request_output_with_events(
-                        "req-metrics",
-                        vec![2, 3],
-                        Some(FinishReason::Length),
-                        Some(vec![EngineCoreEvent {
-                            r#type: EngineCoreEventType::Preempted,
-                            timestamp: 10.5,
-                        }]),
-                    )],
-                    finished_requests: Some(BTreeSet::from(["req-metrics".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 4,
+                        timestamp: 11.5,
+                        outputs: vec![request_output_with_events(
+                            "req-metrics",
+                            vec![2, 3],
+                            Some(FinishReason::Length),
+                            Some(vec![EngineCoreEvent {
+                                r#type: EngineCoreEventType::Preempted,
+                                timestamp: 10.5,
+                            }]),
+                        )],
+                        finished_requests: Some(BTreeSet::from(["req-metrics".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics", RequestOutputKind::Delta, 8);
@@ -671,6 +623,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
         "vllm:request_prefill_kv_computed_tokens_count{{model_name=\"{model_name}\",engine=\"4\"}} 1"
     )));
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
 }
@@ -682,46 +635,46 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
     let engine_identity = b"engine-metrics-drop".to_vec();
     let model_name = request_metrics_model_name("metrics-drop-model");
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 5,
+                        timestamp: 10.0,
+                        outputs: vec![request_output_with_events(
+                            "req-metrics-drop",
+                            vec![99],
+                            None,
+                            Some(vec![
+                                EngineCoreEvent {
+                                    r#type: EngineCoreEventType::Queued,
+                                    timestamp: 8.0,
+                                },
+                                EngineCoreEvent {
+                                    r#type: EngineCoreEventType::Scheduled,
+                                    timestamp: 9.0,
+                                },
+                            ]),
+                        )],
+                        ..Default::default()
+                    },
+                )
+                .await;
 
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 5,
-                    timestamp: 10.0,
-                    outputs: vec![request_output_with_events(
-                        "req-metrics-drop",
-                        vec![99],
-                        None,
-                        Some(vec![
-                            EngineCoreEvent {
-                                r#type: EngineCoreEventType::Queued,
-                                timestamp: 8.0,
-                            },
-                            EngineCoreEvent {
-                                r#type: EngineCoreEventType::Scheduled,
-                                timestamp: 9.0,
-                            },
-                        ]),
-                    )],
-                    ..Default::default()
-                },
-            )
-            .await;
-
-            let abort = timeout(Duration::from_secs(1), recv_engine_message(&mut dealer))
-                .await
-                .unwrap();
-            assert_eq!(abort[0].as_ref(), &[0x01]);
-        }
-    });
+                let abort = timeout(Duration::from_secs(1), recv_engine_message(dealer))
+                    .await
+                    .unwrap();
+                assert_eq!(abort[0].as_ref(), &[0x01]);
+            })
+        },
+    );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics-drop", RequestOutputKind::Delta, 8);
@@ -730,6 +683,7 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
     assert_eq!(stream.next().await.unwrap().unwrap().token_ids, vec![99]);
     drop(stream);
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     let rendered = METRICS.render().unwrap();
     assert!(rendered.contains(&format!(

@@ -1,41 +1,26 @@
 use std::collections::BTreeSet;
-use std::convert::TryFrom;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use tokio::sync::oneshot;
 use tokio::time::timeout;
 use vllm_chat::{
     AssistantBlockKind, AssistantContentBlock, AssistantMessageExt as _, ChatBackend, ChatEvent,
     ChatLlm, ChatMessage, ChatOptions, ChatRequest, ChatRole, ChatTextBackend, ChatTool,
     ChatToolChoice, SamplingParams,
 };
-use vllm_engine_core_client::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
 use vllm_engine_core_client::protocol::{
     EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, FinishReason, StopReason,
 };
-use vllm_engine_core_client::test_utils::IpcNamespace;
+use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig};
 use vllm_llm::Llm;
 use vllm_text::TextBackend;
-use zeromq::prelude::{Socket, SocketRecv, SocketSend};
-use zeromq::util::PeerIdentity;
-use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
+use zeromq::prelude::{SocketRecv, SocketSend};
+use zeromq::{DealerSocket, PushSocket, ZmqMessage};
 
 const SPECIAL_STOP_TOKEN_ID: u32 = 256;
-
-fn ready_message(status: &str) -> ReadyMessage {
-    ReadyMessage {
-        status: Some(status.to_string()),
-        local: Some(true),
-        headless: Some(true),
-        num_gpu_blocks: None,
-        dp_stats_address: None,
-        parallel_config_hash: None,
-    }
-}
 
 fn request_output(
     request_id: &str,
@@ -79,52 +64,6 @@ async fn send_outputs(push: &mut PushSocket, outputs: EngineCoreOutputs) {
 
 async fn recv_engine_message(dealer: &mut DealerSocket) -> Vec<bytes::Bytes> {
     dealer.recv().await.unwrap().into_vec()
-}
-
-async fn setup_mock_engine(
-    engine_handshake: String,
-    engine_identity: Vec<u8>,
-) -> (DealerSocket, PushSocket) {
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut options = SocketOptions::default();
-    options.peer_identity(PeerIdentity::try_from(engine_identity.clone()).unwrap());
-    let mut handshake = DealerSocket::with_options(options);
-    handshake.connect(&engine_handshake).await.unwrap();
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("HELLO")).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-    let init_frames = handshake.recv().await.unwrap().into_vec();
-    assert_eq!(init_frames.len(), 1);
-    let init: HandshakeInitMessage = rmp_serde::from_slice(init_frames[0].as_ref()).unwrap();
-
-    let engine_input = init.addresses.inputs[0].clone();
-    let engine_output = init.addresses.outputs[0].clone();
-
-    let mut input_options = SocketOptions::default();
-    input_options.peer_identity(PeerIdentity::try_from(engine_identity).unwrap());
-    let mut dealer = DealerSocket::with_options(input_options);
-    dealer.connect(&engine_input).await.unwrap();
-    dealer
-        .send(ZmqMessage::from(Vec::<u8>::new()))
-        .await
-        .unwrap();
-
-    let mut push = PushSocket::new();
-    push.connect(&engine_output).await.unwrap();
-
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("READY")).unwrap(),
-        ))
-        .await
-        .unwrap();
-
-    (dealer, push)
 }
 
 async fn connect_chat_llm_with_ipc(
@@ -284,54 +223,54 @@ async fn chat_streams_text_events() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.request_id, "chat-1");
+                // more fields here in the future
+                assert_eq!(
+                    String::from_utf8(
+                        request
+                            .prompt_token_ids
+                            .clone()
+                            .unwrap()
+                            .into_iter()
+                            .map(|id| id as u8)
+                            .collect()
+                    )
+                    .unwrap(),
+                    "system: You are terse.\nuser: Say hi\nassistant:"
+                );
+                assert_eq!(
+                    request.sampling_params.unwrap().output_kind,
+                    vllm_engine_core_client::protocol::RequestOutputKind::Delta
+                );
 
-            let add = recv_engine_message(&mut dealer).await;
-            assert_eq!(add[0].as_ref(), &[0x00]);
-            let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
-            assert_eq!(request.request_id, "chat-1");
-            // more fields here in the future
-            assert_eq!(
-                String::from_utf8(
-                    request
-                        .prompt_token_ids
-                        .clone()
-                        .unwrap()
-                        .into_iter()
-                        .map(|id| id as u8)
-                        .collect()
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output("chat-1", vec![b'H' as u32], None, None),
+                            request_output(
+                                "chat-1",
+                                vec![b'i' as u32, b'!' as u32],
+                                Some(FinishReason::Stop),
+                                Some(StopReason::TokenId(b'!' as u32)),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["chat-1".to_string()])),
+                        ..Default::default()
+                    },
                 )
-                .unwrap(),
-                "system: You are terse.\nuser: Say hi\nassistant:"
-            );
-            assert_eq!(
-                request.sampling_params.unwrap().output_kind,
-                vllm_engine_core_client::protocol::RequestOutputKind::Delta
-            );
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output("chat-1", vec![b'H' as u32], None, None),
-                        request_output(
-                            "chat-1",
-                            vec![b'i' as u32, b'!' as u32],
-                            Some(FinishReason::Stop),
-                            Some(StopReason::TokenId(b'!' as u32)),
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["chat-1".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
     let chat = connect_chat_llm_with_ipc(
@@ -398,6 +337,7 @@ async fn chat_streams_text_events() {
     }
     assert!(stream.next().await.is_none());
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -408,31 +348,32 @@ async fn chat_stream_waits_for_complete_utf8_before_emitting() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-utf8".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output("chat-utf8", bytes_to_token_ids(&[0xe4]), None, None),
-                        request_output(
-                            "chat-utf8",
-                            bytes_to_token_ids(&[0xbd, 0xa0, b'!']),
-                            Some(FinishReason::Stop),
-                            Some(StopReason::TokenId(b'!' as u32)),
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["chat-utf8".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output("chat-utf8", bytes_to_token_ids(&[0xe4]), None, None),
+                            request_output(
+                                "chat-utf8",
+                                bytes_to_token_ids(&[0xbd, 0xa0, b'!']),
+                                Some(FinishReason::Stop),
+                                Some(StopReason::TokenId(b'!' as u32)),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["chat-utf8".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
     let chat = connect_chat_llm_with_ipc(
@@ -480,6 +421,7 @@ async fn chat_stream_waits_for_complete_utf8_before_emitting() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -490,28 +432,29 @@ async fn chat_stream_flushes_held_text_on_finish() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-final-flush".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output(
-                        "chat-final-flush",
-                        bytes_to_token_ids(b"ok st"),
-                        Some(FinishReason::Length),
-                        None,
-                    )],
-                    finished_requests: Some(BTreeSet::from(["chat-final-flush".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output(
+                            "chat-final-flush",
+                            bytes_to_token_ids(b"ok st"),
+                            Some(FinishReason::Length),
+                            None,
+                        )],
+                        finished_requests: Some(BTreeSet::from(["chat-final-flush".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
     let chat = connect_chat_llm_with_ipc(
@@ -563,6 +506,7 @@ async fn chat_stream_flushes_held_text_on_finish() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -593,22 +537,23 @@ async fn chat_stream_reports_decode_failure_as_error_event() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-decode-fail".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output("chat-4", vec![b'X' as u32], None, None)],
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output("chat-4", vec![b'X' as u32], None, None)],
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FailingDecodeBackend {
         inner: FakeChatBackend::new(),
@@ -634,6 +579,7 @@ async fn chat_stream_reports_decode_failure_as_error_event() {
         other => panic!("unexpected event after close: {other:?}"),
     }
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -644,28 +590,29 @@ async fn chat_stream_preserves_terminal_stop_token_when_requested() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-include-stop".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output(
-                        "chat-include-stop",
-                        vec![b'H' as u32, b'i' as u32, b'!' as u32],
-                        Some(FinishReason::Stop),
-                        Some(StopReason::TokenId(b'!' as u32)),
-                    )],
-                    finished_requests: Some(BTreeSet::from(["chat-include-stop".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output(
+                            "chat-include-stop",
+                            vec![b'H' as u32, b'i' as u32, b'!' as u32],
+                            Some(FinishReason::Stop),
+                            Some(StopReason::TokenId(b'!' as u32)),
+                        )],
+                        finished_requests: Some(BTreeSet::from(["chat-include-stop".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
     let chat = connect_chat_llm_with_ipc(
@@ -715,6 +662,7 @@ async fn chat_stream_preserves_terminal_stop_token_when_requested() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -725,48 +673,49 @@ async fn chat_stream_separates_reasoning_blocks_automatically() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-reasoning".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output(
-                            "chat-reasoning",
-                            bytes_to_token_ids(b"<think>"),
-                            None,
-                            None,
-                        ),
-                        request_output(
-                            "chat-reasoning",
-                            bytes_to_token_ids(b"reason "),
-                            None,
-                            None,
-                        ),
-                        request_output(
-                            "chat-reasoning",
-                            bytes_to_token_ids(b"more</think>"),
-                            None,
-                            None,
-                        ),
-                        request_output(
-                            "chat-reasoning",
-                            bytes_to_token_ids(b"answer"),
-                            Some(FinishReason::Length),
-                            None,
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["chat-reasoning".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output(
+                                "chat-reasoning",
+                                bytes_to_token_ids(b"<think>"),
+                                None,
+                                None,
+                            ),
+                            request_output(
+                                "chat-reasoning",
+                                bytes_to_token_ids(b"reason "),
+                                None,
+                                None,
+                            ),
+                            request_output(
+                                "chat-reasoning",
+                                bytes_to_token_ids(b"more</think>"),
+                                None,
+                                None,
+                            ),
+                            request_output(
+                                "chat-reasoning",
+                                bytes_to_token_ids(b"answer"),
+                                Some(FinishReason::Length),
+                                None,
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["chat-reasoning".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
@@ -850,6 +799,7 @@ async fn chat_stream_separates_reasoning_blocks_automatically() {
         other => panic!("unexpected final event: {other:?}"),
     }
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -860,28 +810,29 @@ async fn chat_collectors_return_structured_message_and_visible_text() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-collect".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![request_output(
-                        "chat-collect",
-                        bytes_to_token_ids(b"<think>inner</think>outer"),
-                        Some(FinishReason::Length),
-                        None,
-                    )],
-                    finished_requests: Some(BTreeSet::from(["chat-collect".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output(
+                            "chat-collect",
+                            bytes_to_token_ids(b"<think>inner</think>outer"),
+                            Some(FinishReason::Length),
+                            None,
+                        )],
+                        finished_requests: Some(BTreeSet::from(["chat-collect".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
@@ -911,6 +862,7 @@ async fn chat_collectors_return_structured_message_and_visible_text() {
         bytes_to_token_ids(b"<think>inner</think>outer")
     );
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -921,38 +873,39 @@ async fn chat_stream_parses_tool_calls_automatically() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-tool".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output(
-                            "chat-tool",
-                            bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
-                            None,
-                            None,
-                        ),
-                        request_output(
-                            "chat-tool",
-                            bytes_to_token_ids(
-                                b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output(
+                                "chat-tool",
+                                bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
+                                None,
+                                None,
                             ),
-                            Some(FinishReason::Stop),
-                            None,
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["chat-tool".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                            request_output(
+                                "chat-tool",
+                                bytes_to_token_ids(
+                                    b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+                                ),
+                                Some(FinishReason::Stop),
+                                None,
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from(["chat-tool".to_string()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
@@ -1007,6 +960,7 @@ async fn chat_stream_parses_tool_calls_automatically() {
     assert!(saw_tool_args);
     assert!(saw_tool_end);
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -1017,38 +971,41 @@ async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode()
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-final-only-tool".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = recv_engine_message(&mut dealer).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    outputs: vec![
-                        request_output(
-                            "chat-final-only-tool",
-                            bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
-                            None,
-                            None,
-                        ),
-                        request_output(
-                            "chat-final-only-tool",
-                            bytes_with_special_stop_token(
-                                b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_identity.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let _ = recv_engine_message(dealer).await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output(
+                                "chat-final-only-tool",
+                                bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
+                                None,
+                                None,
                             ),
-                            Some(FinishReason::Stop),
-                            Some(StopReason::TokenId(SPECIAL_STOP_TOKEN_ID)),
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from(["chat-final-only-tool".to_string()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+                            request_output(
+                                "chat-final-only-tool",
+                                bytes_with_special_stop_token(
+                                    b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+                                ),
+                                Some(FinishReason::Stop),
+                                Some(StopReason::TokenId(SPECIAL_STOP_TOKEN_ID)),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from([
+                            "chat-final-only-tool".to_string()
+                        ])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
 
     let backend: Arc<dyn ChatTextBackend> =
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B"));
@@ -1076,6 +1033,7 @@ async fn chat_collect_message_preserves_tool_call_arguments_in_final_only_mode()
         r#"{"city":"Paris"}"#
     );
 
+    let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     chat.shutdown().await.unwrap();
 }
@@ -1085,16 +1043,10 @@ async fn chat_rejects_tool_parsing_without_model_hint() {
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
     let engine_identity = b"engine-chat-tool-no-model".to_vec();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_identity = engine_identity.clone();
-        async move {
-            let _engine = setup_mock_engine(engine_handshake, engine_identity).await;
-            let _ = shutdown_rx.await;
-        }
-    });
+    let (shutdown_tx, engine_task) =
+        spawn_mock_engine_task(handshake_address.clone(), engine_identity, |_, _| {
+            Box::pin(async move {})
+        });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
     let chat = connect_chat_llm_with_ipc(

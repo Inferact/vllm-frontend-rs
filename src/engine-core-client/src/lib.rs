@@ -11,3 +11,6 @@ pub use client::{
 };
 pub use error::{Error, Result};
 pub use transport::ENGINE_CORE_DEAD_SENTINEL;
+
+#[cfg(test)]
+mod tests;
