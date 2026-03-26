@@ -46,7 +46,7 @@ pub struct FrontendRuntimeArgs {
     #[arg(long, env = "VLLM_HOST_IP", default_value = "127.0.0.1")]
     pub engine_local_host: String,
     /// Maximum time to wait for the engine handshake to complete.
-    #[arg(long, env = "VLLM_ENGINE_READY_TIMEOUT_S", default_value_t = 30)]
+    #[arg(long, env = "VLLM_ENGINE_READY_TIMEOUT_S", default_value_t = 300)]
     pub ready_timeout_secs: u64,
     /// Select the tool call parser depending on the model that you're using.
     /// When not specified, the parser is auto-detected from the model.
