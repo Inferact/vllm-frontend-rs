@@ -251,16 +251,16 @@ impl Normalizable for ChatCompletionRequest {
         }
 
         // Apply tool_choice defaults
-        if self.tool_choice.is_none() {
-            if let Some(tools) = &self.tools {
-                let choice_value = if tools.is_empty() {
-                    ToolChoiceValue::None
-                } else {
-                    ToolChoiceValue::Auto
-                };
-                self.tool_choice = Some(ToolChoice::Value(choice_value));
-            }
-            // If tools is None, leave tool_choice as None (don't set it)
+        // If tools is None, leave tool_choice as None (don't set it)
+        if self.tool_choice.is_none()
+            && let Some(tools) = &self.tools
+        {
+            let choice_value = if tools.is_empty() {
+                ToolChoiceValue::None
+            } else {
+                ToolChoiceValue::Auto
+            };
+            self.tool_choice = Some(ToolChoice::Value(choice_value));
         }
     }
 }
