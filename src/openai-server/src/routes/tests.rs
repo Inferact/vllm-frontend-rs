@@ -191,6 +191,34 @@ fn prompt_logprobs_for_hello() -> Logprobs {
                     },
                 ],
             },
+            PositionLogprobs {
+                entries: vec![
+                    TokenLogprob {
+                        token_id: b'l' as u32,
+                        logprob: -0.45,
+                        rank: 1,
+                    },
+                    TokenLogprob {
+                        token_id: b'i' as u32,
+                        logprob: -0.65,
+                        rank: 1,
+                    },
+                ],
+            },
+            PositionLogprobs {
+                entries: vec![
+                    TokenLogprob {
+                        token_id: b'o' as u32,
+                        logprob: -0.5,
+                        rank: 1,
+                    },
+                    TokenLogprob {
+                        token_id: b'u' as u32,
+                        logprob: -0.7,
+                        rank: 1,
+                    },
+                ],
+            },
         ],
     }
 }
@@ -1589,11 +1617,15 @@ async fn non_stream_completions_include_prompt_logprobs() {
     assert_eq!(json["choices"][0]["text"], "hellohi");
     assert_eq!(
         json["choices"][0]["logprobs"]["tokens"],
-        json!(["h", "i", "!"])
+        json!(["h", "e", "l", "l", "o", "h", "i", "!"])
     );
     assert_eq!(
         json["choices"][0]["logprobs"]["text_offset"],
-        json!([5, 6, 7])
+        json!([0, 1, 2, 3, 4, 5, 6, 7])
+    );
+    assert_eq!(
+        json["choices"][0]["logprobs"]["token_logprobs"],
+        json!([null, -0.3, -0.4, -0.45, -0.5, -0.1, -0.1, -0.1])
     );
     assert_eq!(
         json["choices"][0]["prompt_logprobs"][0],

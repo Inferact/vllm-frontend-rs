@@ -19,7 +19,8 @@ use vllm_engine_core_client::protocol::FinishReason;
 use vllm_text::{DecodedTextEvent, TextOutputStream, TextOutputStreamExt as _};
 
 use super::utils::logprobs::{
-    decoded_logprobs_to_openai, decoded_prompt_logprobs_to_maps, text_len,
+    collected_logprobs_to_openai, decoded_logprobs_to_openai, decoded_prompt_logprobs_to_maps,
+    text_len,
 };
 use super::utils::unix_timestamp;
 use crate::error::{ApiError, bail_server_error, server_error};
@@ -123,30 +124,29 @@ async fn collect_completion(
         .as_ref()
         .map(|prompt| text_len(prompt))
         .unwrap_or_default();
-    let text = match &echo {
-        None => collected.text,
-        Some(prompt) => format!("{prompt}{}", collected.text),
-    };
-    let logprobs = if requested_logprobs.is_some() {
-        let completion_logprobs = collected.logprobs.as_ref().ok_or_else(|| {
-            server_error!("completion response requested logprobs but generation returned none")
-        })?;
-        Some(decoded_logprobs_to_openai(
-            completion_logprobs,
-            prompt_char_count,
-        )?)
-    } else {
-        None
-    };
     let prompt_logprobs = if include_prompt_logprobs {
         let prompt_logprobs = collected.prompt_logprobs.as_ref().ok_or_else(|| {
             server_error!(
                 "completion response requested prompt_logprobs but generation returned none"
             )
         })?;
-        Some(decoded_prompt_logprobs_to_maps(prompt_logprobs))
+        Some(prompt_logprobs)
     } else {
         None
+    };
+    let logprobs = if requested_logprobs.is_some() {
+        Some(collected_logprobs_to_openai(
+            &collected,
+            echo.is_some(),
+            prompt_char_count,
+        )?)
+    } else {
+        None
+    };
+    let prompt_logprobs = prompt_logprobs.map(decoded_prompt_logprobs_to_maps);
+    let text = match &echo {
+        None => collected.text,
+        Some(prompt) => format!("{prompt}{}", collected.text),
     };
 
     Ok(CompletionResponse {
@@ -482,7 +482,7 @@ mod tests {
 
         let chunks = chunks
             .into_iter()
-            .collect::<Result<Vec<_>, _>>()
+            .try_collect::<Vec<_>>()
             .expect("stream should succeed");
 
         match &chunks[0] {
