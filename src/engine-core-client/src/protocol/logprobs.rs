@@ -36,6 +36,8 @@ pub struct PositionLogprobs {
 }
 
 impl PositionLogprobs {
+    /// Convert one decoded logprobs row into this per-position form by grouping each token/logprob
+    /// pair together with the sampled/selected token's actual vocab rank.
     fn from_decoded_row(token_ids: &[u32], logprobs: &[f32], sampled_rank: u32) -> Result<Self> {
         if token_ids.len() != logprobs.len() {
             return Err(Error::ValueDecodeExt(format!(
