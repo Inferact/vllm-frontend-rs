@@ -22,7 +22,7 @@ pub struct GenerateOutput {
     pub prompt_token_ids: Arc<[u32]>,
     /// Generated token IDs for this update.
     ///
-    /// The exact semantics depend on `sampling_params.output_kind`:
+    /// The exact semantics depend on the request's `output_kind`:
     /// - `Delta`: only the newly produced token IDs for this step
     /// - `FinalOnly`: the full completion, emitted once on the terminal step
     pub token_ids: Vec<u32>,
@@ -106,7 +106,7 @@ impl Stream for GenerateOutputStream {
                     finished.then(|| GenerateOutput {
                         request_id: raw.request_id.clone(),
                         prompt_token_ids: self.prompt_token_ids.clone(),
-                        token_ids: self.collected_token_ids.clone(),
+                        token_ids: std::mem::take(&mut self.collected_token_ids),
                         raw,
                     })
                 }

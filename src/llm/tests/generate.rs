@@ -60,10 +60,10 @@ fn sample_generate_request(
         request_id: request_id.to_string(),
         prompt_token_ids: vec![11, 22],
         sampling_params: EngineCoreSamplingParams {
-            output_kind,
             max_tokens,
             ..EngineCoreSamplingParams::for_test()
         },
+        output_kind,
         arrival_time: Some(42.5),
         cache_salt: None,
         trace_headers: None,
