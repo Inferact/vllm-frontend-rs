@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use bytes::Bytes;
 use rmpv::Value;
 
-use super::{Logprobs, decode_engine_core_outputs};
+use super::{Logprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs};
 use crate::protocol::FinishReason;
 
 fn encode_value(value: &Value) -> Vec<u8> {
@@ -90,38 +90,38 @@ fn inline_prompt_logprobs_value() -> Value {
 fn expected_sample_logprobs() -> Logprobs {
     Logprobs {
         positions: vec![
-            super::PositionLogprobs {
+            PositionLogprobs {
                 entries: vec![
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 1,
                         logprob: 1.0,
                         rank: 1,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 2,
                         logprob: 2.0,
                         rank: 1,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 3,
                         logprob: 3.0,
                         rank: 2,
                     },
                 ],
             },
-            super::PositionLogprobs {
+            PositionLogprobs {
                 entries: vec![
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 4,
                         logprob: 4.0,
                         rank: 2,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 5,
                         logprob: 5.0,
                         rank: 1,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 6,
                         logprob: 6.0,
                         rank: 2,
@@ -135,38 +135,38 @@ fn expected_sample_logprobs() -> Logprobs {
 fn expected_prompt_logprobs() -> Logprobs {
     Logprobs {
         positions: vec![
-            super::PositionLogprobs {
+            PositionLogprobs {
                 entries: vec![
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 10,
                         logprob: 10.0,
                         rank: 3,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 11,
                         logprob: 11.0,
                         rank: 1,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 12,
                         logprob: 12.0,
                         rank: 2,
                     },
                 ],
             },
-            super::PositionLogprobs {
+            PositionLogprobs {
                 entries: vec![
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 13,
                         logprob: 13.0,
                         rank: 4,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 14,
                         logprob: 14.0,
                         rank: 1,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 15,
                         logprob: 15.0,
                         rank: 2,
@@ -272,14 +272,14 @@ fn decodes_big_endian_payloads() {
     assert_eq!(
         logprobs,
         Logprobs {
-            positions: vec![super::PositionLogprobs {
+            positions: vec![PositionLogprobs {
                 entries: vec![
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 1,
                         logprob: 1.0,
                         rank: 3,
                     },
-                    super::TokenLogprob {
+                    TokenLogprob {
                         token_id: 2,
                         logprob: 2.0,
                         rank: 1,
