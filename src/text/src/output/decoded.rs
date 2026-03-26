@@ -114,8 +114,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             started = true;
         }
 
-        let suppress_terminal_stop_token = output.finished()
-            && matches!(output.finish_reason(), Some(FinishReason::Stop(_)))
+        let suppress_terminal_stop_token = output.finish_reason().is_some_and(|r| r.is_stop())
             && !decode_options.include_stop_str_in_output;
         let decodable_token_ids = if suppress_terminal_stop_token {
             // Match Python V1 token-stop detokenization by keeping the stop token
