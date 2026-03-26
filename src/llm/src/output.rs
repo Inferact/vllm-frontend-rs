@@ -48,14 +48,18 @@ pub struct GenerateOutput {
 }
 
 impl GenerateOutput {
-    /// Returns the one-time prompt token IDs when this output carries [`GeneratePromptInfo`].
+    /// Returns the prompt token IDs when this output carries [`GeneratePromptInfo`].
+    ///
+    /// Only the first output for a request can return `Some`; all later outputs return `None`.
     pub fn prompt_token_ids(&self) -> Option<&[u32]> {
         self.prompt_info
             .as_ref()
             .map(|info| info.prompt_token_ids.as_ref())
     }
 
-    /// Returns the one-time prompt logprobs when this output carries [`GeneratePromptInfo`].
+    /// Returns the prompt logprobs when this output carries [`GeneratePromptInfo`].
+    ///
+    /// Only the first output for a request can return `Some`; all later outputs return `None`.
     pub fn prompt_logprobs(&self) -> Option<&Logprobs> {
         self.prompt_info
             .as_ref()
