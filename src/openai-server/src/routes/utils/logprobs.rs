@@ -96,11 +96,11 @@ pub fn decoded_prompt_logprobs_to_maps(
 pub fn decoded_logprobs_to_openai_chat(
     logprobs: &DecodedLogprobs,
 ) -> Result<ChatLogProbs, ApiError> {
-    let mut content = Vec::with_capacity(logprobs.positions.len());
-
-    for position in &logprobs.positions {
-        content.push(position_to_chat_logprobs_content(position)?);
-    }
+    let content = logprobs
+        .positions
+        .iter()
+        .map(position_to_chat_logprobs_content)
+        .try_collect()?;
 
     Ok(ChatLogProbs::Detailed {
         content: Some(content),
