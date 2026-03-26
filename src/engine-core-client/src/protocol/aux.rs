@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Logprobs {
     /// `[num_reqs x num_generated_tokens, max_num_logprobs + 1]`
-    pub logprob_token_ids: Array2<i64>,
+    pub logprob_token_ids: Array2<u32>,
     /// `[num_reqs x num_generated_tokens, max_num_logprobs + 1]`
     pub logprobs: Array2<f32>,
     /// `[num_reqs x num_generated_tokens]`
@@ -33,7 +33,7 @@ pub struct Logprobs {
     /// Python uses the field name `sampled_token_ranks` for sample logprobs and
     /// `selected_token_ranks` for prompt logprobs. Rust keeps one neutral field because both
     /// payloads share the same wire representation.
-    pub token_ranks: Array1<i64>,
+    pub token_ranks: Array1<u32>,
     /// `[num_reqs]`
     ///
     /// Used for slicing outputs when different requests generated different numbers of tokens in
@@ -146,7 +146,7 @@ impl WireLogprobs {
         Frame: AsRef<[u8]>,
     {
         Ok(Logprobs {
-            logprob_token_ids: array::decode_array2_i64(
+            logprob_token_ids: array::decode_array2_u32(
                 self.logprob_token_ids,
                 &format!("{field_prefix}.logprob_token_ids"),
                 frames,
@@ -156,7 +156,7 @@ impl WireLogprobs {
                 &format!("{field_prefix}.logprobs"),
                 frames,
             )?,
-            token_ranks: array::decode_array1_i64(
+            token_ranks: array::decode_array1_u32(
                 self.token_ranks,
                 &format!("{field_prefix}.token_ranks"),
                 frames,
