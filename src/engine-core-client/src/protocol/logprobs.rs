@@ -99,7 +99,7 @@ impl Logprobs {
 pub enum MaybeWireLogprobs {
     /// The logprobs are still in the wire format and need to be resolved by looking up aux frames
     /// and decoding raw views. Should only be used internally during deserialization.
-    Wire(WireLogprobs),
+    Wire(Box<WireLogprobs>),
     /// The actual decoded logprobs value,
     Direct(Logprobs),
 }
@@ -130,7 +130,7 @@ impl<'de> Deserialize<'de> for MaybeWireLogprobs {
         D: Deserializer<'de>,
     {
         // When deserializing, it's always in the wire form.
-        WireLogprobs::deserialize(deserializer).map(Self::Wire)
+        WireLogprobs::deserialize(deserializer).map(|v| Self::Wire(Box::new(v)))
     }
 }
 
@@ -236,7 +236,7 @@ impl WireLogprobs {
             .data
             .chunks(token_ids.cols)
             .zip(logprobs.data.chunks(logprobs.cols))
-            .zip(token_ranks.into_iter())
+            .zip(token_ranks)
         {
             positions.push(PositionLogprobs::from_decoded_row(
                 token_ids_row,

@@ -28,16 +28,16 @@ fn default_opaque_value_nil() -> OpaqueValue {
     Value::Nil
 }
 
-mod aux;
 mod classfied_outputs;
 pub mod handshake;
+mod logprobs;
 pub mod stats;
-pub use aux::{
-    Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,
-};
 pub use classfied_outputs::{
     ClassifiedEngineCoreOutputs, DpControlMessage, OtherEngineCoreOutputs, RequestBatchOutputs,
     UtilityCallOutput,
+};
+pub use logprobs::{
+    Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,
 };
 
 /// Request types are encoded as single-byte protocol constants so they can be

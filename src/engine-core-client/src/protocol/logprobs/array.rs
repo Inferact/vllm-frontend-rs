@@ -3,7 +3,7 @@ use std::io::Cursor;
 use byteorder::{BigEndian, LittleEndian, NativeEndian, ReadBytesExt};
 
 use crate::error::{Error, Result};
-use crate::protocol::aux::wire::{WireArrayData, WireNdArray};
+use crate::protocol::logprobs::wire::{WireArrayData, WireNdArray};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScalarType {
