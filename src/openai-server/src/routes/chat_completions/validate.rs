@@ -1,6 +1,6 @@
-use openai_protocol::chat::ChatCompletionRequest;
 use openai_protocol::common::{StringOrArray, ToolChoice, ToolChoiceValue};
 
+use super::types::ChatCompletionRequest;
 use crate::error::{ApiError, bail_invalid_request};
 
 /// Enforce the minimal compatibility contract for the Rust OpenAI server.
@@ -197,13 +197,14 @@ fn reject_non_default<T>(
 
 #[cfg(test)]
 mod tests {
-    use openai_protocol::chat::{ChatCompletionRequest, ChatMessage, MessageContent};
+    use openai_protocol::chat::{ChatMessage, MessageContent};
     use openai_protocol::common::{
         FunctionChoice, ResponseFormat, Tool, ToolChoice, ToolReference,
     };
     use serde_json::json;
 
     use super::validate_request_compat;
+    use crate::routes::chat_completions::types::ChatCompletionRequest;
 
     fn base_request() -> ChatCompletionRequest {
         ChatCompletionRequest {
