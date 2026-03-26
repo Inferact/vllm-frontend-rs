@@ -997,7 +997,7 @@ async fn chat_stream_parses_tool_calls_automatically() {
                                     b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
                                 ),
                                 Some(EngineCoreFinishReason::Stop),
-                                None,
+                                Some(StopReason::TokenId(SPECIAL_STOP_TOKEN_ID)),
                             ),
                         ],
                         finished_requests: Some(BTreeSet::from(["chat-tool".to_string()])),
