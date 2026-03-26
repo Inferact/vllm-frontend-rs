@@ -15,8 +15,15 @@ const CUSTOM_TYPE_RAW_VIEW: i8 = 3;
 /// be deserialized through serde.
 #[derive(Debug, Clone, PartialEq, Deserialize_tuple)]
 pub struct WireLogprobs {
+    /// `[num_positions, max_num_logprobs + 1]`
     pub logprob_token_ids: WireNdArray,
+    /// `[num_positions, max_num_logprobs + 1]`
     pub logprobs: WireNdArray,
+    /// `[num_positions]`
+    ///
+    /// Python uses the field name `sampled_token_ranks` for sample logprobs and
+    /// `selected_token_ranks` for prompt logprobs. Rust keeps one neutral field because both
+    /// payloads share the same wire representation.
     pub token_ranks: WireNdArray,
     /// Preserved only for wire compatibility. Scheduler-sliced per-request outputs should emit
     /// `None` here.
