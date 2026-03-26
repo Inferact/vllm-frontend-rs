@@ -56,6 +56,13 @@ pub(super) fn validate_request_compat(
         bail_invalid_request!(param = "logprobs", "logprobs are not supported.");
     }
 
+    if request.prompt_logprobs.is_some() {
+        bail_invalid_request!(
+            param = "prompt_logprobs",
+            "prompt_logprobs are not supported."
+        );
+    }
+
     if request.seed.is_some() {
         bail_invalid_request!(
             param = "seed",
@@ -105,5 +112,37 @@ fn has_non_empty_stop(stop: Option<&StringOrArray>) -> bool {
         None => false,
         Some(StringOrArray::String(value)) => !value.is_empty(),
         Some(StringOrArray::Array(values)) => values.iter().any(|value| !value.is_empty()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::validate_request_compat;
+    use crate::routes::completions::types::CompletionRequest;
+
+    fn base_request() -> CompletionRequest {
+        serde_json::from_value(json!({
+            "model": "Qwen/Qwen1.5-0.5B-Chat",
+            "prompt": "hello",
+            "stream": true,
+        }))
+        .expect("parse request")
+    }
+
+    #[test]
+    fn validate_request_compat_rejects_logprobs_fields() {
+        let request = CompletionRequest {
+            logprobs: Some(1),
+            ..base_request()
+        };
+        assert!(validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+
+        let request = CompletionRequest {
+            prompt_logprobs: Some(1),
+            ..base_request()
+        };
+        assert!(validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
     }
 }

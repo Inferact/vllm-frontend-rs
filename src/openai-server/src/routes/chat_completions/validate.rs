@@ -40,8 +40,15 @@ pub(super) fn validate_request_compat(
         bail_invalid_request!(param = "logprobs", "logprobs are not supported.");
     }
 
-    if request.top_logprobs.unwrap_or(0) > 0 {
+    if request.top_logprobs.is_some() {
         bail_invalid_request!(param = "top_logprobs", "top_logprobs are not supported.");
+    }
+
+    if request.prompt_logprobs.is_some() {
+        bail_invalid_request!(
+            param = "prompt_logprobs",
+            "prompt_logprobs are not supported."
+        );
     }
 
     if request.response_format.is_some() {
@@ -257,6 +264,27 @@ mod tests {
         };
         validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat")
             .expect("function tools should be accepted");
+    }
+
+    #[test]
+    fn validate_request_compat_rejects_logprobs_fields() {
+        let request = ChatCompletionRequest {
+            logprobs: true,
+            ..base_request()
+        };
+        assert!(validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+
+        let request = ChatCompletionRequest {
+            top_logprobs: Some(0),
+            ..base_request()
+        };
+        assert!(validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+
+        let request = ChatCompletionRequest {
+            prompt_logprobs: Some(1),
+            ..base_request()
+        };
+        assert!(validate_request_compat(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
     }
 
     #[test]
