@@ -99,9 +99,9 @@ pub struct GenerateOutput {
     /// For `Delta`, this is the per-step payload returned by engine-core. For `FinalOnly`, this
     /// accumulates all generated positions and is emitted once on the terminal step.
     pub logprobs: Option<Logprobs>,
-    /// Raw engine-core output for callers that need finish reason, stop reason, or other
-    /// engine-native fields.
-    pub raw: EngineCoreOutput,
+
+    /// Raw engine-core output.
+    raw: EngineCoreOutput,
 }
 
 impl GenerateOutput {
