@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use openai_protocol::chat::{ChatMessage, MessageContent};
 use openai_protocol::common::{
-    Function, FunctionCall, ResponseFormat, StreamOptions, StringOrArray, Tool, ToolChoice,
-    ToolChoiceValue, ToolReference, default_true, validate_stop,
+    Function, FunctionCall, FunctionChoice, ResponseFormat, StreamOptions, StringOrArray, Tool,
+    ToolChoice, ToolChoiceValue, ToolReference, default_true, validate_stop,
 };
 use openai_protocol::sampling_params::{validate_top_k_value, validate_top_p_value};
 use openai_protocol::validated::Normalizable;
@@ -206,7 +206,64 @@ pub struct ChatCompletionRequest {
     pub prompt_logprobs: Option<i32>,
 }
 
-impl Normalizable for ChatCompletionRequest {}
+impl Normalizable for ChatCompletionRequest {
+    /// Normalize the request by applying migrations and defaults:
+    /// 1. Migrate deprecated fields to their replacements
+    /// 2. Clear deprecated fields and log warnings
+    /// 3. Apply OpenAI defaults for tool_choice
+    fn normalize(&mut self) {
+        // Migrate deprecated max_tokens → max_completion_tokens
+        #[expect(deprecated)]
+        if self.max_completion_tokens.is_none() && self.max_tokens.is_some() {
+            self.max_completion_tokens = self.max_tokens;
+            self.max_tokens = None; // Clear deprecated field
+        }
+
+        // Migrate deprecated functions → tools
+        #[expect(deprecated)]
+        if self.tools.is_none() && self.functions.is_some() {
+            tracing::warn!("functions is deprecated, use tools instead");
+            self.tools = self.functions.as_ref().map(|functions| {
+                functions
+                    .iter()
+                    .map(|func| Tool {
+                        tool_type: "function".to_string(),
+                        function: func.clone(),
+                    })
+                    .collect()
+            });
+            self.functions = None; // Clear deprecated field
+        }
+
+        // Migrate deprecated function_call → tool_choice
+        #[expect(deprecated)]
+        if self.tool_choice.is_none() && self.function_call.is_some() {
+            tracing::warn!("function_call is deprecated, use tool_choice instead");
+            self.tool_choice = self.function_call.as_ref().map(|fc| match fc {
+                FunctionCall::None => ToolChoice::Value(ToolChoiceValue::None),
+                FunctionCall::Auto => ToolChoice::Value(ToolChoiceValue::Auto),
+                FunctionCall::Function { name } => ToolChoice::Function {
+                    tool_type: "function".to_string(),
+                    function: FunctionChoice { name: name.clone() },
+                },
+            });
+            self.function_call = None; // Clear deprecated field
+        }
+
+        // Apply tool_choice defaults
+        if self.tool_choice.is_none() {
+            if let Some(tools) = &self.tools {
+                let choice_value = if tools.is_empty() {
+                    ToolChoiceValue::None
+                } else {
+                    ToolChoiceValue::Auto
+                };
+                self.tool_choice = Some(ToolChoice::Value(choice_value));
+            }
+            // If tools is None, leave tool_choice as None (don't set it)
+        }
+    }
+}
 
 fn default_model() -> String {
     openai_protocol::UNKNOWN_MODEL_ID.to_string()
