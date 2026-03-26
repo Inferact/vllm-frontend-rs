@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
-use ndarray::{Array1, Array2};
 use rmpv::Value;
 
 use super::{Logprobs, decode_engine_core_outputs};
@@ -90,17 +89,91 @@ fn inline_prompt_logprobs_value() -> Value {
 
 fn expected_sample_logprobs() -> Logprobs {
     Logprobs {
-        logprob_token_ids: Array2::from_shape_vec((2, 3), vec![1, 2, 3, 4, 5, 6]).unwrap(),
-        logprobs: Array2::from_shape_vec((2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-        token_ranks: Array1::from_vec(vec![1, 2]),
+        positions: vec![
+            super::PositionLogprobs {
+                entries: vec![
+                    super::TokenLogprob {
+                        token_id: 1,
+                        logprob: 1.0,
+                        rank: 1,
+                    },
+                    super::TokenLogprob {
+                        token_id: 2,
+                        logprob: 2.0,
+                        rank: 1,
+                    },
+                    super::TokenLogprob {
+                        token_id: 3,
+                        logprob: 3.0,
+                        rank: 2,
+                    },
+                ],
+            },
+            super::PositionLogprobs {
+                entries: vec![
+                    super::TokenLogprob {
+                        token_id: 4,
+                        logprob: 4.0,
+                        rank: 2,
+                    },
+                    super::TokenLogprob {
+                        token_id: 5,
+                        logprob: 5.0,
+                        rank: 1,
+                    },
+                    super::TokenLogprob {
+                        token_id: 6,
+                        logprob: 6.0,
+                        rank: 2,
+                    },
+                ],
+            },
+        ],
     }
 }
 
 fn expected_prompt_logprobs() -> Logprobs {
     Logprobs {
-        logprob_token_ids: Array2::from_shape_vec((2, 3), vec![10, 11, 12, 13, 14, 15]).unwrap(),
-        logprobs: Array2::from_shape_vec((2, 3), vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0]).unwrap(),
-        token_ranks: Array1::from_vec(vec![3, 4]),
+        positions: vec![
+            super::PositionLogprobs {
+                entries: vec![
+                    super::TokenLogprob {
+                        token_id: 10,
+                        logprob: 10.0,
+                        rank: 3,
+                    },
+                    super::TokenLogprob {
+                        token_id: 11,
+                        logprob: 11.0,
+                        rank: 1,
+                    },
+                    super::TokenLogprob {
+                        token_id: 12,
+                        logprob: 12.0,
+                        rank: 2,
+                    },
+                ],
+            },
+            super::PositionLogprobs {
+                entries: vec![
+                    super::TokenLogprob {
+                        token_id: 13,
+                        logprob: 13.0,
+                        rank: 4,
+                    },
+                    super::TokenLogprob {
+                        token_id: 14,
+                        logprob: 14.0,
+                        rank: 1,
+                    },
+                    super::TokenLogprob {
+                        token_id: 15,
+                        logprob: 15.0,
+                        rank: 2,
+                    },
+                ],
+            },
+        ],
     }
 }
 
@@ -197,14 +270,24 @@ fn decodes_big_endian_payloads() {
         .into_direct()
         .unwrap();
     assert_eq!(
-        logprobs.logprob_token_ids,
-        Array2::from_shape_vec((1, 2), vec![1, 2]).unwrap()
+        logprobs,
+        Logprobs {
+            positions: vec![super::PositionLogprobs {
+                entries: vec![
+                    super::TokenLogprob {
+                        token_id: 1,
+                        logprob: 1.0,
+                        rank: 3,
+                    },
+                    super::TokenLogprob {
+                        token_id: 2,
+                        logprob: 2.0,
+                        rank: 1,
+                    },
+                ],
+            }],
+        }
     );
-    assert_eq!(
-        logprobs.logprobs,
-        Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).unwrap()
-    );
-    assert_eq!(logprobs.token_ranks, Array1::from_vec(vec![3]));
 }
 
 #[test]

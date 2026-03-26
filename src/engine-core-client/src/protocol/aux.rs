@@ -7,36 +7,90 @@ use std::io::Cursor;
 use std::ops::{Deref, DerefMut};
 
 use enum_as_inner::EnumAsInner;
-use ndarray::{Array1, Array2};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use self::wire::*;
 use super::{EngineCoreOutput, EngineCoreOutputs};
 use crate::error::{Error, Result};
 
-/// Decoded logprobs payload for one engine-core output.
+/// One token candidate and its logprob metadata for a single sequence position.
 ///
-/// This is the shared Rust representation for both Python `LogprobsLists` and `LogprobsTensors`
-/// after scheduler slicing has already narrowed the payload to a single request. So there's no
-/// `cu_num_generated_tokens` field any more.
+/// The first entry in a [`PositionLogprobs`] is always the sampled/selected token for that
+/// position. Any remaining entries follow the engine's returned top-k candidate order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenLogprob {
+    pub token_id: u32,
+    pub logprob: f32,
+    /// The sampled/selected token uses its actual vocab rank. Remaining entries use 1-based top-k
+    /// ranks matching the engine's returned candidate order.
+    pub rank: u32,
+}
+
+/// Logprob payload for one sequence position.
 ///
-/// The Python encoder emits the same `(dtype, shape, data)` wire shape for both, so the Rust
-/// client keeps one owned array form after resolving the msgpack + aux-frame payload.
+/// This is the semantic Rust representation used by the public client API after the lower-level
+/// ndarray/tensor wire payload has been decoded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositionLogprobs {
+    pub entries: Vec<TokenLogprob>,
+}
+
+impl PositionLogprobs {
+    fn from_decoded_row(token_ids: &[u32], logprobs: &[f32], sampled_rank: u32) -> Result<Self> {
+        if token_ids.len() != logprobs.len() {
+            return Err(Error::ValueDecodeExt(format!(
+                "logprobs row length mismatch: token_ids={}, logprobs={}",
+                token_ids.len(),
+                logprobs.len()
+            )));
+        }
+        if sampled_rank == 0 {
+            return Err(Error::ValueDecodeExt(
+                "token_ranks must be >= 1 for decoded engine-core logprobs".to_string(),
+            ));
+        }
+
+        let mut entries = Vec::with_capacity(token_ids.len());
+        for (index, (&token_id, &logprob)) in token_ids.iter().zip(logprobs.iter()).enumerate() {
+            let rank = if index == 0 {
+                sampled_rank
+            } else {
+                index as u32
+            };
+            entries.push(TokenLogprob {
+                token_id,
+                logprob,
+                rank,
+            });
+        }
+        Ok(Self { entries })
+    }
+}
+
+/// Decoded per-request logprobs payload for one engine-core output.
 ///
-/// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/outputs.py#L23-L56>
-#[derive(Debug, Clone, PartialEq)]
+/// Unlike the Python wire payload, this public Rust type is already fully semantic: one
+/// [`PositionLogprobs`] per scored position, each containing the sampled/selected token plus any
+/// returned top-k alternatives for that same position.
+///
+/// The Python engine still sends logprobs as ndarray/tensor-shaped wire tuples. Rust resolves that
+/// lower-level representation during decode and exposes only this per-position form to callers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Logprobs {
-    /// `[num_positions, max_num_logprobs + 1]`
-    pub logprob_token_ids: Array2<u32>,
-    /// `[num_positions, max_num_logprobs + 1]`
-    pub logprobs: Array2<f32>,
-    /// `[num_positions]`
-    ///
-    /// Python uses the field name `sampled_token_ranks` for sample logprobs and
-    /// `selected_token_ranks` for prompt logprobs. Rust keeps one neutral field because both
-    /// payloads share the same wire representation.
-    pub token_ranks: Array1<u32>,
+    /// One decoded logprobs record per scored position in this engine-core output.
+    pub positions: Vec<PositionLogprobs>,
+}
+
+impl Logprobs {
+    /// Returns the number of scored positions in this payload.
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Returns whether the payload contains no scored positions.
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
 }
 
 /// Output field wrapper that is initially deserialized from the Python wire shape, then resolved
@@ -137,8 +191,8 @@ impl EngineCoreOutput {
 }
 
 impl WireLogprobs {
-    /// Resolve the wire-format logprobs into decoded [`Logprobs`] by looking up aux frames and
-    /// decoding raw views as needed.
+    /// Resolve the wire-format logprobs into semantic [`Logprobs`] records by looking up aux
+    /// frames, decoding raw views, and grouping each row into one [`PositionLogprobs`].
     fn resolve<Frame>(self, frames: &[Frame], field_prefix: &str) -> Result<Logprobs>
     where
         Frame: AsRef<[u8]>,
@@ -150,23 +204,48 @@ impl WireLogprobs {
             )));
         }
 
-        Ok(Logprobs {
-            logprob_token_ids: array::decode_array2_u32(
-                self.logprob_token_ids,
-                &format!("{field_prefix}.logprob_token_ids"),
-                frames,
-            )?,
-            logprobs: array::decode_array2_f32(
-                self.logprobs,
-                &format!("{field_prefix}.logprobs"),
-                frames,
-            )?,
-            token_ranks: array::decode_array1_u32(
-                self.token_ranks,
-                &format!("{field_prefix}.token_ranks"),
-                frames,
-            )?,
-        })
+        let token_ids = array::decode_array2_u32(
+            self.logprob_token_ids,
+            &format!("{field_prefix}.logprob_token_ids"),
+            frames,
+        )?;
+        let logprobs =
+            array::decode_array2_f32(self.logprobs, &format!("{field_prefix}.logprobs"), frames)?;
+        let token_ranks = array::decode_array1_u32(
+            self.token_ranks,
+            &format!("{field_prefix}.token_ranks"),
+            frames,
+        )?;
+
+        if token_ids.rows != logprobs.rows || token_ids.cols != logprobs.cols {
+            return Err(Error::ValueDecodeExt(format!(
+                "{field_prefix}: row shape mismatch between token ids ({}, {}) and logprobs ({}, {})",
+                token_ids.rows, token_ids.cols, logprobs.rows, logprobs.cols
+            )));
+        }
+        if token_ids.rows != token_ranks.len() {
+            return Err(Error::ValueDecodeExt(format!(
+                "{field_prefix}: token_ranks length {} does not match row count {}",
+                token_ranks.len(),
+                token_ids.rows
+            )));
+        }
+
+        let mut positions = Vec::with_capacity(token_ids.rows);
+        for ((token_ids_row, logprobs_row), sampled_rank) in token_ids
+            .data
+            .chunks(token_ids.cols)
+            .zip(logprobs.data.chunks(logprobs.cols))
+            .zip(token_ranks.into_iter())
+        {
+            positions.push(PositionLogprobs::from_decoded_row(
+                token_ids_row,
+                logprobs_row,
+                sampled_rank,
+            )?);
+        }
+
+        Ok(Logprobs { positions })
     }
 }
 
