@@ -18,6 +18,8 @@ pub struct WireLogprobs {
     pub logprob_token_ids: WireNdArray,
     pub logprobs: WireNdArray,
     pub token_ranks: WireNdArray,
+    /// Preserved only for wire compatibility. Scheduler-sliced per-request outputs should emit
+    /// `None` here.
     #[serde(default)]
     pub cu_num_generated_tokens: Option<Vec<usize>>,
 }

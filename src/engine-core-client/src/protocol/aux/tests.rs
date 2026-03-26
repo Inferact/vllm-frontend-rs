@@ -61,7 +61,7 @@ fn inline_logprobs_value() -> Value {
         ndarray_value("<i8", &[2, 3], ids),
         ndarray_value("<f4", &[2, 3], probs),
         ndarray_value("<i8", &[2], ranks),
-        Value::Array(vec![Value::from(0usize), Value::from(2usize)]),
+        Value::Nil,
     ])
 }
 
@@ -84,16 +84,15 @@ fn inline_prompt_logprobs_value() -> Value {
         ndarray_value("int64", &[2, 3], ids),
         ndarray_value("float32", &[2, 3], probs),
         ndarray_value("int64", &[2], ranks),
-        Value::Array(vec![Value::from(0usize), Value::from(2usize)]),
+        Value::Nil,
     ])
 }
 
-fn expected_sample_logprobs(cu_num_generated_tokens: Option<Vec<usize>>) -> Logprobs {
+fn expected_sample_logprobs() -> Logprobs {
     Logprobs {
         logprob_token_ids: Array2::from_shape_vec((2, 3), vec![1, 2, 3, 4, 5, 6]).unwrap(),
         logprobs: Array2::from_shape_vec((2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         token_ranks: Array1::from_vec(vec![1, 2]),
-        cu_num_generated_tokens,
     }
 }
 
@@ -102,7 +101,6 @@ fn expected_prompt_logprobs() -> Logprobs {
         logprob_token_ids: Array2::from_shape_vec((2, 3), vec![10, 11, 12, 13, 14, 15]).unwrap(),
         logprobs: Array2::from_shape_vec((2, 3), vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0]).unwrap(),
         token_ranks: Array1::from_vec(vec![3, 4]),
-        cu_num_generated_tokens: Some(vec![0, 2]),
     }
 }
 
@@ -120,7 +118,7 @@ fn decodes_inline_new_logprobs() {
         .unwrap()
         .into_direct()
         .unwrap();
-    assert_eq!(logprobs, expected_sample_logprobs(Some(vec![0, 2])));
+    assert_eq!(logprobs, expected_sample_logprobs());
     assert_eq!(
         decoded.finished_requests,
         Some(BTreeSet::from(["req-1".to_string()]))
@@ -156,7 +154,7 @@ fn decodes_multipart_new_logprobs() {
         .unwrap()
         .into_direct()
         .unwrap();
-    assert_eq!(logprobs, expected_sample_logprobs(None));
+    assert_eq!(logprobs, expected_sample_logprobs());
 }
 
 #[test]
@@ -207,4 +205,27 @@ fn decodes_big_endian_payloads() {
         Array2::from_shape_vec((1, 2), vec![1.0, 2.0]).unwrap()
     );
     assert_eq!(logprobs.token_ranks, Array1::from_vec(vec![3]));
+}
+
+#[test]
+fn rejects_non_none_cu_num_generated_tokens() {
+    let frames = vec![Bytes::from(encode_value(&output_wire_with_custom_fields(
+        Some(Value::Array(vec![
+            ndarray_value("<i8", &[1, 1], Value::Ext(3, vec![1, 0, 0, 0, 0, 0, 0, 0])),
+            ndarray_value("<f4", &[1, 1], Value::Ext(3, vec![0, 0, 128, 63])),
+            ndarray_value("<i8", &[1], Value::Ext(3, vec![1, 0, 0, 0, 0, 0, 0, 0])),
+            Value::Array(vec![Value::from(0usize), Value::from(1usize)]),
+        ])),
+        None,
+    )))];
+
+    let error = decode_engine_core_outputs(&frames).unwrap_err();
+    assert_eq!(error.to_string(), "messagepack ext value decode failed");
+    let crate::error::Error::ValueDecodeExt(message) = error else {
+        panic!("expected ValueDecodeExt");
+    };
+    assert_eq!(
+        message,
+        "new_logprobs.cu_num_generated_tokens: expected None for per-request engine-core logprobs payload, got [0, 1]"
+    );
 }

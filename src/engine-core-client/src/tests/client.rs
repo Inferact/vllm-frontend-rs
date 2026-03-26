@@ -34,12 +34,6 @@ fn expect_sample_logprobs(actual: &MaybeWireLogprobs) {
             logprobs: [[1.0, 2.0, 3.0],
              [4.0, 5.0, 6.0]], shape=[2, 3], strides=[3, 1], layout=Cc (0x5), const ndim=2,
             token_ranks: [1, 2], shape=[2], strides=[1], layout=CFcf (0xf), const ndim=1,
-            cu_num_generated_tokens: Some(
-                [
-                    0,
-                    2,
-                ],
-            ),
         }
     "#]]
     .assert_debug_eq(actual.as_direct().expect("logprobs resolved"));
@@ -53,12 +47,6 @@ fn expect_prompt_logprobs(actual: &MaybeWireLogprobs) {
             logprobs: [[10.0, 11.0, 12.0],
              [13.0, 14.0, 15.0]], shape=[2, 3], strides=[3, 1], layout=Cc (0x5), const ndim=2,
             token_ranks: [3, 4], shape=[2], strides=[1], layout=CFcf (0xf), const ndim=1,
-            cu_num_generated_tokens: Some(
-                [
-                    0,
-                    2,
-                ],
-            ),
         }
     "#]]
     .assert_debug_eq(actual.as_direct().expect("prompt logprobs resolved"));
@@ -227,7 +215,7 @@ fn multipart_logprob_output_frames(request_id: &str) -> Vec<bytes::Bytes> {
                 ndarray_value("<i4", &[2, 3], Value::from(1)),
                 ndarray_value("<f4", &[2, 3], Value::from(2)),
                 ndarray_value("<i4", &[2], Value::from(3)),
-                Value::Array(vec![Value::from(0usize), Value::from(2usize)]),
+                Value::Nil,
             ]),
             Value::Nil,
             Value::Nil,

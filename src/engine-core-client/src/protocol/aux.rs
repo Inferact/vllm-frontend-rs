@@ -16,29 +16,27 @@ use crate::error::{Error, Result};
 
 /// Decoded logprobs payload for one engine-core output.
 ///
-/// This is the shared Rust representation for both Python `LogprobsLists` and `LogprobsTensors`.
-/// The Python encoder emits the same `(dtype, shape, data)` wire shape for both, so the Rust client
-/// keeps one owned array form after resolving the msgpack + aux-frame payload.
+/// This is the shared Rust representation for both Python `LogprobsLists` and `LogprobsTensors`
+/// after scheduler slicing has already narrowed the payload to a single request. So there's no
+/// `cu_num_generated_tokens` field any more.
+///
+/// The Python encoder emits the same `(dtype, shape, data)` wire shape for both, so the Rust
+/// client keeps one owned array form after resolving the msgpack + aux-frame payload.
 ///
 /// Original Python definition:
 /// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/outputs.py#L23-L56>
 #[derive(Debug, Clone, PartialEq)]
 pub struct Logprobs {
-    /// `[num_reqs x num_generated_tokens, max_num_logprobs + 1]`
+    /// `[num_positions, max_num_logprobs + 1]`
     pub logprob_token_ids: Array2<u32>,
-    /// `[num_reqs x num_generated_tokens, max_num_logprobs + 1]`
+    /// `[num_positions, max_num_logprobs + 1]`
     pub logprobs: Array2<f32>,
-    /// `[num_reqs x num_generated_tokens]`
+    /// `[num_positions]`
     ///
     /// Python uses the field name `sampled_token_ranks` for sample logprobs and
     /// `selected_token_ranks` for prompt logprobs. Rust keeps one neutral field because both
     /// payloads share the same wire representation.
     pub token_ranks: Array1<u32>,
-    /// `[num_reqs]`
-    ///
-    /// Used for slicing outputs when different requests generated different numbers of tokens in
-    /// the current engine step.
-    pub cu_num_generated_tokens: Option<Vec<usize>>,
 }
 
 /// Output field wrapper that is initially deserialized from the Python wire shape, then resolved
@@ -145,6 +143,13 @@ impl WireLogprobs {
     where
         Frame: AsRef<[u8]>,
     {
+        if let Some(indices) = self.cu_num_generated_tokens {
+            return Err(Error::ValueDecodeExt(format!(
+                "{field_prefix}.cu_num_generated_tokens: \
+                 expected None for per-request engine-core logprobs payload, got {indices:?}"
+            )));
+        }
+
         Ok(Logprobs {
             logprob_token_ids: array::decode_array2_u32(
                 self.logprob_token_ids,
@@ -161,7 +166,6 @@ impl WireLogprobs {
                 &format!("{field_prefix}.token_ranks"),
                 frames,
             )?,
-            cu_num_generated_tokens: self.cu_num_generated_tokens,
         })
     }
 }
