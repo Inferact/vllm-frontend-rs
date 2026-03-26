@@ -111,9 +111,7 @@ pub(crate) async fn reasoning_event_stream(
                     prompt_logprobs,
                 }
             }
-            DecodedTextEvent::TextDelta {
-                delta, logprobs, ..
-            } => {
+            DecodedTextEvent::TextDelta { delta, logprobs } => {
                 for next in state.process_delta(delta) {
                     yield next;
                 }
@@ -193,12 +191,10 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "abc".to_string(),
-                text: "abc".to_string(),
                 logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "def".to_string(),
-                text: "abcdef".to_string(),
                 logprobs: None,
             }),
             Ok(DecodedTextEvent::Done {
@@ -254,7 +250,6 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "abc".to_string(),
-                text: "abc".to_string(),
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {

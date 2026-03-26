@@ -101,7 +101,6 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: String::new(),
-                text: String::new(),
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {
@@ -114,7 +113,6 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "bc".to_string(),
-                text: "bc".to_string(),
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {

@@ -196,9 +196,7 @@ async fn completion_chunk_stream(
                     ));
                 }
             }
-            Ok(DecodedTextEvent::TextDelta {
-                delta, logprobs, ..
-            }) => {
+            Ok(DecodedTextEvent::TextDelta { delta, logprobs }) => {
                 let delta_text_len = text_len(&delta);
                 let logprobs = if requested_logprobs.is_some() {
                     let decoded_logprobs = logprobs.as_ref().ok_or_else(|| {
@@ -412,7 +410,6 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "h".to_string(),
-                text: "h".to_string(),
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![
@@ -432,7 +429,6 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: String::new(),
-                text: "h".to_string(),
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![

@@ -52,7 +52,6 @@ pub enum DecodedTextEvent {
     /// Upper-level may further parse `delta` as reasoning or tool calls.
     TextDelta {
         delta: String,
-        text: String,
         logprobs: Option<DecodedLogprobs>,
     },
     /// Terminal event carrying the full decoded text and final metadata.
@@ -160,7 +159,6 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             text.push_str(&delta);
             yield DecodedTextEvent::TextDelta {
                 delta,
-                text: text.clone(),
                 logprobs: decoded_logprobs,
             };
         }

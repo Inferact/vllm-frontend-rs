@@ -69,9 +69,7 @@ impl ContentEvent {
                 prompt_token_count,
                 prompt_logprobs,
             }],
-            DecodedTextEvent::TextDelta {
-                delta, logprobs, ..
-            } => {
+            DecodedTextEvent::TextDelta { delta, logprobs } => {
                 let mut events = Vec::new();
                 if !delta.is_empty() {
                     events.push(Self::TextDelta {
