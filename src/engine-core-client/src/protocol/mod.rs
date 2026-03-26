@@ -124,14 +124,14 @@ pub struct EngineCoreEvent {
 
 /// Controls how intermediate outputs are returned to the frontend.
 ///
+/// `Cumulative = 0` is intentionally not supported in Rust frontend.
+///
 /// Original Python definition:
 /// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/sampling_params.py#L146-L152>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
 pub enum RequestOutputKind {
-    /// Return the entire output-so-far in every update.
     #[default]
-    Cumulative = 0,
     /// Return only token deltas in each update.
     Delta = 1,
     /// Suppress intermediate updates and return only the final output.
@@ -207,8 +207,7 @@ pub struct EngineCoreSamplingParams {
     /// contain explicit `stop_token_ids` plus any frontend-derived EOS token IDs.
     #[serde(rename = "_all_stop_token_ids")]
     pub all_stop_token_ids: BTreeSet<u32>,
-    /// Whether higher-level frontend updates are cumulative, delta-based, or
-    /// final-only.
+    /// Whether higher-level frontend updates are delta-based or final-only.
     ///
     /// Note: when talking directly to headless `EngineCoreProc` over the raw
     /// engine-core ZMQ protocol, callers should still treat outputs as

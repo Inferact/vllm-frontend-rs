@@ -24,7 +24,7 @@ pub struct GenerateRequest {
     /// Sampling parameters forwarded to engine-core.
     ///
     /// The `output_kind` field controls whether [`crate::GenerateOutput::token_ids`] is
-    /// delta-only, cumulative, or final-only.
+    /// delta-only or final-only.
     pub sampling_params: EngineCoreSamplingParams,
 
     // Fields below are currently likely unused by callers.
@@ -144,7 +144,7 @@ mod tests {
     fn prepare_builds_engine_core_request() {
         let prepared = sample_request().prepare().unwrap();
 
-        assert_eq!(prepared.output_kind(), RequestOutputKind::Cumulative);
+        assert_eq!(prepared.output_kind(), RequestOutputKind::Delta);
         assert_eq!(prepared.prompt_token_ids(), &[11, 22, 33]);
 
         let request = prepared.engine_request;
@@ -176,7 +176,7 @@ mod tests {
                         stop_token_ids: [],
                         eos_token_id: None,
                         all_stop_token_ids: {},
-                        output_kind: Cumulative,
+                        output_kind: Delta,
                     },
                 ),
                 pooling_params: None,
