@@ -114,6 +114,9 @@ impl FrontendArgs {
 pub struct ServeArgs {
     #[command(flatten)]
     pub runtime: FrontendRuntimeArgs,
+    /// Only launch the managed Python headless engine and do not start the Rust frontend.
+    #[arg(long)]
+    pub headless: bool,
     /// Python executable used to launch the managed headless vLLM engine.
     #[arg(long, env = "VLLM_RS_PYTHON", default_value = "python3")]
     pub python: String,
@@ -212,6 +215,7 @@ mod tests {
                                 512,
                             ),
                         },
+                        headless: false,
                         python: "../vllm/.venv/bin/python",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
@@ -293,6 +297,7 @@ mod tests {
                             reasoning_parser: None,
                             max_model_len: None,
                         },
+                        headless: false,
                         python: "python3",
                         handshake_host: "10.99.48.128",
                         handshake_port: Some(
@@ -325,9 +330,21 @@ mod tests {
         let Command::Serve(args) = cli.command else {
             panic!("expected serve args");
         };
+        assert!(!args.headless);
         assert_eq!(args.handshake_host, "10.99.48.128");
         assert_eq!(args.handshake_port, Some(13345));
         assert_eq!(args.engine_count, 4);
+    }
+
+    #[test]
+    fn serve_args_accept_headless_mode() {
+        let cli =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--headless"]).unwrap();
+
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve args");
+        };
+        assert!(args.headless);
     }
 
     #[test]

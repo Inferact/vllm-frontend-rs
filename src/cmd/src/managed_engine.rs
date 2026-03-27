@@ -64,8 +64,8 @@ impl ManagedEngineConfig {
             .arg("--data-parallel-rpc-port")
             .arg(self.handshake_port.to_string())
             .arg("--data-parallel-size")
-            .arg(self.engine_count.to_string());
-        command.args(&self.python_args);
+            .arg(self.engine_count.to_string())
+            .args(&self.python_args);
         command
     }
 }
