@@ -255,23 +255,21 @@ impl EngineCoreClient {
             let (call_id, rx) = self.inner.allocate_and_register_utility_call()?;
             let request =
                 EngineCoreUtilityRequest::new(self.config.client_index, call_id, method, &args)?;
-            if let Err(error) = self
-                .inner
+
+            // Return error immediately once we fail to send to any engine.
+            // TODO: this operation is not atomic.
+            self.inner
                 .send_to_engine(
                     &engine.engine_identity,
                     EngineCoreRequestType::Utility,
                     &request,
                 )
-                .await
-            {
-                // Return error immediately once we fail to send to any engine.
-                // TODO: this operation is not atomic.
-                return Err(error);
-            }
+                .await?;
             pending_calls.push((call_id, rx));
         }
 
         // Wait for all engines to respond and return the first successful result.
+        // TODO: shall we check if all results match?
         let futures = pending_calls.into_iter().map(|(call_id, rx)| async move {
             rx.await
                 .map_err(|_| Error::UtilityCallClosed {
