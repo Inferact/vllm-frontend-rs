@@ -4,7 +4,7 @@ use std::time::Duration;
 use futures::future::try_join_all;
 use tokio::sync::mpsc;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 
 use crate::client::imp::{ClientInner, run_abort_loop, run_output_dispatcher_loop};
 use crate::error::{Error, Result};
@@ -191,6 +191,12 @@ impl EngineCoreClient {
 
         let request_id = req.request_id.clone();
         let (engine_id, rx) = self.inner.register_request(request_id.clone())?;
+        debug!(
+            request_id = req.request_id,
+            ?engine_id,
+            "registered request to engine"
+        );
+
         if let Err(error) = self
             .inner
             .send_to_engine(&engine_id, EngineCoreRequestType::Add, &req)
