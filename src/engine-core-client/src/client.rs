@@ -148,7 +148,7 @@ impl EngineCoreClient {
     pub fn engine_identities(&self) -> Vec<&[u8]> {
         self.engines
             .iter()
-            .map(|engine| &*engine.engine_identity)
+            .map(|engine| &*engine.engine_id)
             .collect()
     }
 
@@ -190,10 +190,10 @@ impl EngineCoreClient {
         );
 
         let request_id = req.request_id.clone();
-        let (engine_identity, rx) = self.inner.register_request(request_id.clone())?;
+        let (engine_id, rx) = self.inner.register_request(request_id.clone())?;
         if let Err(error) = self
             .inner
-            .send_to_engine(&engine_identity, EngineCoreRequestType::Add, &req)
+            .send_to_engine(&engine_id, EngineCoreRequestType::Add, &req)
             .await
         {
             self.inner.rollback_request(&request_id);
@@ -217,9 +217,9 @@ impl EngineCoreClient {
             return Ok(());
         }
 
-        for (engine_identity, request_ids) in abortable {
+        for (engine_id, request_ids) in abortable {
             self.inner
-                .do_abort_requests(&engine_identity, &request_ids)
+                .do_abort_requests(&engine_id, &request_ids)
                 .await?;
         }
         Ok(())
@@ -252,11 +252,7 @@ impl EngineCoreClient {
             // Return error immediately once we fail to send to any engine.
             // TODO: this operation is not atomic.
             self.inner
-                .send_to_engine(
-                    &engine.engine_identity,
-                    EngineCoreRequestType::Utility,
-                    &request,
-                )
+                .send_to_engine(&engine.engine_id, EngineCoreRequestType::Utility, &request)
                 .await?;
             pending_calls.push((call_id, rx));
         }

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::EngineIdentity;
+use crate::EngineId;
 use crate::client::stream::EngineCoreStreamOutput;
 use crate::error::{Error, Result};
 use crate::protocol::{EngineCoreOutput, UtilityOutput};
@@ -17,7 +17,7 @@ pub type UtilityReceiver = oneshot::Receiver<Result<UtilityOutput>>;
 #[derive(Debug)]
 struct TrackedRequest {
     sender: OutputSender,
-    engine_identity: EngineIdentity,
+    engine_id: EngineId,
 }
 
 /// Internal registry for tracking active requests and their output stream senders.
@@ -28,7 +28,7 @@ struct TrackedRequest {
 pub struct RequestRegistry {
     closed: bool,
     requests: BTreeMap<String, TrackedRequest>,
-    in_flight_per_engine: BTreeMap<EngineIdentity, usize>,
+    in_flight_per_engine: BTreeMap<EngineId, usize>,
 }
 
 impl RequestRegistry {
@@ -38,24 +38,24 @@ impl RequestRegistry {
             requests: BTreeMap::default(),
             in_flight_per_engine: engines
                 .iter()
-                .map(|engine| (engine.engine_identity.clone(), 0))
+                .map(|engine| (engine.engine_id.clone(), 0))
                 .collect(),
         }
     }
 
     /// Register a newly added request. Create the per-request output channel bound to its
-    /// `request_id` and return the selected engine identity.
-    pub fn register(&mut self, request_id: String) -> Result<(EngineIdentity, OutputReceiver)> {
+    /// `request_id` and return the selected engine id.
+    pub fn register(&mut self, request_id: String) -> Result<(EngineId, OutputReceiver)> {
         if self.requests.contains_key(&request_id) {
             return Err(Error::DuplicateRequestId { request_id });
         }
 
         // Simple routing strategy: assign to the engine with the least in-flight requests.
-        let engine_identity = self
+        let engine_id = self
             .in_flight_per_engine
             .iter()
             .min_by_key(|(_, in_flight)| *in_flight)
-            .map(|(engine_identity, _)| engine_identity.clone())
+            .map(|(engine_id, _)| engine_id.clone())
             .expect("request registry must contain at least one engine");
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -63,30 +63,27 @@ impl RequestRegistry {
             request_id,
             TrackedRequest {
                 sender: tx,
-                engine_identity: engine_identity.clone(),
+                engine_id: engine_id.clone(),
             },
         );
         *self
             .in_flight_per_engine
-            .get_mut(&engine_identity)
+            .get_mut(&engine_id)
             .expect("request registry must track all known engines") += 1;
 
-        Ok((engine_identity, rx))
+        Ok((engine_id, rx))
     }
 
     /// Filter the given request IDs to the subset that are still tracked as active and can be
     /// aborted, grouped by engine.
-    pub fn abortable_request_ids(
-        &self,
-        request_ids: &[String],
-    ) -> BTreeMap<EngineIdentity, Vec<String>> {
+    pub fn abortable_request_ids(&self, request_ids: &[String]) -> BTreeMap<EngineId, Vec<String>> {
         let mut by_engine = BTreeMap::new();
         for request_id in request_ids {
             let Some(tracked) = self.requests.get(request_id.as_str()) else {
                 continue;
             };
             by_engine
-                .entry(tracked.engine_identity.clone())
+                .entry(tracked.engine_id.clone())
                 .or_insert_with(Vec::new)
                 .push(request_id.clone());
         }
@@ -132,13 +129,13 @@ impl RequestRegistry {
 
     /// Remove one request from the local registry. Returns the tracked entry if it exists.
     #[must_use]
-    pub fn remove(&mut self, request_id: &str) -> Option<(OutputSender, EngineIdentity)> {
+    pub fn remove(&mut self, request_id: &str) -> Option<(OutputSender, EngineId)> {
         let tracked = self.requests.remove(request_id)?;
         *self
             .in_flight_per_engine
-            .get_mut(&tracked.engine_identity)
+            .get_mut(&tracked.engine_id)
             .expect("request registry must track all known engines") -= 1;
-        Some((tracked.sender, tracked.engine_identity))
+        Some((tracked.sender, tracked.engine_id))
     }
 
     #[cfg(test)]
@@ -208,14 +205,14 @@ impl UtilityRegistry {
 #[cfg(test)]
 mod tests {
     use super::{RequestRegistry, UtilityRegistry};
-    use crate::EngineIdentity;
+    use crate::EngineId;
     use crate::protocol::{EngineCoreFinishReason, EngineCoreOutput, UtilityOutput};
     use crate::transport::ConnectedEngine;
 
     #[test]
     fn registry_rejects_duplicate_request_ids() {
         let mut registry = RequestRegistry::new(&[ConnectedEngine {
-            engine_identity: EngineIdentity::from(b"engine-0"),
+            engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
         registry.register("req-1".to_string()).unwrap();
@@ -229,7 +226,7 @@ mod tests {
     #[test]
     fn registry_removes_finished_request_on_output() {
         let mut registry = RequestRegistry::new(&[ConnectedEngine {
-            engine_identity: EngineIdentity::from(b"engine-0"),
+            engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
         registry.register("req-1".to_string()).unwrap();
@@ -247,7 +244,7 @@ mod tests {
     #[test]
     fn registry_closes_all_requests_on_failure() {
         let mut registry = RequestRegistry::new(&[ConnectedEngine {
-            engine_identity: EngineIdentity::from(b"engine-0"),
+            engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
         registry.register("req-1".to_string()).unwrap();
@@ -260,16 +257,16 @@ mod tests {
     }
 
     #[test]
-    fn registry_tracks_engine_identity_per_request() {
-        let engine_0 = EngineIdentity::from(b"engine-0");
-        let engine_1 = EngineIdentity::from(b"engine-1");
+    fn registry_tracks_engine_id_per_request() {
+        let engine_0 = EngineId::from(b"engine-0");
+        let engine_1 = EngineId::from(b"engine-1");
         let mut registry = RequestRegistry::new(&[
             ConnectedEngine {
-                engine_identity: engine_0.clone(),
+                engine_id: engine_0.clone(),
                 ready_message: Default::default(),
             },
             ConnectedEngine {
-                engine_identity: engine_1.clone(),
+                engine_id: engine_1.clone(),
                 ready_message: Default::default(),
             },
         ]);
