@@ -7,24 +7,19 @@ use crate::error::Result;
 
 /// Stateful incremental decoder that emits text chunks one token at a time.
 pub trait IncrementalDecoder: Send {
-    /// Push one generated token and return the newly decoded text chunk, if any.
-    ///
-    /// Returns `Ok((string, num_bytes_added))`, where string is `None` when the
-    /// token does not yet produce a stable text fragment (e.g. in the middle of a
-    /// multi-byte UTF-8 sequence, incomplete grapheme, or due to stop-string buffering).
-    fn push_token(&mut self, token_id: u32) -> Result<(Option<String>, usize)>;
+    /// Push one generated token and return how many new string bytes were added.
+    fn push_token(&mut self, token_id: u32) -> Result<usize>;
+
+    /// Consume any text which is currently ready.
+    fn next_chunk(&mut self) -> Option<String>;
 
     /// Flush any remaining buffered text that has not yet been emitted.
     ///
-    /// Called after the final generated token to force out incomplete fragments.
-    fn flush(&mut self) -> Result<Option<String>>;
+    /// Called after the final generated token to force out buffered/incomplete fragments.
+    fn flush(&mut self, truncate_output_to: Option<usize>) -> Result<(Option<String>, String)>;
 
     /// Return cumulative decoded text so far.
     fn output(&self) -> &str;
-    fn take_output(& mut self) -> String;
-
-    /// Return number of bytes currently held back.
-    fn held_back_count(&self) -> usize;
 }
 
 /// [`IncrementalDecoder`] built on [`TextBackend::decode()`] with prefix-diffing.
@@ -35,11 +30,12 @@ pub(crate) struct DecodeStream<'a, B: TextBackend + ?Sized> {
     backend: &'a B,
     skip_special_tokens: bool,
     hold_back_bytes: usize,
+    // mutated state
     ids: Vec<u32>,
     prefix: String,
     prefix_index: usize,
-    str_buffer: String,
     cumulative_output: String,
+    output_index: usize,
 }
 
 impl<'a, B: TextBackend + ?Sized> DecodeStream<'a, B> {
@@ -56,14 +52,14 @@ impl<'a, B: TextBackend + ?Sized> DecodeStream<'a, B> {
             ids: prompt_token_ids.to_vec(),
             prefix: String::new(),
             prefix_index: 0,
-            str_buffer: String::new(),
             cumulative_output: String::new(),
+            output_index: 0,
         }
     }
 }
 
 impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
-    fn push_token(&mut self, token_id: u32) -> Result<(Option<String>, usize)> {
+    fn push_token(&mut self, token_id: u32) -> Result<usize> {
         if self.prefix.is_empty() && !self.ids.is_empty() {
             let new_prefix = self.backend.decode(&self.ids, self.skip_special_tokens)?;
             if !new_prefix.ends_with('\u{FFFD}') {
@@ -73,74 +69,62 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
         }
 
         self.ids.push(token_id);
-        let mut string = self.backend.decode(&self.ids, self.skip_special_tokens)?;
+        let string = self.backend.decode(&self.ids, self.skip_special_tokens)?;
         let prefix_len = self.prefix.len();
-        let mut added_bytes = 0;
-        if string.len() > prefix_len && !string.ends_with('\u{FFFD}') {
-            let new_text = &string[prefix_len..];
-            added_bytes = new_text.len();
-            self.cumulative_output.push_str(new_text);
-            if self.str_buffer.is_empty() {
-                string.replace_range(..prefix_len, "");
-                self.str_buffer = string
-            } else {
-                self.str_buffer.push_str(new_text);
-            }
-
+        let new_bytes = string.len().saturating_sub(prefix_len);
+        if new_bytes > 0 && !string.ends_with('\u{FFFD}') {
+            self.cumulative_output.push_str(&string[prefix_len..]);
             self.ids.drain(..self.prefix_index);
             self.prefix = self.backend.decode(&self.ids, self.skip_special_tokens)?;
             self.prefix_index = self.ids.len();
+            Ok(new_bytes)
+        } else {
+            Ok(0)
+        }
+    }
 
-            if self.hold_back_bytes == 0 {
-                // No buffering needed — emit everything immediately.
-                return Ok((Some(take(&mut self.str_buffer)), added_bytes));
-            }
-            // Keep at least hold_back_bytes in the str_buffer
-            let cutoff = self.str_buffer.len().saturating_sub(self.hold_back_bytes + added_bytes);
-            if cutoff != 0 {
-                // Ensure that we return full grapheme clusters
-                for (idx, _) in self.str_buffer.grapheme_indices(true).rev() {
-                    if idx <= cutoff && idx > 0 {
-                        return Ok((Some(self.str_buffer.drain(..idx).collect()), added_bytes));
-                    }
+    fn next_chunk(&mut self) -> Option<String> {
+        let output_len = self.cumulative_output.len();
+        let cutoff = output_len.saturating_sub(self.hold_back_bytes);
+        if cutoff > self.output_index {
+            // Find the last complete grapheme cluster boundary at or before the cutoff.
+            // This avoids emitting a partial grapheme cluster (e.g. base char without
+            // a following combining mark that hasn't arrived yet).
+            for (idx, grapheme) in self.cumulative_output.grapheme_indices(true).rev() {
+                let end = idx + grapheme.len();
+                if end <= cutoff && end > self.output_index {
+                    let chunk = self.cumulative_output[self.output_index..end].to_string();
+                    self.output_index = end;
+                    return Some(chunk);
                 }
             }
         }
-        Ok((None, added_bytes))
+        None
     }
 
-    fn flush(&mut self) -> Result<Option<String>> {
-        let text = if self.ids.is_empty() {
-            take(&mut self.str_buffer)
-        } else {
-            let mut text = self.backend.decode(&self.ids, self.skip_special_tokens)?;
+    fn flush(&mut self, truncate_output_to: Option<usize>) -> Result<(Option<String>, String)> {
+        if !self.ids.is_empty() {
+            let text = self.backend.decode(&self.ids, self.skip_special_tokens)?;
             let prefix_len = self.prefix.len();
             self.ids.clear();
             self.prefix.clear();
             self.prefix_index = 0;
-            let new_text = &text[prefix_len..];
-            self.cumulative_output.push_str(new_text);
-            if self.str_buffer.is_empty() {
-                text.replace_range(..prefix_len, "");
-                text
-            } else {
-                self.str_buffer.push_str(new_text);
-                take(&mut self.str_buffer)
+            if text.len() > prefix_len {
+                self.cumulative_output.push_str(&text[prefix_len..]);
             }
-        };
-        Ok((!text.is_empty()).then_some(text))
+        }
+        if let Some(truncate_output_to) = truncate_output_to {
+            self.cumulative_output.truncate(truncate_output_to);
+        }
+        let last_chunk = (self.output_index < self.cumulative_output.len()).then(
+            || self.cumulative_output[self.output_index..].to_string()
+        );
+        self.output_index = 0;
+        Ok((last_chunk, take(&mut self.cumulative_output)))
     }
 
     fn output(&self) -> &str {
         &self.cumulative_output
-    }
-
-    fn held_back_count(&self) -> usize {
-        self.str_buffer.len()
-    }
-
-    fn take_output(& mut self) -> String {
-        take(&mut self.cumulative_output)
     }
 }
 
@@ -169,9 +153,10 @@ mod tests {
         let mut decoder = backend.create_decode_stream(&[], false, 0);
 
         // 你 = U+4F60 = 0xE4 0xBD 0xA0
-        assert_eq!(decoder.push_token(0xe4).unwrap().0, None);
-        assert_eq!(decoder.push_token(0xbd).unwrap().0, None);
-        assert_eq!(decoder.push_token(0xa0).unwrap().0.as_deref(), Some("你"));
+        assert_eq!(decoder.push_token(0xe4).unwrap(), 0);
+        assert_eq!(decoder.push_token(0xbd).unwrap(), 0);
+        assert_eq!(decoder.push_token(0xa0).unwrap(), 3); // "你" is 3 bytes
+        assert_eq!(decoder.output(), "你");
     }
 
     #[test]
@@ -179,8 +164,9 @@ mod tests {
         let backend = Utf8Backend;
         let mut decoder = backend.create_decode_stream(&[], false, 0);
 
-        assert_eq!(decoder.push_token(b'o' as u32).unwrap().0.as_deref(), Some("o"));
-        assert_eq!(decoder.push_token(b'k' as u32).unwrap().0.as_deref(), Some("k"));
+        assert_eq!(decoder.push_token(b'o' as u32).unwrap(), 1);
+        assert_eq!(decoder.push_token(b'k' as u32).unwrap(), 1);
+        assert_eq!(decoder.output(), "ok");
     }
 
     #[test]
@@ -188,9 +174,14 @@ mod tests {
         let backend = Utf8Backend;
         let mut decoder = backend.create_decode_stream(&[], false, 0);
 
-        assert_eq!(decoder.push_token(b'o' as u32).unwrap().0.as_deref(), Some("o"));
-        assert_eq!(decoder.push_token(b'k' as u32).unwrap().0.as_deref(), Some("k"));
-        assert_eq!(decoder.flush().unwrap(), None);
+        assert_eq!(decoder.push_token(b'o' as u32).unwrap(), 1);
+        assert_eq!(decoder.next_chunk().as_deref(), Some("o"));
+        assert_eq!(decoder.push_token(b'k' as u32).unwrap(), 1);
+        assert_eq!(decoder.next_chunk().as_deref(), Some("k"));
+        // All text already consumed via next_chunk
+        let (last_chunk, full_text) = decoder.flush(None).unwrap();
+        assert_eq!(last_chunk, None);
+        assert_eq!(full_text, "ok");
     }
 
     #[test]
@@ -198,13 +189,13 @@ mod tests {
         let backend = Utf8Backend;
         let mut decoder = backend.create_decode_stream(&[], false, 0);
 
-        // Push incomplete multi-byte sequence — step returns None.
-        assert_eq!(decoder.push_token(0xe4).unwrap().0, None);
-        assert_eq!(decoder.push_token(0xbd).unwrap().0, None);
+        // Push incomplete multi-byte sequence — step returns 0 bytes.
+        assert_eq!(decoder.push_token(0xe4).unwrap(), 0);
+        assert_eq!(decoder.push_token(0xbd).unwrap(), 0);
 
         // Flush forces out whatever the decoder can produce (lossy replacement).
-        let flushed = decoder.flush().unwrap();
-        assert!(flushed.is_some());
+        let (last_chunk, _full_text) = decoder.flush(None).unwrap();
+        assert!(last_chunk.is_some());
     }
 
     /// Backend where token 0 is a special token.
@@ -236,8 +227,9 @@ mod tests {
         let mut skip_decoder = backend.create_decode_stream(&[], true, 0);
         let mut keep_decoder = backend.create_decode_stream(&[], false, 0);
 
-        assert_eq!(skip_decoder.push_token(0).unwrap().0, None);
-        assert_eq!(keep_decoder.push_token(0).unwrap().0.as_deref(), Some("<special>"));
+        assert_eq!(skip_decoder.push_token(0).unwrap(), 0);
+        assert_eq!(keep_decoder.push_token(0).unwrap(), 9); // "<special>" is 9 bytes
+        assert_eq!(keep_decoder.output(), "<special>");
     }
 
     #[test]
@@ -247,8 +239,9 @@ mod tests {
         let mut decoder = backend.create_decode_stream(prompt, false, 0);
 
         // First generated token should not re-emit "Hi".
-        let (chunk, _) = decoder.push_token(b'!' as u32).unwrap();
-        assert_eq!(chunk.as_deref(), Some("!"));
+        let added = decoder.push_token(b'!' as u32).unwrap();
+        assert_eq!(added, 1);
+        assert_eq!(decoder.output(), "!");
     }
 
     #[test]
@@ -259,13 +252,36 @@ mod tests {
         let input = b"Hello, world!";
         let mut full = String::new();
         for &byte in input {
-            if let (Some(chunk), _) = decoder.push_token(byte as u32).unwrap() {
+            decoder.push_token(byte as u32).unwrap();
+            if let Some(chunk) = decoder.next_chunk() {
                 full.push_str(&chunk);
             }
         }
-        if let Some(chunk) = decoder.flush().unwrap() {
-            full.push_str(&chunk);
-        }
+        let (last_chunk, full_text) = decoder.flush(None).unwrap();
+        assert_eq!(last_chunk, None); // all consumed via next_chunk
         assert_eq!(full, "Hello, world!");
+        assert_eq!(full_text, "Hello, world!");
+    }
+
+    #[test]
+    fn next_chunk_with_hold_back() {
+        let backend = Utf8Backend;
+        // hold_back_bytes: 3 means we buffer the last 3 bytes
+        let mut decoder = backend.create_decode_stream(&[], false, 3);
+
+        let input = b"Hello!";
+        let mut chunks = String::new();
+        for &byte in input {
+            decoder.push_token(byte as u32).unwrap();
+            if let Some(chunk) = decoder.next_chunk() {
+                chunks.push_str(&chunk);
+            }
+        }
+        // With hold_back_bytes=3, last 3 bytes ("lo!") are held back
+        assert_eq!(chunks, "Hel");
+        // Flush returns the rest
+        let (last_chunk, full_text) = decoder.flush(None).unwrap();
+        assert_eq!(last_chunk.as_deref(), Some("lo!"));
+        assert_eq!(full_text, "Hello!");
     }
 }

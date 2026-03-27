@@ -99,7 +99,9 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 // when streaming the outputs.
                 match decode_options.include_stop_str_in_output {
                     true => 0,
-                    false => decode_options.stop_strings.as_ref().and_then(|stops| stops.iter().map(|ss| ss.len()).max()).unwrap_or(0),
+                    false => decode_options.stop_strings.as_ref()
+                        .and_then(|stops| stops.iter()
+                            .map(|ss| ss.len()).max()).unwrap_or(1) - 1,
                 },
             )
         });
@@ -137,34 +139,30 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             &output.token_ids
         };
 
-        let mut delta = String::new();
-        // TODO: Clean up the logic here here w.r.t. output buffer and stop string truncation.
+        let mut delta: Option<String> = None;
         let mut truncate_output_to = None;
         for &token_id in decodable_token_ids {
-            let (new_chunk, new_bytes) = decoder.push_token(token_id)?;
+            let new_bytes = decoder.push_token(token_id)?;
             if let Some(stops) = decode_options.stop_strings.as_mut()
-                && let Some((idx, mut off)) = matches_stop_string(stops, decoder.output(), new_bytes) {
-                    let last_chunk_len = new_chunk.as_ref().map(|s| s.len()).unwrap_or(0);
-                    let send_idx = decoder.output().len() - last_chunk_len - decoder.held_back_count();
-                    let stop_str = stops.swap_remove(idx);
-                    if decode_options.include_stop_str_in_output {
-                        off += stop_str.len();
-                    }
-                    delta.push_str(&decoder.output()[send_idx..off]);
-                    truncate_output_to = Some(off);
-                    decoder.flush()?; // so that subsequent flush does not return anything
-                    finish_reason = Some(FinishReason::Stop(Some(StopReason::Text(stop_str))));
-                    break
-                }
+                && let Some((idx, off)) = matches_stop_string(stops, decoder.output(), new_bytes) {
+                let stop_str = stops.swap_remove(idx);
+                truncate_output_to = match decode_options.include_stop_str_in_output {
+                    true => Some(off + stop_str.len()),
+                    false => Some(off)
+                };
+                finish_reason = Some(FinishReason::Stop(Some(StopReason::Text(stop_str))));
+                break
+            }
 
-            if let Some(chunk) = new_chunk {
-                delta.push_str(&chunk);
+            if let Some(chunk) = decoder.next_chunk() {
+                if let Some(delta_str) = delta.as_mut() {
+                    delta_str.push_str(&chunk);
+                } else {
+                    delta = Some(chunk);
+                }
             }
         }
-        if finish_reason.is_some() && let Some(chunk) = decoder.flush()? {
-            // Flush any remaining buffered text after the final token.
-            delta.push_str(&chunk);
-        }
+
         let decoded_logprobs = output
             .logprobs
             .as_ref()
@@ -177,23 +175,31 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             })
             .transpose()?;
 
-        if !delta.is_empty() || decoded_logprobs.is_some() {
-            yield DecodedTextEvent::TextDelta {
-                delta,
-                logprobs: decoded_logprobs,
-            };
-        }
-
         if let Some(reason) = finish_reason {
-            let mut text = decoder.take_output();
-            if let Some(truncate_to) = truncate_output_to {
-                // Truncate due to stop string.
-                text.truncate(truncate_to);
+            // Flush any remaining buffered text.
+            let (last_chunk, text) = decoder.flush(truncate_output_to)?;
+            if let Some(chunk) = last_chunk {
+                if let Some(delta_str) = delta.as_mut() {
+                    delta_str.push_str(&chunk);
+                } else {
+                    delta = Some(chunk);
+                }
             }
+
+            // TODO: we don't want final output to be sent in a separate event.
+            // Need to chagne the event structure.
+            if delta.is_some() || decoded_logprobs.is_some() {
+                yield DecodedTextEvent::TextDelta {
+                    delta: delta.unwrap_or_default(),
+                    logprobs: decoded_logprobs,
+                };
+            }
+            // ----
+
             info!(
                 request_id = %request_id,
                 finish_reason = ?reason,
-                text_length = text.chars().count(),
+                text_length_bytes = text.len(),
                 token_count = token_ids.len(),
                 "request finished with terminal output"
             );
@@ -205,6 +211,13 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 finish_reason: reason,
             };
             return Ok(());
+        }
+
+        if delta.is_some() || decoded_logprobs.is_some() {
+            yield DecodedTextEvent::TextDelta {
+                delta: delta.unwrap_or_default(),
+                logprobs: decoded_logprobs,
+            };
         }
     }
 
