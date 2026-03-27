@@ -1,7 +1,5 @@
 use std::mem::take;
 
-use unicode_segmentation::UnicodeSegmentation;
-
 use crate::backend::TextBackend;
 use crate::error::Result;
 
@@ -29,7 +27,7 @@ pub trait IncrementalDecoder: Send {
 pub(crate) struct DecodeStream<'a, B: TextBackend + ?Sized> {
     backend: &'a B,
     skip_special_tokens: bool,
-    hold_back_bytes: usize,
+    min_bytes_to_buffer: usize,
     // mutated state
     ids: Vec<u32>,
     prefix: String,
@@ -43,12 +41,12 @@ impl<'a, B: TextBackend + ?Sized> DecodeStream<'a, B> {
         backend: &'a B,
         prompt_token_ids: &[u32],
         skip_special_tokens: bool,
-        hold_back_bytes: usize,
+        min_bytes_to_buffer: usize,
     ) -> Self {
         Self {
             backend,
             skip_special_tokens,
-            hold_back_bytes,
+            min_bytes_to_buffer,
             ids: prompt_token_ids.to_vec(),
             prefix: String::new(),
             prefix_index: 0,
@@ -84,22 +82,12 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
     }
 
     fn next_chunk(&mut self) -> Option<String> {
-        let output_len = self.cumulative_output.len();
-        let cutoff = output_len.saturating_sub(self.hold_back_bytes);
-        if cutoff > self.output_index {
-            // Find the last complete grapheme cluster boundary at or before the cutoff.
-            // This avoids emitting a partial grapheme cluster (e.g. base char without
-            // a following combining mark that hasn't arrived yet).
-            for (idx, grapheme) in self.cumulative_output.grapheme_indices(true).rev() {
-                let end = idx + grapheme.len();
-                if end <= cutoff && end > self.output_index {
-                    let chunk = self.cumulative_output[self.output_index..end].to_string();
-                    self.output_index = end;
-                    return Some(chunk);
-                }
-            }
-        }
-        None
+        let cutoff = self.cumulative_output.len().saturating_sub(self.min_bytes_to_buffer);
+        (cutoff > self.output_index).then(|| {
+            let chunk = self.cumulative_output[self.output_index..cutoff].to_string();
+            self.output_index = cutoff;
+            chunk
+        })
     }
 
     fn flush(&mut self, truncate_output_to: Option<usize>) -> Result<(Option<String>, String)> {

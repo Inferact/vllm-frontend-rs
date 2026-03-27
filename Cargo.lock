@@ -4399,7 +4399,6 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tracing",
- "unicode-segmentation",
  "uuid",
  "vllm-engine-core-client",
  "vllm-llm",
