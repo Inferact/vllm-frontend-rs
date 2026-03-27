@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +22,7 @@ use vllm_engine_core_client::protocol::{
 };
 use vllm_engine_core_client::test_utils::IpcNamespace;
 use vllm_engine_core_client::{
-    ENGINE_CORE_DEAD_SENTINEL, EngineCoreClient, EngineCoreClientConfig,
+    ENGINE_CORE_DEAD_SENTINEL, EngineCoreClient, EngineCoreClientConfig, EngineIdentity,
 };
 use vllm_llm::Llm;
 use vllm_metrics::METRICS;
@@ -305,12 +304,14 @@ async fn recv_engine_message(dealer: &mut DealerSocket) -> Vec<Bytes> {
 
 async fn setup_mock_engine(
     engine_handshake: String,
-    engine_identity: Vec<u8>,
+    engine_identity: impl Into<EngineIdentity>,
 ) -> (DealerSocket, PushSocket) {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
+    let peer_identity = PeerIdentity::try_from(engine_identity.into()).expect("peer id");
+
     let mut options = SocketOptions::default();
-    options.peer_identity(PeerIdentity::try_from(engine_identity.clone()).expect("peer id"));
+    options.peer_identity(peer_identity.clone());
     let mut handshake = DealerSocket::with_options(options);
     handshake
         .connect(&engine_handshake)
@@ -328,7 +329,7 @@ async fn setup_mock_engine(
         rmp_serde::from_slice(init_frames[0].as_ref()).expect("decode init");
 
     let mut input_options = SocketOptions::default();
-    input_options.peer_identity(PeerIdentity::try_from(engine_identity).expect("peer id"));
+    input_options.peer_identity(peer_identity);
     let mut dealer = DealerSocket::with_options(input_options);
     dealer
         .connect(&init.addresses.inputs[0])
@@ -430,14 +431,14 @@ impl ChatBackend for FailingDecodeChatBackend {
 }
 
 async fn test_models_with_engine_outputs_and_backend_inner(
-    engine_identity: &[u8],
+    engine_identity: impl Into<EngineIdentity>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
     expected_prompt_token_ids: Option<Vec<u32>>,
     backend: Arc<dyn ChatTextBackend>,
 ) -> (ChatLlm, tokio::task::JoinHandle<()>) {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
-    let engine_identity = engine_identity.to_vec();
+    let engine_identity = engine_identity.into();
 
     let engine_task = tokio::spawn({
         let engine_handshake = handshake_address.clone();
@@ -485,7 +486,7 @@ async fn test_models_with_engine_outputs_and_backend_inner(
 }
 
 async fn test_models_with_engine_outputs_and_backend(
-    engine_identity: &[u8],
+    engine_identity: impl Into<EngineIdentity>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
     backend: Arc<dyn ChatTextBackend>,
 ) -> (ChatLlm, tokio::task::JoinHandle<()>) {
@@ -494,7 +495,7 @@ async fn test_models_with_engine_outputs_and_backend(
 }
 
 async fn test_chat_with_engine_outputs(
-    engine_identity: &[u8],
+    engine_identity: impl Into<EngineIdentity>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
 ) -> (ChatLlm, tokio::task::JoinHandle<()>) {
     test_models_with_engine_outputs_and_backend(

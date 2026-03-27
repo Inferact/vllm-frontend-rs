@@ -23,7 +23,9 @@ use crate::protocol::{
     decode_engine_core_outputs,
 };
 use crate::test_utils::{IpcNamespace, setup_mock_engine_with_init, spawn_mock_engine_task};
-use crate::{ENGINE_CORE_DEAD_SENTINEL, EngineCoreClient, EngineCoreClientConfig, Error};
+use crate::{
+    ENGINE_CORE_DEAD_SENTINEL, EngineCoreClient, EngineCoreClientConfig, EngineIdentity, Error,
+};
 
 static TRACING: Once = Once::new();
 
@@ -224,7 +226,7 @@ async fn connect_client_with_ipc(
 
 fn spawn_mock_engine_task_with_init<F>(
     engine_handshake: String,
-    engine_identity: Vec<u8>,
+    engine_identity: impl Into<EngineIdentity>,
     run: F,
 ) -> (
     oneshot::Receiver<HandshakeInitMessage>,
@@ -242,6 +244,7 @@ where
 {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (init_tx, init_rx) = oneshot::channel();
+    let engine_identity = engine_identity.into();
     let engine_task = tokio::spawn(async move {
         let (init, mut dealer, mut push) =
             setup_mock_engine_with_init(engine_handshake, engine_identity).await;
