@@ -35,6 +35,8 @@ pub enum Error {
     UnexpectedHandshakeIdentity { expected: Vec<u8>, actual: Vec<u8> },
     #[error("unexpected startup handshake message: {reason}")]
     UnexpectedHandshakeMessage { reason: String },
+    #[error("coordinator requires a Python-compatible two-byte engine id, got {engine_id:?}")]
+    UnsupportedCoordinatorEngineId { engine_id: Vec<u8> },
     #[error("unsupported auxiliary frame(s): expected 1 frame, got {frame_count}")]
     UnsupportedAuxFrames { frame_count: usize },
     #[error("unsupported field `{field}` in {context}")]

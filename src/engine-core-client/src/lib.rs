@@ -1,6 +1,7 @@
 #![feature(iterator_try_collect)]
 
 mod client;
+mod coordinator;
 mod error;
 mod metrics;
 pub mod protocol;
