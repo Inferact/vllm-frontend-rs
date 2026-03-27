@@ -99,9 +99,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 // when streaming the outputs.
                 match decode_options.include_stop_str_in_output {
                     true => 0,
-                    false => decode_options.stop_strings.as_ref().map(
-                        |stops| stops.iter().map(|ss| ss.len()).max()
-                    ).flatten().unwrap_or(0),
+                    false => decode_options.stop_strings.as_ref().and_then(|stops| stops.iter().map(|ss| ss.len()).max()).unwrap_or(0),
                 },
             )
         });
@@ -215,8 +213,8 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
 
 
 /// If stop string matches, returns tuple
-/// (index into stop string vec, index of first byte of stop string in output)
-fn matches_stop_string(stops: &Vec<String>, output: &str, new_bytes: usize) -> Option<(usize, usize)> {
+/// (index into stop string vec, byte index of first byte of stop string in output)
+fn matches_stop_string(stops: &[String], output: &str, new_bytes: usize) -> Option<(usize, usize)> {
     // We compare byte subslices to avoid utf8 boundary problem
     let output = output.as_bytes();
     let next_off = (output.len() + 1) - new_bytes;
@@ -230,4 +228,94 @@ fn matches_stop_string(stops: &Vec<String>, output: &str, new_bytes: usize) -> O
                 .rposition(|w| w == ss)
                 .map(|pos| (ss_idx, start_off + pos))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_string_matches_at_end() {
+        let stops = vec!["wor".to_string()];
+        // Output: "say wor", last byte 'r' was just added (new_bytes=1)
+        let result = matches_stop_string(&stops, "say wor", 1);
+        assert_eq!(result, Some((0, 4)));
+    }
+
+    #[test]
+    fn stop_string_no_match() {
+        let stops = vec!["xyz".to_string()];
+        let result = matches_stop_string(&stops, "say wor", 1);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn stop_string_matches_first_of_multiple() {
+        let stops = vec!["wor".to_string(), "say".to_string()];
+        // "say" appears earlier but "wor" is checked first (index 0)
+        let result = matches_stop_string(&stops, "say wor", 1);
+        assert_eq!(result, Some((0, 4)));
+    }
+
+    #[test]
+    fn stop_string_matches_second_of_multiple() {
+        let stops = vec!["xyz".to_string(), "wor".to_string()];
+        let result = matches_stop_string(&stops, "say wor", 1);
+        assert_eq!(result, Some((1, 4)));
+    }
+
+    #[test]
+    fn stop_string_matches_with_multiple_new_bytes() {
+        let stops = vec!["wor".to_string()];
+        // "say wor" where last 3 bytes "wor" were added at once
+        let result = matches_stop_string(&stops, "say wor", 3);
+        assert_eq!(result, Some((0, 4)));
+    }
+
+    #[test]
+    fn stop_string_matches_at_beginning() {
+        let stops = vec!["say".to_string()];
+        let result = matches_stop_string(&stops, "say wor", 7);
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn stop_string_exact_output() {
+        let stops = vec!["abc".to_string()];
+        let result = matches_stop_string(&stops, "abc", 3);
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn stop_string_single_char() {
+        let stops = vec!["!".to_string()];
+        let result = matches_stop_string(&stops, "hello!", 1);
+        assert_eq!(result, Some((0, 5)));
+    }
+
+    #[test]
+    fn stop_string_not_in_new_bytes_region() {
+        let stops = vec!["say".to_string()];
+        // "say" is in the output but before the new byte region.
+        // new_bytes=1 means only 'r' was added; "say" ended at byte 3,
+        // but the search window starts at next_off - stop_len = 7+1-1 - 3 = 4.
+        let result = matches_stop_string(&stops, "say wor", 1);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn stop_string_empty_list() {
+        let stops: Vec<String> = vec![];
+        let result = matches_stop_string(&stops, "hello", 1);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn stop_string_multibyte_utf8() {
+        let stops = vec!["世界".to_string()];
+        // "你好世界" is 12 bytes: 你(3) + 好(3) + 世(3) + 界(3)
+        // "世界" starts at byte 6
+        let result = matches_stop_string(&stops, "你好世界", 3);
+        assert_eq!(result, Some((0, 6)));
+    }
 }

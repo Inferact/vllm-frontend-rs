@@ -118,6 +118,9 @@ async fn collect_completion(
         .await
         .map_err(|error| server_error!("completion stream failed: {}", error.to_report_string()))?;
     let finish_reason = collected.finish_reason.clone();
+    let matched_stop = finish_reason
+        .as_stop_reason()
+        .map(|sr| serde_json::to_value(sr).expect("StopReason must serialize to JSON"));
 
     let prompt_char_count = echo
         .as_ref()
@@ -158,7 +161,7 @@ async fn collect_completion(
             index: 0,
             logprobs,
             finish_reason: Some(completion_finish_reason_to_openai(finish_reason)?.into()),
-            matched_stop: None,
+            matched_stop,
             prompt_logprobs,
         }],
         usage: Some(Usage::from_counts(
