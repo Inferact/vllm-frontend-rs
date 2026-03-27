@@ -169,7 +169,7 @@ mod tests {
                             host: "127.0.0.1",
                             port: 8000,
                             engine_local_host: "127.0.0.1",
-                            ready_timeout_secs: 30,
+                            ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
                             max_model_len: Some(
