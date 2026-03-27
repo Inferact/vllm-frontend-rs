@@ -4,7 +4,7 @@ use bytes::Bytes;
 use zeromq::prelude::{Socket, SocketRecv, SocketSend};
 use zeromq::{PullSocket, XPubSocket, ZmqMessage};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, bail_unexpected_handshake_message};
 
 /// Engine-facing sockets owned by the in-process coordinator.
 pub(crate) struct CoordinatorBootstrap {
@@ -64,12 +64,10 @@ async fn wait_for_engine_subscriptions(
                 timeout: ready_timeout,
             })??;
         if message.len() != 1 {
-            return Err(Error::UnexpectedHandshakeMessage {
-                reason: format!(
-                    "expected 1 frame for coordinator subscription, got {}",
-                    message.len()
-                ),
-            });
+            bail_unexpected_handshake_message!(
+                "expected 1 frame for coordinator subscription, got {}",
+                message.len()
+            );
         }
 
         let frame = message
@@ -78,12 +76,10 @@ async fn wait_for_engine_subscriptions(
             .next()
             .expect("single-frame coordinator subscription message");
         if frame.as_ref() != [0x01] {
-            return Err(Error::UnexpectedHandshakeMessage {
-                reason: format!(
-                    "expected coordinator subscription frame [0x01], got {:?}",
-                    frame.as_ref()
-                ),
-            });
+            bail_unexpected_handshake_message!(
+                "expected coordinator subscription frame [0x01], got {:?}",
+                frame.as_ref()
+            );
         }
         received += 1;
     }

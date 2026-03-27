@@ -220,11 +220,11 @@ impl EngineCoreClient {
         if let Some(coordinator) = self.coordinator.as_ref() {
             let snapshot = coordinator.snapshot();
             req.current_wave = snapshot.current_wave;
-            if !snapshot.engines_running {
-                if let Err(error) = coordinator.notify_first_request(engine_id.clone()) {
-                    self.inner.rollback_request(&request_id);
-                    return Err(error);
-                }
+            if !snapshot.engines_running
+                && let Err(error) = coordinator.notify_first_request(engine_id.clone())
+            {
+                self.inner.rollback_request(&request_id);
+                return Err(error);
             }
         }
         trace!(

@@ -14,7 +14,7 @@ use zeromq::util::PeerIdentity;
 use zeromq::{PullSocket, RouterSendHalf, RouterSocket, ZmqError, ZmqMessage};
 
 use crate::coordinator::CoordinatorBootstrap;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, bail_unexpected_handshake_message};
 use crate::protocol::handshake::{HandshakeAddresses, HandshakeInitMessage, ReadyMessage};
 use crate::protocol::{
     EngineCoreOutputs, decode_engine_core_outputs, decode_msgpack, encode_msgpack,
@@ -134,9 +134,7 @@ pub async fn connect(
     ready_timeout: Duration,
 ) -> Result<ConnectedTransport> {
     if engine_count == 0 {
-        return Err(Error::UnexpectedHandshakeMessage {
-            reason: "expected engine_count >= 1".to_string(),
-        });
+        bail_unexpected_handshake_message!("expected engine_count >= 1");
     }
 
     info!(
@@ -188,11 +186,9 @@ pub async fn connect(
         match handshake_message.status.as_deref() {
             Some("HELLO") => {
                 if engines.contains_key(&engine_id) {
-                    return Err(Error::UnexpectedHandshakeMessage {
-                        reason: format!(
-                            "duplicate engine id {engine_id:?} observed during startup handshake"
-                        ),
-                    });
+                    bail_unexpected_handshake_message!(
+                        "duplicate engine id {engine_id:?} observed during startup handshake"
+                    );
                 }
                 debug!(handshake_address, ?engine_id, "received HELLO from engine");
 
@@ -210,20 +206,16 @@ pub async fn connect(
             }
             Some("READY") => {
                 if coordinator.is_some() {
-                    return Err(Error::UnexpectedHandshakeMessage {
-                        reason: format!(
-                            "received READY for engine id {engine_id:?} before coordinator startup gate completed"
-                        ),
-                    });
+                    bail_unexpected_handshake_message!(
+                        "received READY for engine id {engine_id:?} before coordinator startup gate completed"
+                    );
                 }
                 let state = match engines.get_mut(&engine_id) {
                     Some(state) if !state.is_ready_received() => state,
                     _ => {
-                        return Err(Error::UnexpectedHandshakeMessage {
-                            reason: format!(
-                                "received READY for unexpected or duplicate engine id {engine_id:?}"
-                            ),
-                        });
+                        bail_unexpected_handshake_message!(
+                            "received READY for unexpected or duplicate engine id {engine_id:?}"
+                        );
                     }
                 };
                 debug!(
@@ -235,9 +227,7 @@ pub async fn connect(
                 *state = EngineStartupState::ReadyReceived(handshake_message);
             }
             other => {
-                return Err(Error::UnexpectedHandshakeMessage {
-                    reason: format!("unexpected handshake status {other:?}"),
-                });
+                bail_unexpected_handshake_message!("unexpected handshake status {other:?}");
             }
         }
     }
@@ -273,11 +263,9 @@ pub async fn connect(
                 let state = match engines.get_mut(&engine_id) {
                     Some(state) if !state.is_ready_received() => state,
                     _ => {
-                        return Err(Error::UnexpectedHandshakeMessage {
-                            reason: format!(
-                                "received READY for unexpected or duplicate engine id {engine_id:?}"
-                            ),
-                        });
+                        bail_unexpected_handshake_message!(
+                            "received READY for unexpected or duplicate engine id {engine_id:?}"
+                        );
                     }
                 };
                 debug!(
@@ -289,16 +277,12 @@ pub async fn connect(
                 *state = EngineStartupState::ReadyReceived(handshake_message);
             }
             Some("HELLO") => {
-                return Err(Error::UnexpectedHandshakeMessage {
-                    reason: format!(
-                        "received duplicate HELLO for engine id {engine_id:?} after INIT phase completed"
-                    ),
-                });
+                bail_unexpected_handshake_message!(
+                    "received duplicate HELLO for engine id {engine_id:?} after INIT phase completed"
+                );
             }
             other => {
-                return Err(Error::UnexpectedHandshakeMessage {
-                    reason: format!("unexpected handshake status {other:?}"),
-                });
+                bail_unexpected_handshake_message!("unexpected handshake status {other:?}");
             }
         }
     }
@@ -361,9 +345,7 @@ fn decode_handshake_message(
     expected_id: Option<&EngineId>,
 ) -> Result<(EngineId, ReadyMessage)> {
     if message.len() != 2 {
-        return Err(Error::UnexpectedHandshakeMessage {
-            reason: format!("expected 2 frames, got {}", message.len()),
-        });
+        bail_unexpected_handshake_message!("expected 2 frames, got {}", message.len());
     }
 
     let frames = message.into_vec();
@@ -428,27 +410,23 @@ async fn wait_for_input_registrations(
             })??;
 
         if registration.len() != 2 {
-            return Err(Error::UnexpectedHandshakeMessage {
-                reason: format!(
-                    "expected 2 frames for engine input registration, got {}",
-                    registration.len()
-                ),
-            });
+            bail_unexpected_handshake_message!(
+                "expected 2 frames for engine input registration, got {}",
+                registration.len()
+            );
         }
 
         let frames = registration.into_vec();
         let actual_id = EngineId(frames[0].clone());
         if !pending.remove(&actual_id) {
-            return Err(Error::UnexpectedHandshakeMessage {
-                reason: format!(
-                    "received input registration for unexpected engine id {actual_id:?}"
-                ),
-            });
+            bail_unexpected_handshake_message!(
+                "received input registration for unexpected engine id {actual_id:?}"
+            );
         }
         if !frames[1].is_empty() {
-            return Err(Error::UnexpectedHandshakeMessage {
-                reason: "expected empty payload for engine input registration".to_string(),
-            });
+            bail_unexpected_handshake_message!(
+                "expected empty payload for engine input registration"
+            );
         }
     }
 
