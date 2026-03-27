@@ -21,8 +21,10 @@ pub use stream::{EngineCoreOutputStream, EngineCoreStreamOutput};
 /// `EngineCoreProc`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineCoreClientConfig {
-    /// Startup handshake addresses used to bootstrap one or more Python engines.
-    pub handshake_addresses: Vec<String>,
+    /// Startup handshake address used to bootstrap one or more Python engines.
+    pub handshake_address: String,
+    /// Number of engines expected to connect on the shared handshake socket.
+    pub engine_count: usize,
     /// Model name used for frontend-side metrics labels.
     pub model_name: String,
     /// Local host/interface used when allocating the frontend input/output addresses.
@@ -36,7 +38,8 @@ pub struct EngineCoreClientConfig {
 impl EngineCoreClientConfig {
     pub fn new(handshake_address: impl Into<String>) -> Self {
         Self {
-            handshake_addresses: vec![handshake_address.into()],
+            handshake_address: handshake_address.into(),
+            engine_count: 1,
             model_name: String::new(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(30),
@@ -73,7 +76,8 @@ impl EngineCoreClient {
         local_output_address: Option<String>,
     ) -> Result<Self> {
         let connected = transport::connect(
-            &config.handshake_addresses,
+            &config.handshake_address,
+            config.engine_count,
             &config.local_host,
             local_input_address.as_deref(),
             local_output_address.as_deref(),
@@ -133,8 +137,8 @@ impl EngineCoreClient {
         &self.output_address
     }
 
-    pub fn handshake_addresses(&self) -> &[String] {
-        &self.config.handshake_addresses
+    pub fn handshake_address(&self) -> &str {
+        &self.config.handshake_address
     }
 
     pub fn engine_count(&self) -> usize {

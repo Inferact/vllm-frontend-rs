@@ -178,7 +178,8 @@ async fn connect_async_llm_with_ipc(
 ) -> Llm {
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: model_name.to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),

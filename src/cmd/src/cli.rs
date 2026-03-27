@@ -64,9 +64,10 @@ pub struct FrontendRuntimeArgs {
 
 impl FrontendRuntimeArgs {
     /// Build one OpenAI-server runtime config for the resolved handshake address.
-    fn into_config(self, handshake_address: String) -> Config {
+    fn into_config(self, handshake_address: String, engine_count: usize) -> Config {
         Config {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count,
             model: self.model,
             host: self.host,
             port: self.port,
@@ -85,14 +86,18 @@ pub struct FrontendArgs {
     #[command(flatten)]
     pub runtime: FrontendRuntimeArgs,
     /// Headless vLLM engine handshake endpoint, for example `tcp://127.0.0.1:62100`.
-    #[arg(long = "handshake-address")]
+    #[arg(long)]
     pub handshake_address: String,
+    /// Number of engines expected to connect on the shared handshake socket.
+    #[arg(long, default_value_t = 1)]
+    pub engine_count: usize,
 }
 
 impl FrontendArgs {
     /// Convert the CLI arguments into the OpenAI server's runtime config.
     pub fn into_config(self) -> Config {
-        self.runtime.into_config(self.handshake_address)
+        self.runtime
+            .into_config(self.handshake_address, self.engine_count)
     }
 }
 
@@ -117,7 +122,7 @@ pub struct ServeArgs {
 impl ServeArgs {
     /// Build the OpenAI-server runtime config that should connect to the managed engine.
     pub fn to_frontend_config(&self, handshake_address: String) -> Config {
-        self.runtime.clone().into_config(handshake_address)
+        self.runtime.clone().into_config(handshake_address, 1)
     }
 
     /// Build the managed Python-engine spawn configuration for one resolved handshake port.
@@ -190,13 +195,15 @@ mod tests {
     }
 
     #[test]
-    fn frontend_args_accept_single_handshake_address() {
+    fn frontend_args_accept_engine_count() {
         let cli = Cli::try_parse_from([
             "vllm-rs",
             "frontend",
             "Qwen/Qwen3-0.6B",
             "--handshake-address",
             "tcp://127.0.0.1:62100",
+            "--engine-count",
+            "2",
         ])
         .unwrap();
 
@@ -209,12 +216,13 @@ mod tests {
                             host: "127.0.0.1",
                             port: 8000,
                             engine_local_host: "127.0.0.1",
-                            ready_timeout_secs: 30,
+                            ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
                             max_model_len: None,
                         },
                         handshake_address: "tcp://127.0.0.1:62100",
+                        engine_count: 2,
                     },
                 ),
             }

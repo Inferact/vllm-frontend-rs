@@ -18,8 +18,10 @@ use vllm_text::backends::hf::HfTextBackend;
 #[derive(Debug, Parser)]
 #[command(about = "Smoke-test the Rust chat facade against an external Qwen vLLM engine.")]
 struct Args {
-    #[arg(long = "handshake-address")]
+    #[arg(long)]
     handshake_address: String,
+    #[arg(long, default_value_t = 1)]
+    engine_count: usize,
     #[arg(long, default_value = "Qwen/Qwen3-0.6B")]
     model: String,
     #[arg(long, default_value = "127.0.0.1")]
@@ -61,7 +63,8 @@ async fn main() -> Result<()> {
     let output_timeout = Duration::from_secs(OUTPUT_TIMEOUT_SECS);
     let request_id = unique_request_id();
     let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_addresses: vec![args.handshake_address.clone()],
+        handshake_address: args.handshake_address.clone(),
+        engine_count: args.engine_count,
         model_name: args.model.clone(),
         local_host: args.host.clone(),
         ready_timeout,
@@ -74,6 +77,7 @@ async fn main() -> Result<()> {
     println!("tokenizer_source=tokenizers + hf-hub");
     println!("chat_template_source=tokenizer_config.json or adjacent chat template file");
     println!("handshake_address={}", args.handshake_address);
+    println!("engine_count={}", args.engine_count);
     println!("input_address={}", client.input_address());
     println!("output_address={}", client.output_address());
     println!("engine_identities={:x?}", client.engine_identities());

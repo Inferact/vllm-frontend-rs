@@ -454,7 +454,8 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -569,7 +570,8 @@ async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -645,7 +647,8 @@ async fn finished_requests_without_final_output_is_treated_as_unexpected_close()
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -712,7 +715,8 @@ async fn dropping_a_live_stream_triggers_abort() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -758,7 +762,8 @@ async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -848,7 +853,8 @@ async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -904,7 +910,8 @@ async fn call_utility_failure_message_surfaces_as_error() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -954,7 +961,8 @@ async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1006,7 +1014,8 @@ async fn connect_times_out_without_ready_message() {
 
     let result = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_millis(100),
@@ -1049,7 +1058,8 @@ async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1117,7 +1127,8 @@ async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1173,7 +1184,8 @@ async fn client_decodes_multipart_logprob_outputs() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1210,11 +1222,10 @@ async fn client_decodes_multipart_logprob_outputs() {
 async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
     init_tracing();
     let ipc = IpcNamespace::new().unwrap();
-    let handshake_address_0 = ipc.endpoint("handshake-0.sock");
-    let handshake_address_1 = ipc.endpoint("handshake-1.sock");
+    let handshake_address = ipc.handshake_endpoint();
 
     let (init_rx_0, shutdown_tx_0, engine_task_0) = spawn_mock_engine_task_with_init(
-        handshake_address_0.clone(),
+        handshake_address.clone(),
         b"engine-0".to_vec(),
         |dealer, push| {
             Box::pin(async move {
@@ -1258,8 +1269,9 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
             })
         },
     );
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let (init_rx_1, shutdown_tx_1, engine_task_1) = spawn_mock_engine_task_with_init(
-        handshake_address_1.clone(),
+        handshake_address.clone(),
         b"engine-1".to_vec(),
         |dealer, push| {
             Box::pin(async move {
@@ -1288,7 +1300,8 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address_0, handshake_address_1],
+            handshake_address: handshake_address.clone(),
+            engine_count: 2,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1314,7 +1327,7 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
     assert_eq!(client.input_address(), ipc.input_endpoint());
     assert_eq!(client.output_address(), ipc.output_endpoint());
     assert_eq!(client.engine_count(), 2);
-    assert_eq!(client.handshake_addresses().len(), 2);
+    assert_eq!(client.handshake_address(), handshake_address);
     assert_eq!(
         client.engine_identities(),
         vec![b"engine-0".as_slice(), b"engine-1".as_slice()]
@@ -1384,11 +1397,10 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
 async fn multi_engine_abort_is_grouped_and_utility_hits_engine_zero_only() {
     init_tracing();
     let ipc = IpcNamespace::new().unwrap();
-    let handshake_address_0 = ipc.endpoint("handshake-0.sock");
-    let handshake_address_1 = ipc.endpoint("handshake-1.sock");
+    let handshake_address = ipc.handshake_endpoint();
 
     let (shutdown_tx_0, engine_task_0) = spawn_mock_engine_task(
-        handshake_address_0.clone(),
+        handshake_address.clone(),
         b"engine-0".to_vec(),
         |dealer, push| {
             Box::pin(async move {
@@ -1440,8 +1452,9 @@ async fn multi_engine_abort_is_grouped_and_utility_hits_engine_zero_only() {
             })
         },
     );
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let (shutdown_tx_1, engine_task_1) = spawn_mock_engine_task(
-        handshake_address_1.clone(),
+        handshake_address.clone(),
         b"engine-1".to_vec(),
         |dealer, push| {
             Box::pin(async move {
@@ -1474,7 +1487,8 @@ async fn multi_engine_abort_is_grouped_and_utility_hits_engine_zero_only() {
 
     let client = connect_client_with_ipc(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address_0, handshake_address_1],
+            handshake_address,
+            engine_count: 2,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),

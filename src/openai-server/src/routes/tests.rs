@@ -465,7 +465,8 @@ async fn test_models_with_engine_outputs_and_backend_inner(
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -536,7 +537,8 @@ where
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -575,7 +577,8 @@ where
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -636,12 +639,11 @@ async fn test_chat_with_engine_handle() -> (ChatLlm, tokio::task::JoinHandle<()>
 #[serial]
 async fn concurrent_non_stream_completions_are_distributed_across_two_engines() {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
-    let handshake_address_0 = ipc.endpoint("handshake-0.sock");
-    let handshake_address_1 = ipc.endpoint("handshake-1.sock");
+    let handshake_address = ipc.handshake_endpoint();
     let (engine_seen_tx, mut engine_seen_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let engine_task_0 = tokio::spawn({
-        let engine_handshake = handshake_address_0.clone();
+        let engine_handshake = handshake_address.clone();
         let engine_seen_tx = engine_seen_tx.clone();
         async move {
             let (mut dealer, mut push) =
@@ -672,8 +674,9 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
             .await;
         }
     });
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let engine_task_1 = tokio::spawn({
-        let engine_handshake = handshake_address_1.clone();
+        let engine_handshake = handshake_address.clone();
         let engine_seen_tx = engine_seen_tx.clone();
         async move {
             let (mut dealer, mut push) =
@@ -708,7 +711,8 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address_0, handshake_address_1],
+            handshake_address,
+            engine_count: 2,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1065,7 +1069,8 @@ async fn non_stream_chat_includes_logprobs_and_prompt_logprobs() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1749,7 +1754,8 @@ async fn non_stream_completions_include_logprobs() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1853,7 +1859,8 @@ async fn non_stream_completions_include_prompt_logprobs() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -1943,7 +1950,8 @@ async fn non_stream_chat_uses_final_only_output_kind() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -2005,7 +2013,8 @@ async fn non_stream_completions_use_final_only_output_kind() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
@@ -2440,7 +2449,8 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
-            handshake_addresses: vec![handshake_address],
+            handshake_address,
+            engine_count: 1,
             model_name: "test-model".to_string(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(2),
