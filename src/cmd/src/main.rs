@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
         Command::Serve(args) => {
             let handshake_port = match args.handshake_port {
                 Some(port) => port,
-                None => allocate_handshake_port()?,
+                None => allocate_handshake_port(&args.handshake_host)?,
             };
             let engine_config = args.clone().into_managed_engine_config(handshake_port);
             let config = args.to_frontend_config(engine_config.handshake_address());
