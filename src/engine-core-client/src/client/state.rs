@@ -30,66 +30,6 @@ pub struct RequestRegistry {
     in_flight_per_engine: Vec<usize>,
 }
 
-/// Internal registry for tracking active utility calls and their waiting receivers.
-#[derive(Debug)]
-pub struct UtilityRegistry {
-    closed: bool,
-    next_call_id: AtomicI64,
-    utility_calls: BTreeMap<i64, UtilitySender>,
-}
-
-impl Default for UtilityRegistry {
-    fn default() -> Self {
-        Self {
-            closed: false,
-            next_call_id: AtomicI64::new(1),
-            utility_calls: BTreeMap::default(),
-        }
-    }
-}
-
-impl UtilityRegistry {
-    /// Allocate the next utility `call_id` and register a newly added utility call.
-    pub fn allocate_and_register(&mut self) -> (i64, UtilityReceiver) {
-        let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.utility_calls.insert(call_id, tx);
-        (call_id, rx)
-    }
-
-    /// Resolve a utility output to its waiting receiver.
-    pub fn resolve(&mut self, output: UtilityOutput) -> Option<UtilitySender> {
-        self.utility_calls.remove(&output.call_id)
-    }
-
-    /// Mark the registry as closed, detach and return all tracked senders.
-    pub fn close(&mut self) -> Vec<UtilitySender> {
-        if self.closed {
-            return Vec::new();
-        }
-
-        self.closed = true;
-        std::mem::take(&mut self.utility_calls)
-            .into_values()
-            .collect()
-    }
-
-    /// Remove one utility call from the local registry. Returns the corresponding sender if exists.
-    #[must_use]
-    pub fn remove(&mut self, call_id: i64) -> Option<UtilitySender> {
-        self.utility_calls.remove(&call_id)
-    }
-
-    #[cfg(test)]
-    pub fn contains(&self, call_id: i64) -> bool {
-        self.utility_calls.contains_key(&call_id)
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
-    }
-}
-
 impl RequestRegistry {
     pub fn new(engine_count: usize) -> Self {
         Self {
@@ -193,6 +133,66 @@ impl RequestRegistry {
     #[cfg(test)]
     pub fn contains(&self, request_id: &str) -> bool {
         self.requests.contains_key(request_id)
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+}
+
+/// Internal registry for tracking active utility calls and their waiting receivers.
+#[derive(Debug)]
+pub struct UtilityRegistry {
+    closed: bool,
+    next_call_id: AtomicI64,
+    utility_calls: BTreeMap<i64, UtilitySender>,
+}
+
+impl Default for UtilityRegistry {
+    fn default() -> Self {
+        Self {
+            closed: false,
+            next_call_id: AtomicI64::new(1),
+            utility_calls: BTreeMap::default(),
+        }
+    }
+}
+
+impl UtilityRegistry {
+    /// Allocate the next utility `call_id` and register a newly added utility call.
+    pub fn allocate_and_register(&mut self) -> (i64, UtilityReceiver) {
+        let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        self.utility_calls.insert(call_id, tx);
+        (call_id, rx)
+    }
+
+    /// Resolve a utility output to its waiting receiver.
+    pub fn resolve(&mut self, output: UtilityOutput) -> Option<UtilitySender> {
+        self.utility_calls.remove(&output.call_id)
+    }
+
+    /// Mark the registry as closed, detach and return all tracked senders.
+    pub fn close(&mut self) -> Vec<UtilitySender> {
+        if self.closed {
+            return Vec::new();
+        }
+
+        self.closed = true;
+        std::mem::take(&mut self.utility_calls)
+            .into_values()
+            .collect()
+    }
+
+    /// Remove one utility call from the local registry. Returns the corresponding sender if exists.
+    #[must_use]
+    pub fn remove(&mut self, call_id: i64) -> Option<UtilitySender> {
+        self.utility_calls.remove(&call_id)
+    }
+
+    #[cfg(test)]
+    pub fn contains(&self, call_id: i64) -> bool {
+        self.utility_calls.contains_key(&call_id)
     }
 
     pub fn is_closed(&self) -> bool {
