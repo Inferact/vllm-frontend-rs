@@ -30,7 +30,7 @@ use crate::state::AppState;
 /// Build the shared application state for one configured model and one engine client.
 async fn build_state(config: &Config) -> Result<Arc<AppState>> {
     let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address: config.handshake_address.clone(),
+        handshake_addresses: config.handshake_addresses.clone(),
         model_name: config.model.clone(),
         local_host: config.engine_local_host.clone(),
         ready_timeout: config.ready_timeout,

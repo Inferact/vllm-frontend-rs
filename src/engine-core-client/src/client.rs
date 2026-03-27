@@ -9,7 +9,7 @@ use crate::client::imp::{ClientInner, run_abort_loop, run_output_dispatcher_loop
 use crate::error::{Error, Result};
 use crate::protocol::handshake::ReadyMessage;
 use crate::protocol::{EngineCoreRequest, EngineCoreRequestType, EngineCoreUtilityRequest};
-use crate::transport;
+use crate::transport::{self, ConnectedEngine};
 
 mod imp;
 mod state;
@@ -21,8 +21,8 @@ pub use stream::{EngineCoreOutputStream, EngineCoreStreamOutput};
 /// `EngineCoreProc`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineCoreClientConfig {
-    /// Startup handshake address that the Python engine connects to first.
-    pub handshake_address: String,
+    /// Startup handshake addresses used to bootstrap one or more Python engines.
+    pub handshake_addresses: Vec<String>,
     /// Model name used for frontend-side metrics labels.
     pub model_name: String,
     /// Local host/interface used when allocating the frontend input/output addresses.
@@ -36,7 +36,7 @@ pub struct EngineCoreClientConfig {
 impl EngineCoreClientConfig {
     pub fn new(handshake_address: impl Into<String>) -> Self {
         Self {
-            handshake_address: handshake_address.into(),
+            handshake_addresses: vec![handshake_address.into()],
             model_name: String::new(),
             local_host: "127.0.0.1".to_string(),
             ready_timeout: Duration::from_secs(30),
@@ -50,13 +50,12 @@ pub struct EngineCoreClient {
     config: EngineCoreClientConfig,
     input_address: String,
     output_address: String,
-    engine_identity: Vec<u8>,
+    engines: Vec<ConnectedEngine>,
     inner: Arc<ClientInner>,
     abort_tx: mpsc::UnboundedSender<String>,
     output_task: AbortOnDropHandle<()>,
     dispatcher_task: AbortOnDropHandle<()>,
     abort_task: AbortOnDropHandle<()>,
-    pub ready_message: Option<ReadyMessage>,
 }
 
 impl EngineCoreClient {
@@ -74,7 +73,7 @@ impl EngineCoreClient {
         local_output_address: Option<String>,
     ) -> Result<Self> {
         let connected = transport::connect(
-            &config.handshake_address,
+            &config.handshake_addresses,
             &config.local_host,
             local_input_address.as_deref(),
             local_output_address.as_deref(),
@@ -93,11 +92,12 @@ impl EngineCoreClient {
     ) -> Result<Self> {
         let (output_tx, output_rx) = mpsc::channel(64);
         let (abort_tx, abort_rx) = mpsc::unbounded_channel();
+        let engines = connected.engines;
         let inner = Arc::new(ClientInner::new(
             connected.input_send,
             config.model_name.clone(),
+            engines.len(),
         ));
-        let engine_identity = connected.engine_identity;
         let output_task = AbortOnDropHandle::new(tokio::spawn(transport::run_output_loop(
             connected.output_socket,
             output_tx,
@@ -108,7 +108,7 @@ impl EngineCoreClient {
         )));
         let abort_task = AbortOnDropHandle::new(tokio::spawn(run_abort_loop(
             inner.clone(),
-            engine_identity.clone(),
+            engines.clone(),
             abort_rx,
         )));
 
@@ -116,13 +116,12 @@ impl EngineCoreClient {
             config,
             input_address: connected.input_address,
             output_address: connected.output_address,
-            engine_identity,
+            engines,
             inner,
             abort_tx,
             output_task,
             dispatcher_task,
             abort_task,
-            ready_message: Some(connected.ready_message),
         })
     }
 
@@ -134,8 +133,26 @@ impl EngineCoreClient {
         &self.output_address
     }
 
-    pub fn engine_identity(&self) -> &[u8] {
-        &self.engine_identity
+    pub fn handshake_addresses(&self) -> &[String] {
+        &self.config.handshake_addresses
+    }
+
+    pub fn engine_count(&self) -> usize {
+        self.engines.len()
+    }
+
+    pub fn engine_identities(&self) -> Vec<&[u8]> {
+        self.engines
+            .iter()
+            .map(|engine| engine.engine_identity.as_slice())
+            .collect()
+    }
+
+    pub fn ready_messages(&self) -> Vec<&ReadyMessage> {
+        self.engines
+            .iter()
+            .map(|engine| &engine.ready_message)
+            .collect()
     }
 
     /// Get the model name associated with this client used for metrics labeling.
@@ -168,10 +185,14 @@ impl EngineCoreClient {
         );
 
         let request_id = req.request_id.clone();
-        let rx = self.inner.register_request(request_id.clone())?;
+        let (engine_idx, rx) = self.inner.register_request(request_id.clone())?;
         if let Err(error) = self
             .inner
-            .send_to_engine(&self.engine_identity, EngineCoreRequestType::Add, &req)
+            .send_to_engine(
+                &self.engines[engine_idx].engine_identity,
+                EngineCoreRequestType::Add,
+                &req,
+            )
             .await
         {
             self.inner.rollback_request(&request_id);
@@ -195,9 +216,12 @@ impl EngineCoreClient {
             return Ok(());
         }
 
-        self.inner
-            .do_abort_requests(&self.engine_identity, &abortable)
-            .await
+        for (engine_idx, request_ids) in abortable {
+            self.inner
+                .do_abort_requests(&self.engines[engine_idx].engine_identity, &request_ids)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Call a typed utility method on the engine.
@@ -223,7 +247,7 @@ impl EngineCoreClient {
         if let Err(error) = self
             .inner
             .send_to_engine(
-                &self.engine_identity,
+                &self.engines[0].engine_identity,
                 EngineCoreRequestType::Utility,
                 &request,
             )

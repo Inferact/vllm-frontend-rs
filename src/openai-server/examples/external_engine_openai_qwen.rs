@@ -19,7 +19,7 @@ use vllm_openai_server::{Config, serve};
     about = "Smoke-test the Rust OpenAI server with async-openai against an external Qwen vLLM engine."
 )]
 struct Args {
-    #[arg(long)]
+    #[arg(long = "handshake-address")]
     handshake_address: String,
     #[arg(long, default_value = "Qwen/Qwen3-0.6B")]
     model: String,
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let port = unique_local_port()?;
     let config = Config {
-        handshake_address: args.handshake_address,
+        handshake_addresses: vec![args.handshake_address],
         model: args.model,
         host: "127.0.0.1".to_string(),
         port,

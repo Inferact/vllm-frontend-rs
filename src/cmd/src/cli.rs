@@ -66,7 +66,7 @@ impl FrontendRuntimeArgs {
     /// Build one OpenAI-server runtime config for the resolved handshake address.
     fn into_config(self, handshake_address: String) -> Config {
         Config {
-            handshake_address,
+            handshake_addresses: vec![handshake_address],
             model: self.model,
             host: self.host,
             port: self.port,
@@ -85,7 +85,7 @@ pub struct FrontendArgs {
     #[command(flatten)]
     pub runtime: FrontendRuntimeArgs,
     /// Headless vLLM engine handshake endpoint, for example `tcp://127.0.0.1:62100`.
-    #[arg(long)]
+    #[arg(long = "handshake-address")]
     pub handshake_address: String,
 }
 
@@ -182,6 +182,39 @@ mod tests {
                             "--dtype",
                             "float16",
                         ],
+                    },
+                ),
+            }
+        "#]]
+        .assert_debug_eq(&cli);
+    }
+
+    #[test]
+    fn frontend_args_accept_single_handshake_address() {
+        let cli = Cli::try_parse_from([
+            "vllm-rs",
+            "frontend",
+            "Qwen/Qwen3-0.6B",
+            "--handshake-address",
+            "tcp://127.0.0.1:62100",
+        ])
+        .unwrap();
+
+        expect![[r#"
+            Cli {
+                command: Frontend(
+                    FrontendArgs {
+                        runtime: FrontendRuntimeArgs {
+                            model: "Qwen/Qwen3-0.6B",
+                            host: "127.0.0.1",
+                            port: 8000,
+                            engine_local_host: "127.0.0.1",
+                            ready_timeout_secs: 30,
+                            tool_call_parser: None,
+                            reasoning_parser: None,
+                            max_model_len: None,
+                        },
+                        handshake_address: "tcp://127.0.0.1:62100",
                     },
                 ),
             }

@@ -3,8 +3,8 @@ use std::time::Duration;
 /// Normalized runtime configuration for the minimal OpenAI-compatible server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    /// Headless vLLM engine handshake endpoint.
-    pub handshake_address: String,
+    /// Headless vLLM engine handshake endpoints.
+    pub handshake_addresses: Vec<String>,
     /// Backend model identifier and exposed OpenAI model ID.
     pub model: String,
     /// HTTP bind host.
