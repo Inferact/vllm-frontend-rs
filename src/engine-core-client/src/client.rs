@@ -36,7 +36,9 @@ pub struct EngineCoreClientConfig {
 }
 
 impl EngineCoreClientConfig {
-    pub fn new(handshake_address: impl Into<String>) -> Self {
+    /// Create a new client config with the given handshake address, expecting a single engine, and
+    /// default values for all other fields.
+    pub fn new_single(handshake_address: impl Into<String>) -> Self {
         Self {
             handshake_address: handshake_address.into(),
             engine_count: 1,
@@ -129,22 +131,22 @@ impl EngineCoreClient {
         })
     }
 
+    /// Return the address of the input socket that the client uses to send requests to the engine.
     pub fn input_address(&self) -> &str {
         &self.input_address
     }
 
+    /// Return the address of the output socket that the client listens on for engine responses.
     pub fn output_address(&self) -> &str {
         &self.output_address
     }
 
-    pub fn handshake_address(&self) -> &str {
-        &self.config.handshake_address
-    }
-
+    /// Return the number of engines connected to this client.
     pub fn engine_count(&self) -> usize {
         self.engines.len()
     }
 
+    /// Return the engine identities of all engines connected to this client.
     pub fn engine_identities(&self) -> Vec<&[u8]> {
         self.engines
             .iter()
@@ -152,6 +154,7 @@ impl EngineCoreClient {
             .collect()
     }
 
+    /// Return the READY messages received from all engines during the startup handshake.
     pub fn ready_messages(&self) -> Vec<&ReadyMessage> {
         self.engines
             .iter()

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::slice;
 use std::sync::Arc;
 
@@ -78,7 +79,7 @@ impl ClientInner {
     pub fn abortable_request_ids(
         &self,
         request_ids: &[String],
-    ) -> Result<std::collections::BTreeMap<usize, Vec<String>>> {
+    ) -> Result<BTreeMap<usize, Vec<String>>> {
         let registry = self.request_reg.lock();
         if registry.is_closed() {
             return Err(self.closed_error());

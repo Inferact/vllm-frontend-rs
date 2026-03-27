@@ -1327,7 +1327,6 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
     assert_eq!(client.input_address(), ipc.input_endpoint());
     assert_eq!(client.output_address(), ipc.output_endpoint());
     assert_eq!(client.engine_count(), 2);
-    assert_eq!(client.handshake_address(), handshake_address);
     assert_eq!(
         client.engine_identities(),
         vec![b"engine-0".as_slice(), b"engine-1".as_slice()]
