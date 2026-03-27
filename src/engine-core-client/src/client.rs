@@ -221,12 +221,7 @@ impl EngineCoreClient {
             let snapshot = coordinator.snapshot();
             req.current_wave = snapshot.current_wave;
             if !snapshot.engines_running {
-                let target_engine_index = engine_id.engine_index().ok_or_else(|| {
-                    Error::UnsupportedCoordinatorEngineId {
-                        engine_id: engine_id.to_vec(),
-                    }
-                })?;
-                if let Err(error) = coordinator.notify_first_request(target_engine_index) {
+                if let Err(error) = coordinator.notify_first_request(engine_id.clone()) {
                     self.inner.rollback_request(&request_id);
                     return Err(error);
                 }

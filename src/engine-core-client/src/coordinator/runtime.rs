@@ -12,6 +12,7 @@ use crate::protocol::{
     ClassifiedEngineCoreOutputs, DpControlMessage, EngineCoreOutputs, EngineCoreRequestType,
     OtherEngineCoreOutputs, encode_msgpack,
 };
+use crate::transport::EngineId;
 
 /// Snapshot to the coordinator state for request routing and stamping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +33,10 @@ type CoordinatorState = Mutex<CoordinatorStateSnapshot>;
 /// arrived while all engines were paused".
 #[derive(Debug)]
 enum CoordinatorCommand {
-    FirstRequest { target_engine_index: u32, wave: u32 },
+    FirstRequest {
+        target_engine_id: EngineId,
+        wave: u32,
+    },
 }
 
 /// Frontend-facing coordinator handle used by `EngineCoreClient::call()`.
@@ -74,7 +78,7 @@ impl CoordinatorHandle {
     /// The handle flips `engines_running` optimistically so concurrent request
     /// submissions coalesce behind one `START_DP_WAVE` broadcast instead of all
     /// trying to trigger the wave independently.
-    pub(crate) fn notify_first_request(&self, target_engine_index: u32) -> Result<()> {
+    pub(crate) fn notify_first_request(&self, target_engine_id: EngineId) -> Result<()> {
         let wave = {
             let mut state = self.state.lock();
             if state.engines_running {
@@ -85,7 +89,7 @@ impl CoordinatorHandle {
         };
 
         let command = CoordinatorCommand::FirstRequest {
-            target_engine_index,
+            target_engine_id,
             wave,
         };
         if self.command_tx.send(command).is_err() {
@@ -142,9 +146,14 @@ impl CoordinatorRunner {
     async fn handle_command(&mut self, command: CoordinatorCommand) -> Result<()> {
         match command {
             CoordinatorCommand::FirstRequest {
-                target_engine_index,
+                target_engine_id,
                 wave,
             } => {
+                let target_engine_index = target_engine_id.engine_index().ok_or_else(|| {
+                    Error::UnsupportedCoordinatorEngineId {
+                        engine_id: target_engine_id.to_vec(),
+                    }
+                })?;
                 self.state.lock().current_wave = wave;
                 self.broadcast_start_wave(wave, target_engine_index).await?;
             }
