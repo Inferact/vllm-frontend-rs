@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use itertools::Itertools;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::stream::EngineCoreStreamOutput;
@@ -105,13 +106,13 @@ impl RequestRegistry {
             return Err(Error::DuplicateRequestId { request_id });
         }
 
+        // Simple routing strategy: assign to the engine with the least in-flight requests.
         let engine_idx = self
             .in_flight_per_engine
             .iter()
-            .enumerate()
-            .min_by_key(|&(engine_idx, in_flight)| (*in_flight, engine_idx))
-            .map(|(engine_idx, _)| engine_idx)
+            .position_min()
             .expect("request registry must contain at least one engine");
+
         let (tx, rx) = mpsc::unbounded_channel();
         self.requests.insert(
             request_id,
@@ -121,6 +122,7 @@ impl RequestRegistry {
             },
         );
         self.in_flight_per_engine[engine_idx] += 1;
+
         Ok((engine_idx, rx))
     }
 

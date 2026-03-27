@@ -45,8 +45,8 @@ impl ClientInner {
         &self.model_name
     }
 
-    /// Register a newly added request. Return the per-request output channel bound to its
-    /// `request_id`.
+    /// Register a newly added request. Return the selected engine index and the per-request output
+    /// channel bound to its `request_id`.
     pub fn register_request(&self, request_id: String) -> Result<(usize, OutputReceiver)> {
         let mut registry = self.request_reg.lock();
         if registry.is_closed() {
