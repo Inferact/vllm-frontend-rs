@@ -1,10 +1,11 @@
-use vllm_engine_core_client::protocol::StopReason;
 use std::sync::Arc;
 
 use futures_async_stream::try_stream;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use vllm_engine_core_client::protocol::StopReason;
 use vllm_llm::{FinishReason, GenerateOutputStream};
+
 use super::logprobs::{
     DecodedLogprobs, DecodedPromptLogprobs, decode_logprobs, decode_prompt_logprobs,
 };
@@ -99,9 +100,14 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 // when streaming the outputs.
                 match decode_options.include_stop_str_in_output {
                     true => 0,
-                    false => decode_options.stop_strings.as_ref()
-                        .and_then(|stops| stops.iter()
-                            .map(|ss| ss.len()).max()).unwrap_or(1) - 1,
+                    false => {
+                        decode_options
+                            .stop_strings
+                            .as_ref()
+                            .and_then(|stops| stops.iter().map(|ss| ss.len()).max())
+                            .unwrap_or(1)
+                            - 1
+                    }
                 },
             )
         });
@@ -134,7 +140,11 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
         let decodable_token_ids = if suppress_terminal_stop_token {
             // Match Python V1 token-stop detokenization by keeping the stop token
             // in metadata while excluding it from user-visible text.
-            output.token_ids.split_last().map(|(_, rest)| rest).unwrap_or(&[])
+            output
+                .token_ids
+                .split_last()
+                .map(|(_, rest)| rest)
+                .unwrap_or(&[])
         } else {
             &output.token_ids
         };
@@ -144,14 +154,15 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
         for &token_id in decodable_token_ids {
             let new_bytes = decoder.push_token(token_id)?;
             if let Some(stops) = decode_options.stop_strings.as_mut()
-                && let Some((idx, off)) = matches_stop_string(stops, decoder.output(), new_bytes) {
+                && let Some((idx, off)) = matches_stop_string(stops, decoder.output(), new_bytes)
+            {
                 let stop_str = stops.swap_remove(idx);
                 truncate_output_to = match decode_options.include_stop_str_in_output {
                     true => Some(off + stop_str.len()),
-                    false => Some(off)
+                    false => Some(off),
                 };
                 finish_reason = Some(FinishReason::Stop(Some(StopReason::Text(stop_str))));
-                break
+                break;
             }
 
             if let Some(chunk) = decoder.next_chunk() {
@@ -223,7 +234,6 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
 
     Err(Error::StreamClosedBeforeTerminalOutput { request_id })?;
 }
-
 
 /// If stop string matches, returns tuple
 /// (index into stop string vec, byte index of first byte of stop string in output)

@@ -82,7 +82,10 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
     }
 
     fn next_chunk(&mut self) -> Option<String> {
-        let cutoff = self.cumulative_output.len().saturating_sub(self.min_bytes_to_buffer);
+        let cutoff = self
+            .cumulative_output
+            .len()
+            .saturating_sub(self.min_bytes_to_buffer);
         (cutoff > self.output_index).then(|| {
             let chunk = self.cumulative_output[self.output_index..cutoff].to_string();
             self.output_index = cutoff;
@@ -104,9 +107,8 @@ impl<B: TextBackend + ?Sized> IncrementalDecoder for DecodeStream<'_, B> {
         if let Some(truncate_output_to) = truncate_output_to {
             self.cumulative_output.truncate(truncate_output_to);
         }
-        let last_chunk = (self.output_index < self.cumulative_output.len()).then(
-            || self.cumulative_output[self.output_index..].to_string()
-        );
+        let last_chunk = (self.output_index < self.cumulative_output.len())
+            .then(|| self.cumulative_output[self.output_index..].to_string());
         self.output_index = 0;
         Ok((last_chunk, take(&mut self.cumulative_output)))
     }

@@ -37,7 +37,12 @@ pub trait TextBackend: Send + Sync {
         skip_special_tokens: bool,
         hold_back_bytes: usize,
     ) -> Box<dyn IncrementalDecoder + '_> {
-        Box::new(DecodeStream::new(self, prompt_token_ids, skip_special_tokens, hold_back_bytes))
+        Box::new(DecodeStream::new(
+            self,
+            prompt_token_ids,
+            skip_special_tokens,
+            hold_back_bytes,
+        ))
     }
 
     /// Return the backend model ID when available.
