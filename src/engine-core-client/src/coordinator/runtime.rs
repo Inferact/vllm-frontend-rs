@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
-use tracing::warn;
 use zeromq::prelude::SocketSend;
 use zeromq::{XPubSocket, ZmqMessage};
 
@@ -10,7 +9,7 @@ use crate::client::imp::ClientInner;
 use crate::error::{Error, Result};
 use crate::protocol::{
     ClassifiedEngineCoreOutputs, DpControlMessage, EngineCoreOutputs, EngineCoreRequestType,
-    OtherEngineCoreOutputs, encode_msgpack,
+    encode_msgpack,
 };
 use crate::transport::EngineId;
 
@@ -28,11 +27,12 @@ pub(crate) struct CoordinatorStateSnapshot {
 type CoordinatorState = Mutex<CoordinatorStateSnapshot>;
 
 /// Commands sent from the frontend request path into the background runner.
-///
-/// At this stage the only frontend-initiated transition is "the first request
-/// arrived while all engines were paused".
 #[derive(Debug)]
 enum CoordinatorCommand {
+    /// The first request arrived while all engines were paused.
+    ///
+    /// The coordinator should broadcast `START_DP_WAVE` with the current wave and the target engine
+    /// index as the excluded engine.
     FirstRequest {
         target_engine_id: EngineId,
         wave: u32,
@@ -168,11 +168,11 @@ impl CoordinatorRunner {
     /// behavior when an engine needs to re-open the current or a newer wave.
     async fn handle_outputs(&mut self, outputs: EngineCoreOutputs) -> Result<()> {
         match outputs.classify() {
-            ClassifiedEngineCoreOutputs::Other(OtherEngineCoreOutputs::DpControl {
+            ClassifiedEngineCoreOutputs::DpControl {
                 engine_index,
                 control,
                 ..
-            }) => match control {
+            } => match control {
                 DpControlMessage::WaveComplete(wave) => {
                     let mut state = self.state.lock();
                     if wave >= state.current_wave {
@@ -198,24 +198,12 @@ impl CoordinatorRunner {
                     }
                 }
             },
-            ClassifiedEngineCoreOutputs::RequestBatch(batch) => {
-                if batch.scheduler_stats.is_some() {
-                    warn!(
-                        engine_index = batch.engine_index,
-                        "ignoring scheduler_stats on in-process coordinator control path"
-                    );
-                } else if !batch.outputs.is_empty() || batch.finished_requests.is_some() {
-                    warn!(outputs = ?batch, "ignoring request outputs on in-process coordinator control path");
-                }
-            }
-            ClassifiedEngineCoreOutputs::Utility(output) => {
-                warn!(outputs = ?output, "ignoring utility output on in-process coordinator control path");
-            }
-            ClassifiedEngineCoreOutputs::Other(OtherEngineCoreOutputs::Raw(raw)) => {
-                warn!(outputs = ?raw, "ignoring raw engine-core output on in-process coordinator control path");
+            other => {
+                return Err(Error::UnexpectedCoordinatorOutput {
+                    message: format!("received non-control output on coordinator path: {other:?}"),
+                });
             }
         }
-
         Ok(())
     }
 

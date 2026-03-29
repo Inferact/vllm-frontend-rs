@@ -301,6 +301,14 @@ fn is_decode_error(error: &Error) -> bool {
     }
 }
 
+fn is_unexpected_dispatcher_output(error: &Error) -> bool {
+    match error {
+        Error::UnexpectedDispatcherOutput { .. } => true,
+        Error::Shared(error) => is_unexpected_dispatcher_output(error),
+        _ => false,
+    }
+}
+
 fn decode_value(bytes: &[u8]) -> Value {
     rmpv::decode::read_value(&mut Cursor::new(bytes)).unwrap()
 }
@@ -690,7 +698,7 @@ async fn coordinator_rebroadcasts_engine_start_wave_control() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn client_streams_outputs_per_request_and_ignores_other_messages() {
+async fn client_fail_closes_when_main_output_path_receives_dp_control() {
     init_tracing();
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
@@ -737,60 +745,12 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
                     push,
                     EngineCoreOutputs {
                         outputs: vec![request_output("req-1", vec![999], None)],
-                        utility_output: Some(UtilityOutput {
-                            call_id: 2,
-                            failure_message: None,
-                            result: None,
-                        }),
                         ..Default::default()
                     },
                 )
                 .await;
 
-                send_outputs(
-                    push,
-                    EngineCoreOutputs {
-                        outputs: vec![
-                            request_output("req-2", vec![22], None),
-                            request_output("req-1", vec![11], None),
-                        ],
-                        ..Default::default()
-                    },
-                )
-                .await;
-
-                let abort = recv_engine_message(dealer).await;
-                assert_eq!(abort[0].as_ref(), &[0x01]);
-                let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
-                assert_eq!(aborted_ids, vec!["req-1".to_string()]);
-
-                send_outputs(
-                    push,
-                    EngineCoreOutputs {
-                        outputs: vec![request_output(
-                            "req-2",
-                            vec![],
-                            Some(EngineCoreFinishReason::Length),
-                        )],
-                        finished_requests: Some(BTreeSet::from(["req-2".to_string()])),
-                        ..Default::default()
-                    },
-                )
-                .await;
-
-                send_outputs(
-                    push,
-                    EngineCoreOutputs {
-                        outputs: vec![request_output(
-                            "req-1",
-                            vec![],
-                            Some(EngineCoreFinishReason::Abort),
-                        )],
-                        finished_requests: Some(BTreeSet::from(["req-1".to_string()])),
-                        ..Default::default()
-                    },
-                )
-                .await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
             })
         },
     );
@@ -814,58 +774,24 @@ async fn client_streams_outputs_per_request_and_ignores_other_messages() {
     let mut stream_1 = client.call(sample_request_with_id("req-1")).await.unwrap();
     let mut stream_2 = client.call(sample_request_with_id("req-2")).await.unwrap();
 
-    let first_2 = timeout(Duration::from_secs(1), stream_2.next())
+    let error_2 = timeout(Duration::from_secs(1), stream_2.next())
         .await
         .unwrap()
         .unwrap()
-        .unwrap();
-    assert_eq!(first_2.engine_index, 0);
-    assert_eq!(first_2.timestamp, 0.0);
-    assert_eq!(first_2.request_id, "req-2");
-    assert_eq!(first_2.new_token_ids, vec![22]);
+        .unwrap_err();
+    assert!(is_unexpected_dispatcher_output(&error_2));
 
-    let first_1 = timeout(Duration::from_secs(1), stream_1.next())
+    let error_1 = timeout(Duration::from_secs(1), stream_1.next())
         .await
         .unwrap()
         .unwrap()
-        .unwrap();
-    assert_eq!(first_1.engine_index, 0);
-    assert_eq!(first_1.timestamp, 0.0);
-    assert_eq!(first_1.request_id, "req-1");
-    assert_eq!(first_1.new_token_ids, vec![11]);
+        .unwrap_err();
+    assert!(is_unexpected_dispatcher_output(&error_1));
 
-    client
-        .abort(&["req-1".to_string(), "unknown".to_string()])
-        .await
-        .unwrap();
-
-    let final_2 = timeout(Duration::from_secs(1), stream_2.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(final_2.request_id, "req-2");
-    assert_eq!(final_2.finish_reason, Some(EngineCoreFinishReason::Length));
-    assert!(
-        timeout(Duration::from_secs(1), stream_2.next())
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    let final_1 = timeout(Duration::from_secs(1), stream_1.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(final_1.request_id, "req-1");
-    assert_eq!(final_1.finish_reason, Some(EngineCoreFinishReason::Abort));
-    assert!(
-        timeout(Duration::from_secs(1), stream_1.next())
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(matches!(
+        client.health_error().as_deref(),
+        Some(error) if is_unexpected_dispatcher_output(error)
+    ));
 
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();

@@ -309,8 +309,20 @@ pub(crate) async fn run_output_dispatcher_loop(
                     );
                 }
             }
+            ClassifiedEngineCoreOutputs::DpControl {
+                engine_index,
+                timestamp,
+                control,
+            } => {
+                inner.close_registries(Arc::new(Error::UnexpectedDispatcherOutput {
+                    message: format!(
+                        "received dp-control output on main dispatcher path: engine_index={engine_index}, timestamp={timestamp}, control={control:?}"
+                    ),
+                }));
+                return;
+            }
             ClassifiedEngineCoreOutputs::Other(other) => match other {
-                OtherEngineCoreOutputs::DpControl { .. } | OtherEngineCoreOutputs::Raw(_) => {
+                OtherEngineCoreOutputs::Raw(_) => {
                     warn!(outputs = ?other, "ignoring non-request engine-core output");
                 }
             },

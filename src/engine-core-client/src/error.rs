@@ -36,6 +36,10 @@ pub enum Error {
     UnexpectedHandshakeIdentity { expected: Vec<u8>, actual: Vec<u8> },
     #[error("unexpected startup handshake message: {message}")]
     UnexpectedHandshakeMessage { message: String },
+    #[error("unexpected non-control output on coordinator path: {message}")]
+    UnexpectedCoordinatorOutput { message: String },
+    #[error("unexpected dp-control output on main dispatcher path: {message}")]
+    UnexpectedDispatcherOutput { message: String },
     #[error("coordinator requires a Python-compatible two-byte engine id, got {engine_id:?}")]
     UnsupportedCoordinatorEngineId { engine_id: Vec<u8> },
     #[error("unsupported auxiliary frame(s): expected 1 frame, got {frame_count}")]
