@@ -12,7 +12,9 @@ use zeromq::RouterSendHalf;
 
 use crate::client::state::{OutputReceiver, RequestRegistry, UtilityReceiver, UtilityRegistry};
 use crate::client::stream::EngineCoreStreamOutput;
-use crate::error::{dispatcher_closed, unexpected_dispatcher_output};
+use crate::error::{
+    client_closed, control_closed, dispatcher_closed, unexpected_dispatcher_output,
+};
 use crate::metrics::record_scheduler_stats;
 use crate::protocol::{
     ClassifiedEngineCoreOutputs, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequestType,
@@ -153,7 +155,7 @@ impl ClientInner {
         let mut guard = self.input_send.lock().await;
         let input_send = guard
             .as_mut()
-            .ok_or_else(|| Error::ControlClosed("input sender already shut down".to_string()))?;
+            .ok_or_else(|| control_closed!("input sender already shut down"))?;
         transport::send_message(input_send, engine_id, request_type.to_frame(), payload).await?;
         Ok(())
     }
@@ -171,8 +173,7 @@ impl ClientInner {
     /// Shut down by closing all active request streams and then closing the input socket to signal
     /// the engine that no more messages will be sent.
     pub async fn shutdown(&self) {
-        let reason = "engine-core client shut down".to_string();
-        self.close_registries(Arc::new(Error::ClientClosed { reason }));
+        self.close_registries(Arc::new(client_closed!("engine-core client shut down")));
         self.input_send.lock().await.take();
     }
 
@@ -311,7 +312,7 @@ pub(crate) async fn run_output_dispatcher_loop(
                 }
                 other @ (ClassifiedEngineCoreOutputs::DpControl { .. }
                 | ClassifiedEngineCoreOutputs::Other(_)) => {
-                    Err(unexpected_dispatcher_output!(
+                    Err::<(), _>(unexpected_dispatcher_output!(
                         "received unexpected output on main dispatcher path: {other:?}"
                     ))?;
                 }
@@ -354,9 +355,7 @@ mod tests {
             Some(Error::EngineCoreDead)
         ));
 
-        inner.close_registries(Arc::new(Error::ClientClosed {
-            reason: "shutdown".to_string(),
-        }));
+        inner.close_registries(Arc::new(client_closed!("shutdown")));
         assert!(matches!(
             inner.health_error().as_deref(),
             Some(Error::EngineCoreDead)
