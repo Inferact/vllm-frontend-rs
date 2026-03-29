@@ -85,19 +85,18 @@ impl CoordinatorHandle {
         if state.engines_running {
             return Ok(());
         }
-        state.engines_running = true;
 
         let command = CoordinatorCommand::FirstRequest {
             target_engine_id,
             wave: state.current_wave,
         };
         if self.command_tx.send(command).is_err() {
-            self.state.lock().engines_running = false;
             return Err(Error::ControlClosed(
                 "in-process coordinator command channel already shut down".to_string(),
             ));
         }
 
+        state.engines_running = true;
         Ok(())
     }
 }
