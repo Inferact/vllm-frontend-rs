@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use thiserror_ext::AsReport;
 use tokio::sync::mpsc;
+use tracing::warn;
 use zeromq::prelude::SocketSend;
 use zeromq::{XPubSocket, ZmqMessage};
 
@@ -214,37 +216,30 @@ impl CoordinatorRunner {
         mut output_rx: mpsc::Receiver<Result<EngineCoreOutputs>>,
         inner: Arc<ClientInner>,
     ) {
-        loop {
-            tokio::select! {
-                // Received frontend-originated command from the handle.
-                command = self.command_rx.recv() => {
-                    let Some(command) = command else {
-                        return;
-                    };
-                    if let Err(error) = self.handle_command(command).await {
-                        inner.close_registries(Arc::new(error));
-                        return;
-                    }
-                }
-                // Received engine-originated control output from the coordinator socket.
-                outputs = output_rx.recv() => {
-                    let Some(outputs) = outputs else {
-                        return;
-                    };
-                    let outputs = match outputs {
-                        Ok(outputs) => outputs,
-                        Err(error) => {
-                            inner.close_registries(Arc::new(error));
+        let Err(error) = try {
+            loop {
+                tokio::select! {
+                    // Received frontend-originated command from the handle.
+                    command = self.command_rx.recv() => {
+                        let Some(command) = command else {
+                            warn!("coordinator command channel closed, shutting down coordinator runner");
                             return;
-                        }
-                    };
-
-                    if let Err(error) = self.handle_outputs(outputs).await {
-                        inner.close_registries(Arc::new(error));
-                        return;
+                        };
+                        self.handle_command(command).await?;
+                    }
+                    // Received engine-originated control output from the coordinator socket.
+                    outputs = output_rx.recv() => {
+                        let Some(outputs) = outputs else {
+                            warn!("coordinator output channel closed, shutting down coordinator runner");
+                            return;
+                        };
+                        self.handle_outputs(outputs?).await?;
                     }
                 }
             }
-        }
+        };
+
+        warn!(error = %error.as_report(), "coordinator runner exiting with error");
+        inner.close_registries(Arc::new(error));
     }
 }
