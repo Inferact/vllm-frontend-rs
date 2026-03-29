@@ -217,7 +217,7 @@ async fn recv_start_dp_wave(sub: &mut SubSocket) -> (u32, u32) {
     assert_eq!(frames.len(), 2);
     assert_eq!(
         frames[0].as_ref(),
-        EngineCoreRequestType::StartDpWave.as_frame().as_ref()
+        EngineCoreRequestType::StartDpWave.to_frame().as_ref()
     );
     rmp_serde::from_slice(&frames[1]).expect("decode START_DP_WAVE payload")
 }

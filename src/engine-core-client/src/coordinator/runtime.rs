@@ -79,18 +79,15 @@ impl CoordinatorHandle {
     /// submissions coalesce behind one `START_DP_WAVE` broadcast instead of all
     /// trying to trigger the wave independently.
     pub(crate) fn notify_first_request(&self, target_engine_id: EngineId) -> Result<()> {
-        let wave = {
-            let mut state = self.state.lock();
-            if state.engines_running {
-                return Ok(());
-            }
-            state.engines_running = true;
-            state.current_wave
-        };
+        let mut state = self.state.lock();
+        if state.engines_running {
+            return Ok(());
+        }
+        state.engines_running = true;
 
         let command = CoordinatorCommand::FirstRequest {
             target_engine_id,
-            wave,
+            wave: state.current_wave,
         };
         if self.command_tx.send(command).is_err() {
             self.state.lock().engines_running = false;
@@ -133,7 +130,7 @@ impl CoordinatorRunner {
         self.coordinator_input
             .send(
                 ZmqMessage::try_from(vec![
-                    EngineCoreRequestType::StartDpWave.as_frame(),
+                    EngineCoreRequestType::StartDpWave.to_frame(),
                     payload.into(),
                 ])
                 .expect("coordinator START_DP_WAVE message must contain two frames"),
@@ -162,10 +159,6 @@ impl CoordinatorRunner {
     }
 
     /// Apply one engine-originated control output to the coordinator state machine.
-    ///
-    /// `WaveComplete` advances the wave and returns the group to the paused
-    /// state. `StartWave` requests a rebroadcast, which mirrors Python's
-    /// behavior when an engine needs to re-open the current or a newer wave.
     async fn handle_outputs(&mut self, outputs: EngineCoreOutputs) -> Result<()> {
         match outputs.classify() {
             ClassifiedEngineCoreOutputs::DpControl {
@@ -173,6 +166,8 @@ impl CoordinatorRunner {
                 control,
                 ..
             } => match control {
+                // The engines signals they completed the current wave and are now paused.
+                // Advance the current wave and mark the state as paused.
                 DpControlMessage::WaveComplete(wave) => {
                     let mut state = self.state.lock();
                     if wave >= state.current_wave {
@@ -180,6 +175,8 @@ impl CoordinatorRunner {
                         state.engines_running = false;
                     }
                 }
+                // An engine requests to start the wave.
+                // Rebroadcast the wave to all engines except for the originated one.
                 DpControlMessage::StartWave(wave) => {
                     let should_broadcast = {
                         let mut state = self.state.lock();
@@ -219,6 +216,7 @@ impl CoordinatorRunner {
     ) {
         loop {
             tokio::select! {
+                // Received frontend-originated command from the handle.
                 command = self.command_rx.recv() => {
                     let Some(command) = command else {
                         return;
@@ -228,6 +226,7 @@ impl CoordinatorRunner {
                         return;
                     }
                 }
+                // Received engine-originated control output from the coordinator socket.
                 outputs = output_rx.recv() => {
                     let Some(outputs) = outputs else {
                         return;

@@ -153,7 +153,7 @@ impl ClientInner {
         let input_send = guard
             .as_mut()
             .ok_or_else(|| Error::ControlClosed("input sender already shut down".to_string()))?;
-        transport::send_message(input_send, engine_id, request_type.as_frame(), payload).await?;
+        transport::send_message(input_send, engine_id, request_type.to_frame(), payload).await?;
         Ok(())
     }
 

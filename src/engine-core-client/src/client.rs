@@ -64,6 +64,8 @@ pub struct EngineCoreClient {
     inner: Arc<ClientInner>,
     coordinator: Option<CoordinatorHandle>,
     abort_tx: mpsc::UnboundedSender<String>,
+
+    // Background tasks
     output_task: AbortOnDropHandle<()>,
     dispatcher_task: AbortOnDropHandle<()>,
     abort_task: AbortOnDropHandle<()>,
@@ -214,19 +216,6 @@ impl EngineCoreClient {
     pub async fn call(&self, mut req: EngineCoreRequest) -> Result<EngineCoreOutputStream> {
         req.client_index = self.config.client_index;
         req.validate()?;
-
-        let request_id = req.request_id.clone();
-        let (engine_id, rx) = self.inner.register_request(request_id.clone())?;
-        if let Some(coordinator) = self.coordinator.as_ref() {
-            let snapshot = coordinator.snapshot();
-            req.current_wave = snapshot.current_wave;
-            if !snapshot.engines_running
-                && let Err(error) = coordinator.notify_first_request(engine_id.clone())
-            {
-                self.inner.rollback_request(&request_id);
-                return Err(error);
-            }
-        }
         trace!(
             request_id = %req.request_id,
             client_index = req.client_index,
@@ -234,17 +223,32 @@ impl EngineCoreClient {
             request = ?req,
             "sending add request"
         );
-        debug!(
-            request_id = req.request_id,
-            ?engine_id,
-            "registered request to engine"
-        );
 
-        if let Err(error) = self
-            .inner
-            .send_to_engine(&engine_id, EngineCoreRequestType::Add, &req)
-            .await
-        {
+        let request_id = req.request_id.clone();
+        let (engine_id, rx) = self.inner.register_request(request_id.clone())?;
+
+        let result = try {
+            if let Some(coordinator) = self.coordinator.as_ref() {
+                let snapshot = coordinator.snapshot();
+                req.current_wave = snapshot.current_wave;
+                if !snapshot.engines_running {
+                    coordinator.notify_first_request(engine_id.clone())?;
+                }
+            }
+
+            debug!(
+                request_id = req.request_id,
+                ?engine_id,
+                "registered request to engine"
+            );
+
+            self.inner
+                .send_to_engine(&engine_id, EngineCoreRequestType::Add, &req)
+                .await?;
+        };
+
+        // Failed to send the request to the engine, roll back the registration.
+        if let Err(error) = result {
             self.inner.rollback_request(&request_id);
             return Err(error);
         }

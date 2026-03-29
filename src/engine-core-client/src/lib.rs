@@ -1,4 +1,5 @@
 #![feature(iterator_try_collect)]
+#![feature(try_blocks)]
 
 mod client;
 mod coordinator;
