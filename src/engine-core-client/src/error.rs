@@ -38,7 +38,7 @@ pub enum Error {
     UnexpectedHandshakeMessage { message: String },
     #[error("unexpected non-control output on coordinator path: {message}")]
     UnexpectedCoordinatorOutput { message: String },
-    #[error("unexpected dp-control output on main dispatcher path: {message}")]
+    #[error("unexpected output on main dispatcher path: {message}")]
     UnexpectedDispatcherOutput { message: String },
     #[error("coordinator requires a Python-compatible two-byte engine id, got {engine_id:?}")]
     UnsupportedCoordinatorEngineId { engine_id: Vec<u8> },
@@ -53,8 +53,8 @@ pub enum Error {
     ControlClosed(String),
     #[error("request `{request_id}` is already in flight")]
     DuplicateRequestId { request_id: String },
-    #[error("engine-core output dispatcher closed: {reason}")]
-    DispatcherClosed { reason: String },
+    #[error("engine-core output dispatcher closed: {message}")]
+    DispatcherClosed { message: String },
     #[error("engine-core client is closed: {reason}")]
     ClientClosed { reason: String },
     #[error("request output stream for `{request_id}` closed unexpectedly")]

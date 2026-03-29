@@ -33,8 +33,7 @@ pub mod handshake;
 mod logprobs;
 pub mod stats;
 pub use classfied_outputs::{
-    ClassifiedEngineCoreOutputs, DpControlMessage, OtherEngineCoreOutputs, RequestBatchOutputs,
-    UtilityCallOutput,
+    ClassifiedEngineCoreOutputs, DpControlMessage, RequestBatchOutputs, UtilityCallOutput,
 };
 pub use logprobs::{
     Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,

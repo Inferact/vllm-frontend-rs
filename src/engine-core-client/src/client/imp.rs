@@ -12,10 +12,11 @@ use zeromq::RouterSendHalf;
 
 use crate::client::state::{OutputReceiver, RequestRegistry, UtilityReceiver, UtilityRegistry};
 use crate::client::stream::EngineCoreStreamOutput;
+use crate::error::{dispatcher_closed, unexpected_dispatcher_output};
 use crate::metrics::record_scheduler_stats;
 use crate::protocol::{
     ClassifiedEngineCoreOutputs, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequestType,
-    OtherEngineCoreOutputs, UtilityOutput, encode_msgpack,
+    UtilityOutput, encode_msgpack,
 };
 use crate::transport::{ConnectedEngine, EngineId};
 use crate::{Error, Result, transport};
@@ -244,93 +245,82 @@ pub(crate) async fn run_output_dispatcher_loop(
     inner: Arc<ClientInner>,
     mut output_rx: mpsc::Receiver<Result<EngineCoreOutputs>>,
 ) {
-    while let Some(outputs) = output_rx.recv().await {
-        let outputs = match outputs {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                let reason = error.to_report_string();
-                warn!(reason, "engine-core output loop failed");
-                inner.close_registries(Arc::new(error));
-                return;
-            }
-        };
+    let Err(error) = try {
+        loop {
+            let outputs = match output_rx.recv().await {
+                Some(outputs) => outputs,
+                None => Err(dispatcher_closed!(
+                    "engine-core output dispatcher channel closed"
+                )),
+            }?;
 
-        match outputs.classify() {
-            ClassifiedEngineCoreOutputs::RequestBatch(batch) => {
-                for output in batch.outputs {
-                    let request_id = output.request_id.clone();
-                    let Some(sender) = inner.take_sender_for_output(&output) else {
-                        debug!(request_id, "dropping output for inactive request");
-                        continue;
-                    };
+            match outputs.classify() {
+                ClassifiedEngineCoreOutputs::RequestBatch(batch) => {
+                    for output in batch.outputs {
+                        let request_id = output.request_id.clone();
+                        let Some(sender) = inner.take_sender_for_output(&output) else {
+                            debug!(request_id, "dropping output for inactive request");
+                            continue;
+                        };
 
-                    let wrapped_output = EngineCoreStreamOutput {
-                        engine_index: batch.engine_index,
-                        timestamp: batch.timestamp,
-                        output,
-                    };
-                    if sender.send(Ok(wrapped_output)).is_err() {
-                        debug!(request_id, "request output stream receiver dropped");
+                        let wrapped_output = EngineCoreStreamOutput {
+                            engine_index: batch.engine_index,
+                            timestamp: batch.timestamp,
+                            output,
+                        };
+                        if sender.send(Ok(wrapped_output)).is_err() {
+                            debug!(request_id, "request output stream receiver dropped");
+                        }
+                    }
+
+                    // The sender for normally-finished requests should have already been removed
+                    // from the registry when their final output was dispatched
+                    // above. This serves as a safety net to capture any
+                    // requests marked as finished by the engine.
+                    if let Some(finished_requests) = batch.finished_requests.as_ref() {
+                        for request_id in finished_requests {
+                            trace!(request_id, "request completed via finished_requests");
+                        }
+                        drop(inner.finish_requests(finished_requests));
+                    }
+
+                    if let Some(scheduler_stats) = batch.scheduler_stats.as_ref() {
+                        record_scheduler_stats(
+                            &METRICS.scheduler,
+                            inner.model_name(),
+                            batch.engine_index,
+                            scheduler_stats,
+                        );
                     }
                 }
-
-                // The sender for normally-finished requests should have already been removed from
-                // the registry when their final output was dispatched above. This serves as a
-                // safety net to capture any requests marked as finished by the engine.
-                if let Some(finished_requests) = batch.finished_requests.as_ref() {
-                    for request_id in finished_requests {
-                        trace!(request_id, "request completed via finished_requests");
+                ClassifiedEngineCoreOutputs::Utility(utility) => {
+                    let call_id = utility.output.call_id;
+                    if inner.resolve_utility_output(utility.output) {
+                        trace!(
+                            call_id,
+                            engine_index = utility.engine_index,
+                            "resolved utility output"
+                        );
+                    } else {
+                        warn!(
+                            call_id,
+                            engine_index = utility.engine_index,
+                            "dropping output for inactive utility call"
+                        );
                     }
-                    drop(inner.finish_requests(finished_requests));
                 }
-
-                if let Some(scheduler_stats) = batch.scheduler_stats.as_ref() {
-                    record_scheduler_stats(
-                        &METRICS.scheduler,
-                        inner.model_name(),
-                        batch.engine_index,
-                        scheduler_stats,
-                    );
+                other @ (ClassifiedEngineCoreOutputs::DpControl { .. }
+                | ClassifiedEngineCoreOutputs::Other(_)) => {
+                    Err(unexpected_dispatcher_output!(
+                        "received unexpected output on main dispatcher path: {other:?}"
+                    ))?;
                 }
             }
-            ClassifiedEngineCoreOutputs::Utility(utility) => {
-                let call_id = utility.output.call_id;
-                if inner.resolve_utility_output(utility.output) {
-                    trace!(
-                        call_id,
-                        engine_index = utility.engine_index,
-                        "resolved utility output"
-                    );
-                } else {
-                    warn!(
-                        call_id,
-                        engine_index = utility.engine_index,
-                        "dropping output for inactive utility call"
-                    );
-                }
-            }
-            ClassifiedEngineCoreOutputs::DpControl {
-                engine_index,
-                timestamp,
-                control,
-            } => {
-                inner.close_registries(Arc::new(Error::UnexpectedDispatcherOutput {
-                    message: format!(
-                        "received dp-control output on main dispatcher path: engine_index={engine_index}, timestamp={timestamp}, control={control:?}"
-                    ),
-                }));
-                return;
-            }
-            ClassifiedEngineCoreOutputs::Other(other) => match other {
-                OtherEngineCoreOutputs::Raw(_) => {
-                    warn!(outputs = ?other, "ignoring non-request engine-core output");
-                }
-            },
         }
-    }
+    };
 
-    let reason = "engine-core output dispatcher channel closed".to_string();
-    inner.close_registries(Arc::new(Error::DispatcherClosed { reason }));
+    warn!(error = %error.as_report(), "output dispatcher exiting with error");
+    inner.close_registries(Arc::new(error));
 }
 
 #[cfg(test)]
