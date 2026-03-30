@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -14,37 +17,24 @@ use vllm_chat::{
     ChatBackend, ChatEvent, ChatLlm, ChatMessage, ChatRequest, ChatRole, ChatTextBackend,
     ChatToolChoice, SamplingParams,
 };
-use vllm_engine_core_client::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, Logprobs,
     MaybeWireLogprobs, PositionLogprobs, StopReason, TokenLogprob, UtilityOutput,
     UtilityResultEnvelope, decode_value,
 };
-use vllm_engine_core_client::test_utils::IpcNamespace;
+use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{
     ENGINE_CORE_DEAD_SENTINEL, EngineCoreClient, EngineCoreClientConfig, EngineId,
 };
 use vllm_llm::Llm;
 use vllm_metrics::METRICS;
 use vllm_text::TextBackend;
-use zeromq::prelude::{Socket, SocketRecv, SocketSend};
-use zeromq::util::PeerIdentity;
-use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage};
+use zeromq::prelude::{SocketRecv, SocketSend};
+use zeromq::{DealerSocket, PushSocket, ZmqMessage};
 
 use super::{build_router, build_router_with_dev_mode};
 use crate::routes::chat_completions::convert::prepare_chat_request;
 use crate::state::AppState;
-
-fn ready_message(status: &str) -> ReadyMessage {
-    ReadyMessage {
-        status: Some(status.to_string()),
-        local: Some(true),
-        headless: Some(true),
-        num_gpu_blocks: None,
-        dp_stats_address: None,
-        parallel_config_hash: None,
-    }
-}
 
 fn request_output(
     request_id: &str,
@@ -120,6 +110,70 @@ fn sse_data_payloads(text: &str) -> Vec<&str> {
     text.lines()
         .filter_map(|line| line.strip_prefix("data: "))
         .collect()
+}
+
+type TestFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
+fn boxed_test_future<'a>(future: impl Future<Output = ()> + Send + 'a) -> TestFuture<'a> {
+    Box::pin(future)
+}
+
+struct MockEngineTask {
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl MockEngineTask {
+    fn new(
+        (shutdown_tx, join_handle): (
+            tokio::sync::oneshot::Sender<()>,
+            tokio::task::JoinHandle<()>,
+        ),
+    ) -> Self {
+        Self {
+            shutdown_tx: Some(shutdown_tx),
+            join_handle: Some(join_handle),
+        }
+    }
+
+    async fn finish(self) {
+        self.await.expect("mock engine task");
+    }
+
+    fn abort(&self) {
+        if let Some(join_handle) = &self.join_handle {
+            join_handle.abort();
+        }
+    }
+
+    async fn abort_and_join(mut self) {
+        if let Some(join_handle) = self.join_handle.take() {
+            join_handle.abort();
+            let _ = join_handle.await;
+        }
+    }
+}
+
+impl Future for MockEngineTask {
+    type Output = Result<(), tokio::task::JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        match self.join_handle.as_mut() {
+            Some(join_handle) => Pin::new(join_handle).poll(cx),
+            None => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+impl Drop for MockEngineTask {
+    fn drop(&mut self) {
+        if let Some(join_handle) = &self.join_handle {
+            join_handle.abort();
+        }
+    }
 }
 
 fn engine_outputs_for_request(
@@ -302,59 +356,6 @@ async fn recv_engine_message(dealer: &mut DealerSocket) -> Vec<Bytes> {
     dealer.recv().await.expect("recv engine message").into_vec()
 }
 
-async fn setup_mock_engine(
-    engine_handshake: String,
-    engine_id: impl Into<EngineId>,
-) -> (DealerSocket, PushSocket) {
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let peer_identity = PeerIdentity::try_from(engine_id.into()).expect("peer id");
-
-    let mut options = SocketOptions::default();
-    options.peer_identity(peer_identity.clone());
-    let mut handshake = DealerSocket::with_options(options);
-    handshake
-        .connect(&engine_handshake)
-        .await
-        .expect("connect handshake");
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("HELLO")).expect("encode ready"),
-        ))
-        .await
-        .expect("send hello");
-
-    let init_frames = handshake.recv().await.expect("recv init").into_vec();
-    let init: HandshakeInitMessage =
-        rmp_serde::from_slice(init_frames[0].as_ref()).expect("decode init");
-
-    let mut input_options = SocketOptions::default();
-    input_options.peer_identity(peer_identity);
-    let mut dealer = DealerSocket::with_options(input_options);
-    dealer
-        .connect(&init.addresses.inputs[0])
-        .await
-        .expect("connect input");
-    dealer
-        .send(ZmqMessage::from(Vec::<u8>::new()))
-        .await
-        .expect("send ready frame");
-
-    let mut push = PushSocket::new();
-    push.connect(&init.addresses.outputs[0])
-        .await
-        .expect("connect output");
-
-    handshake
-        .send(ZmqMessage::from(
-            rmp_serde::to_vec_named(&ready_message("READY")).expect("encode ready"),
-        ))
-        .await
-        .expect("send ready");
-
-    (dealer, push)
-}
-
 #[derive(Clone, Debug)]
 struct FakeChatBackend {
     model_id: Option<String>,
@@ -435,34 +436,33 @@ async fn test_models_with_engine_outputs_and_backend_inner(
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
     expected_prompt_token_ids: Option<Vec<u32>>,
     backend: Arc<dyn ChatTextBackend>,
-) -> (ChatLlm, tokio::task::JoinHandle<()>) {
+) -> (ChatLlm, MockEngineTask) {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = engine_id.into();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        let expected_prompt_token_ids = expected_prompt_token_ids.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            if let Some(expected_prompt_token_ids) = expected_prompt_token_ids {
-                assert_eq!(
-                    request.prompt_token_ids.as_deref(),
-                    Some(expected_prompt_token_ids.as_slice())
-                );
-            }
-            send_outputs(
-                &mut push,
-                engine_outputs_for_request(&request.request_id, output_specs),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        move |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                if let Some(expected_prompt_token_ids) = expected_prompt_token_ids {
+                    assert_eq!(
+                        request.prompt_token_ids.as_deref(),
+                        Some(expected_prompt_token_ids.as_slice())
+                    );
+                }
+                send_outputs(
+                    push,
+                    engine_outputs_for_request(&request.request_id, output_specs),
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -490,14 +490,14 @@ async fn test_models_with_engine_outputs_and_backend(
     engine_id: impl Into<EngineId>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
     backend: Arc<dyn ChatTextBackend>,
-) -> (ChatLlm, tokio::task::JoinHandle<()>) {
+) -> (ChatLlm, MockEngineTask) {
     test_models_with_engine_outputs_and_backend_inner(engine_id, output_specs, None, backend).await
 }
 
 async fn test_chat_with_engine_outputs(
     engine_id: impl Into<EngineId>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
-) -> (ChatLlm, tokio::task::JoinHandle<()>) {
+) -> (ChatLlm, MockEngineTask) {
     test_models_with_engine_outputs_and_backend(
         engine_id,
         output_specs,
@@ -516,25 +516,21 @@ async fn test_app() -> axum::Router {
     build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)))
 }
 
-async fn test_health_app_with_engine_script<F, Fut>(
+async fn test_health_app_with_engine_script<F>(
     script: F,
-) -> (axum::Router, Arc<AppState>, tokio::task::JoinHandle<()>)
+) -> (axum::Router, Arc<AppState>, MockEngineTask)
 where
-    F: FnOnce(PushSocket) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
+    F: for<'a> FnOnce(&'a mut PushSocket) -> TestFuture<'a> + Send + 'static,
 {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-health".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (_dealer, push) = setup_mock_engine(engine_handshake, engine_id).await;
-            script(push).await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        move |_dealer, push| script(push),
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -557,25 +553,19 @@ where
     (build_router(state.clone()), state, engine_task)
 }
 
-async fn test_admin_app_with_engine_script<F, Fut>(
-    script: F,
-) -> (axum::Router, tokio::task::JoinHandle<()>)
+async fn test_admin_app_with_engine_script<F>(script: F) -> (axum::Router, MockEngineTask)
 where
-    F: FnOnce(DealerSocket, PushSocket) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
+    F: for<'a> FnOnce(&'a mut DealerSocket, &'a mut PushSocket) -> TestFuture<'a> + Send + 'static,
 {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-admin".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (dealer, push) = setup_mock_engine(engine_handshake, engine_id).await;
-            script(dealer, push).await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        move |dealer, push| script(dealer, push),
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -603,13 +593,13 @@ where
     )
 }
 
-async fn test_app_with_engine_handle() -> (axum::Router, tokio::task::JoinHandle<()>) {
+async fn test_app_with_engine_handle() -> (axum::Router, MockEngineTask) {
     test_app_with_stream_output_specs(default_stream_output_specs()).await
 }
 
 async fn test_app_with_stream_output_specs(
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
-) -> (axum::Router, tokio::task::JoinHandle<()>) {
+) -> (axum::Router, MockEngineTask) {
     let (chat, engine_task) = test_models_with_engine_outputs_and_backend(
         b"engine-openai",
         output_specs,
@@ -625,7 +615,7 @@ async fn test_app_with_stream_output_specs(
 async fn test_app_with_backend_and_stream_output_specs(
     backend: Arc<dyn ChatTextBackend>,
     output_specs: Vec<(Vec<u32>, Option<EngineCoreFinishReason>)>,
-) -> (axum::Router, tokio::task::JoinHandle<()>) {
+) -> (axum::Router, MockEngineTask) {
     let (chat, engine_task) =
         test_models_with_engine_outputs_and_backend(b"engine-openai", output_specs, backend).await;
     (
@@ -634,7 +624,7 @@ async fn test_app_with_backend_and_stream_output_specs(
     )
 }
 
-async fn test_chat_with_engine_handle() -> (ChatLlm, tokio::task::JoinHandle<()>) {
+async fn test_chat_with_engine_handle() -> (ChatLlm, MockEngineTask) {
     test_chat_with_engine_outputs(b"engine-openai-chat", default_stream_output_specs()).await
 }
 
@@ -645,71 +635,70 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
     let handshake_address = ipc.handshake_endpoint();
     let (engine_seen_tx, mut engine_seen_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let engine_task_0 = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_seen_tx = engine_seen_tx.clone();
-        async move {
-            let (mut dealer, mut push) =
-                setup_mock_engine(engine_handshake, b"engine-openai-0".to_vec()).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            engine_seen_tx
-                .send("engine-openai-0".to_string())
-                .expect("record engine 0 request");
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 0,
-                    outputs: vec![
-                        request_output(&request.request_id, vec![b'h' as u32], None),
-                        request_output(
-                            &request.request_id,
-                            vec![b'i' as u32],
-                            Some(EngineCoreFinishReason::Stop),
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let engine_task_1 = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_seen_tx = engine_seen_tx.clone();
-        async move {
-            let (mut dealer, mut push) =
-                setup_mock_engine(engine_handshake, b"engine-openai-1".to_vec()).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            engine_seen_tx
-                .send("engine-openai-1".to_string())
-                .expect("record engine 1 request");
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 1,
-                    outputs: vec![
-                        request_output(&request.request_id, vec![b'h' as u32], None),
-                        request_output(
-                            &request.request_id,
-                            vec![b'i' as u32],
-                            Some(EngineCoreFinishReason::Stop),
-                        ),
-                    ],
-                    finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    });
+    let engine_seen_tx_0 = engine_seen_tx.clone();
+    let engine_task_0 = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        b"engine-openai-0".to_vec(),
+        move |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                engine_seen_tx_0
+                    .send("engine-openai-0".to_string())
+                    .expect("record engine 0 request");
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![
+                            request_output(&request.request_id, vec![b'h' as u32], None),
+                            request_output(
+                                &request.request_id,
+                                vec![b'i' as u32],
+                                Some(EngineCoreFinishReason::Stop),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    ));
+    let engine_seen_tx_1 = engine_seen_tx.clone();
+    let engine_task_1 = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        b"engine-openai-1".to_vec(),
+        move |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                engine_seen_tx_1
+                    .send("engine-openai-1".to_string())
+                    .expect("record engine 1 request");
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 1,
+                        outputs: vec![
+                            request_output(&request.request_id, vec![b'h' as u32], None),
+                            request_output(
+                                &request.request_id,
+                                vec![b'i' as u32],
+                                Some(EngineCoreFinishReason::Stop),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    ));
     drop(engine_seen_tx);
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
@@ -760,8 +749,8 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
     let _body_2 = to_bytes(response_2.into_body(), usize::MAX)
         .await
         .expect("read second body");
-    engine_task_0.await.expect("engine task 0");
-    engine_task_1.await.expect("engine task 1");
+    engine_task_0.finish().await;
+    engine_task_1.finish().await;
 
     let mut seen = vec![
         engine_seen_rx.recv().await.expect("first routed engine"),
@@ -1036,40 +1025,40 @@ async fn non_stream_chat_includes_logprobs_and_prompt_logprobs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-chat-logprobs".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            let prompt_token_ids = request.prompt_token_ids.clone().expect("prompt token ids");
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                let prompt_token_ids = request.prompt_token_ids.clone().expect("prompt token ids");
 
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 0,
-                    outputs: vec![request_output_with_logprobs(
-                        &request.request_id,
-                        bytes_to_token_ids(b"hi"),
-                        Some(EngineCoreFinishReason::Stop),
-                        None,
-                        Some(sample_logprobs_for_tokens(&bytes_to_token_ids(b"hi"))),
-                        Some(prompt_logprobs_for_tokens(&prompt_token_ids)),
-                    )],
-                    scheduler_stats: None,
-                    timestamp: 0.0,
-                    utility_output: None,
-                    finished_requests: None,
-                    wave_complete: None,
-                    start_wave: None,
-                },
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![request_output_with_logprobs(
+                            &request.request_id,
+                            bytes_to_token_ids(b"hi"),
+                            Some(EngineCoreFinishReason::Stop),
+                            None,
+                            Some(sample_logprobs_for_tokens(&bytes_to_token_ids(b"hi"))),
+                            Some(prompt_logprobs_for_tokens(&prompt_token_ids)),
+                        )],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: None,
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -1329,10 +1318,8 @@ async fn load_endpoint_tracks_chat_stream_lifecycle() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn health_endpoint_returns_ok_with_empty_body_when_client_is_healthy() {
-    let (app, _state, engine_task) = test_health_app_with_engine_script(|_push| async move {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    })
-    .await;
+    let (app, _state, engine_task) =
+        test_health_app_with_engine_script(|_push| boxed_test_future(async move {})).await;
 
     let (status, body) = health_status(&app).await;
     assert_eq!(status, StatusCode::OK);
@@ -1344,10 +1331,12 @@ async fn health_endpoint_returns_ok_with_empty_body_when_client_is_healthy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn health_endpoint_returns_503_after_engine_core_dead_sentinel() {
-    let (app, state, engine_task) = test_health_app_with_engine_script(|mut push| async move {
-        push.send(ZmqMessage::from(ENGINE_CORE_DEAD_SENTINEL.to_vec()))
-            .await
-            .expect("send sentinel");
+    let (app, state, engine_task) = test_health_app_with_engine_script(|push| {
+        boxed_test_future(async move {
+            push.send(ZmqMessage::from(ENGINE_CORE_DEAD_SENTINEL.to_vec()))
+                .await
+                .expect("send sentinel");
+        })
     })
     .await;
 
@@ -1714,48 +1703,48 @@ async fn non_stream_completions_include_logprobs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-completion-logprobs".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 0,
-                    outputs: vec![
-                        request_output_with_logprobs(
-                            &request.request_id,
-                            vec![b'h' as u32],
-                            None,
-                            None,
-                            Some(sample_logprobs_for_token(b'h' as u32, b'H' as u32)),
-                            None,
-                        ),
-                        request_output_with_logprobs(
-                            &request.request_id,
-                            vec![b'i' as u32],
-                            Some(EngineCoreFinishReason::Stop),
-                            None,
-                            Some(sample_logprobs_for_token(b'i' as u32, b'I' as u32)),
-                            None,
-                        ),
-                    ],
-                    scheduler_stats: None,
-                    timestamp: 0.0,
-                    utility_output: None,
-                    finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
-                    wave_complete: None,
-                    start_wave: None,
-                },
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![b'h' as u32],
+                                None,
+                                None,
+                                Some(sample_logprobs_for_token(b'h' as u32, b'H' as u32)),
+                                None,
+                            ),
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![b'i' as u32],
+                                Some(EngineCoreFinishReason::Stop),
+                                None,
+                                Some(sample_logprobs_for_token(b'i' as u32, b'I' as u32)),
+                                None,
+                            ),
+                        ],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -1821,47 +1810,50 @@ async fn non_stream_completions_include_prompt_logprobs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-completion-prompt-logprobs".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 0,
-                    outputs: vec![request_output_with_logprobs(
-                        &request.request_id,
-                        vec![b'h' as u32, b'i' as u32, b'!' as u32],
-                        Some(EngineCoreFinishReason::Stop),
-                        None,
-                        Some(Logprobs {
-                            positions: vec![
-                                sample_logprobs_for_token(b'h' as u32, b'H' as u32).positions[0]
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![request_output_with_logprobs(
+                            &request.request_id,
+                            vec![b'h' as u32, b'i' as u32, b'!' as u32],
+                            Some(EngineCoreFinishReason::Stop),
+                            None,
+                            Some(Logprobs {
+                                positions: vec![
+                                    sample_logprobs_for_token(b'h' as u32, b'H' as u32).positions
+                                        [0]
                                     .clone(),
-                                sample_logprobs_for_token(b'i' as u32, b'I' as u32).positions[0]
+                                    sample_logprobs_for_token(b'i' as u32, b'I' as u32).positions
+                                        [0]
                                     .clone(),
-                                sample_logprobs_for_token(b'!' as u32, b'?' as u32).positions[0]
+                                    sample_logprobs_for_token(b'!' as u32, b'?' as u32).positions
+                                        [0]
                                     .clone(),
-                            ],
-                        }),
-                        Some(prompt_logprobs_for_hello()),
-                    )],
-                    scheduler_stats: None,
-                    timestamp: 0.0,
-                    utility_output: None,
-                    finished_requests: None,
-                    wave_complete: None,
-                    start_wave: None,
-                },
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    });
+                                ],
+                            }),
+                            Some(prompt_logprobs_for_hello()),
+                        )],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: None,
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -1939,21 +1931,22 @@ async fn non_stream_chat_uses_final_only_output_kind() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-chat-final-only".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            send_outputs(
-                &mut push,
-                engine_outputs_for_request(&request.request_id, default_stream_output_specs()),
-            )
-            .await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                send_outputs(
+                    push,
+                    engine_outputs_for_request(&request.request_id, default_stream_output_specs()),
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -2003,21 +1996,22 @@ async fn non_stream_completions_use_final_only_output_kind() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-completion-final-only".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
-            send_outputs(
-                &mut push,
-                engine_outputs_for_request(&request.request_id, default_stream_output_specs()),
-            )
-            .await;
-        }
-    });
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                send_outputs(
+                    push,
+                    engine_outputs_for_request(&request.request_id, default_stream_output_specs()),
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -2401,60 +2395,66 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-openai-chat-tools-logprobs".to_vec();
 
-    let engine_task = tokio::spawn({
-        let engine_handshake = handshake_address.clone();
-        let engine_id = engine_id.clone();
-        async move {
-            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
-            let add = recv_engine_message(&mut dealer).await;
-            let request: EngineCoreRequest =
-                rmp_serde::from_slice(&add[1]).expect("decode request");
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
 
-            let outputs = vec![
-                (
-                    bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
-                    None,
-                    sample_logprobs_for_tokens(&bytes_to_token_ids(
-                        b"<tool_call>\n{\"name\":\"get_weather\", ",
-                    )),
-                ),
-                (
-                    bytes_to_token_ids(b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>"),
-                    Some(EngineCoreFinishReason::Stop),
-                    sample_logprobs_for_tokens(&bytes_to_token_ids(
-                        b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
-                    )),
-                ),
-            ];
-
-            send_outputs(
-                &mut push,
-                EngineCoreOutputs {
-                    engine_index: 0,
-                    outputs: outputs
-                        .into_iter()
-                        .map(|(token_ids, finish_reason, logprobs)| {
-                            request_output_with_logprobs(
-                                &request.request_id,
-                                token_ids,
-                                finish_reason,
-                                None,
-                                Some(logprobs),
-                                None,
-                            )
-                        })
-                        .collect(),
-                    scheduler_stats: None,
-                    timestamp: 0.0,
-                    utility_output: None,
-                    finished_requests: None,
-                    wave_complete: None,
-                    start_wave: None,
-                },
-            )
-            .await;
-        }
-    });
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![request_output_with_logprobs(
+                            &request.request_id,
+                            bytes_to_token_ids(b"<tool_call>\n{\"name\":\"get_weather\", "),
+                            None,
+                            None,
+                            Some(sample_logprobs_for_tokens(&bytes_to_token_ids(
+                                b"<tool_call>\n{\"name\":\"get_weather\", ",
+                            ))),
+                            None,
+                        )],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: None,
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![request_output_with_logprobs(
+                            &request.request_id,
+                            bytes_to_token_ids(
+                                b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+                            ),
+                            Some(EngineCoreFinishReason::Stop),
+                            None,
+                            Some(sample_logprobs_for_tokens(&bytes_to_token_ids(
+                                b"\"arguments\":{\"city\":\"Paris\"}}\n</tool_call>",
+                            ))),
+                            None,
+                        )],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    ));
 
     let client = EngineCoreClient::connect_with_input_output_addresses(
         EngineCoreClientConfig {
@@ -2478,6 +2478,7 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
     let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -2512,7 +2513,7 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read body");
-    engine_task.await.expect("mock engine task");
+    engine_task.finish().await;
     let text = String::from_utf8(body.to_vec()).expect("utf8 body");
 
     assert!(text.contains("\"tool_calls\":"), "{text}");
@@ -2551,25 +2552,23 @@ async fn streaming_chat_prompt_logprobs_are_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn reset_prefix_cache_route_sends_expected_utility_call() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("reset_prefix_cache"));
-        assert_eq!(
-            array[3],
-            Value::Array(vec![Value::from(true), Value::from(true)])
-        );
+            assert_eq!(array[2], Value::from("reset_prefix_cache"));
+            assert_eq!(
+                array[3],
+                Value::Array(vec![Value::from(true), Value::from(true)])
+            );
 
-        send_outputs(
-            &mut push,
-            utility_outputs(call_id, utility_result_value(true)),
-        )
-        .await;
+            send_outputs(push, utility_outputs(call_id, utility_result_value(true))).await;
+        })
     })
     .await;
 
@@ -2597,18 +2596,20 @@ async fn reset_prefix_cache_route_sends_expected_utility_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn reset_mm_cache_route_sends_expected_utility_call() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("reset_mm_cache"));
-        assert_eq!(array[3], Value::Array(Vec::new()));
+            assert_eq!(array[2], Value::from("reset_mm_cache"));
+            assert_eq!(array[3], Value::Array(Vec::new()));
 
-        send_outputs(&mut push, utility_outputs(call_id, utility_none_result())).await;
+            send_outputs(push, utility_outputs(call_id, utility_none_result())).await;
+        })
     })
     .await;
 
@@ -2636,18 +2637,20 @@ async fn reset_mm_cache_route_sends_expected_utility_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn reset_encoder_cache_route_sends_expected_utility_call() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("reset_encoder_cache"));
-        assert_eq!(array[3], Value::Array(Vec::new()));
+            assert_eq!(array[2], Value::from("reset_encoder_cache"));
+            assert_eq!(array[3], Value::Array(Vec::new()));
 
-        send_outputs(&mut push, utility_outputs(call_id, utility_none_result())).await;
+            send_outputs(push, utility_outputs(call_id, utility_none_result())).await;
+        })
     })
     .await;
 
@@ -2675,21 +2678,23 @@ async fn reset_encoder_cache_route_sends_expected_utility_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn sleep_route_uses_python_compatible_default_query_values() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("sleep"));
-        assert_eq!(
-            array[3],
-            Value::Array(vec![Value::from(1_u64), Value::from("abort")])
-        );
+            assert_eq!(array[2], Value::from("sleep"));
+            assert_eq!(
+                array[3],
+                Value::Array(vec![Value::from(1_u64), Value::from("abort")])
+            );
 
-        send_outputs(&mut push, utility_outputs(call_id, utility_none_result())).await;
+            send_outputs(push, utility_outputs(call_id, utility_none_result())).await;
+        })
     })
     .await;
 
@@ -2717,18 +2722,20 @@ async fn sleep_route_uses_python_compatible_default_query_values() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn wake_up_route_without_tags_sends_none() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("wake_up"));
-        assert_eq!(array[3], Value::Array(vec![Value::Nil]));
+            assert_eq!(array[2], Value::from("wake_up"));
+            assert_eq!(array[3], Value::Array(vec![Value::Nil]));
 
-        send_outputs(&mut push, utility_outputs(call_id, utility_none_result())).await;
+            send_outputs(push, utility_outputs(call_id, utility_none_result())).await;
+        })
     })
     .await;
 
@@ -2756,22 +2763,20 @@ async fn wake_up_route_without_tags_sends_none() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn is_sleeping_route_returns_json_payload() {
-    let (app, engine_task) = test_admin_app_with_engine_script(|mut dealer, mut push| async move {
-        let utility = recv_engine_message(&mut dealer).await;
-        assert_eq!(utility[0].as_ref(), &[0x03]);
+    let (app, engine_task) = test_admin_app_with_engine_script(|dealer, push| {
+        boxed_test_future(async move {
+            let utility = recv_engine_message(dealer).await;
+            assert_eq!(utility[0].as_ref(), &[0x03]);
 
-        let payload = decode_value(&utility[1]).expect("decode utility payload");
-        let array = payload.as_array().expect("utility payload array");
-        let call_id = array[1].as_i64().expect("call id");
+            let payload = decode_value(&utility[1]).expect("decode utility payload");
+            let array = payload.as_array().expect("utility payload array");
+            let call_id = array[1].as_i64().expect("call id");
 
-        assert_eq!(array[2], Value::from("is_sleeping"));
-        assert_eq!(array[3], Value::Array(Vec::new()));
+            assert_eq!(array[2], Value::from("is_sleeping"));
+            assert_eq!(array[3], Value::Array(Vec::new()));
 
-        send_outputs(
-            &mut push,
-            utility_outputs(call_id, utility_result_value(true)),
-        )
-        .await;
+            send_outputs(push, utility_outputs(call_id, utility_result_value(true))).await;
+        })
     })
     .await;
 
@@ -2831,6 +2836,5 @@ async fn admin_routes_are_hidden_when_dev_mode_is_disabled() {
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
     }
 
-    engine_task.abort();
-    let _ = engine_task.await;
+    engine_task.abort_and_join().await;
 }
