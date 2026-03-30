@@ -12,7 +12,7 @@ use futures::StreamExt as _;
 use rmpv::Value;
 use serde_json::json;
 use serial_test::serial;
-use tower::util::ServiceExt as _;
+use tower::Service as _;
 use vllm_chat::{
     ChatBackend, ChatEvent, ChatLlm, ChatMessage, ChatRequest, ChatRole, ChatTextBackend,
     ChatToolChoice, SamplingParams,
@@ -737,7 +737,7 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
     };
 
     let (response_1, response_2) =
-        tokio::join!(app.clone().oneshot(request()), app.oneshot(request()));
+        tokio::join!(app.clone().call(request()), app.clone().call(request()));
     let response_1 = response_1.expect("call first request");
     let response_2 = response_2.expect("call second request");
     assert_eq!(response_1.status(), StatusCode::OK);
@@ -766,7 +766,7 @@ async fn concurrent_non_stream_completions_are_distributed_across_two_engines() 
 async fn server_load(app: &axum::Router) -> u64 {
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("GET")
                 .uri("/load")
@@ -787,7 +787,7 @@ async fn server_load(app: &axum::Router) -> u64 {
 async fn health_status(app: &axum::Router) -> (StatusCode, Bytes) {
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("GET")
                 .uri("/health")
@@ -844,9 +844,9 @@ fn metric_delta(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn list_models_returns_configured_model() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .uri("/v1/models")
                 .body(Body::empty())
@@ -866,11 +866,11 @@ async fn list_models_returns_configured_model() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn http_metrics_record_list_models_requests() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let before = METRICS.render().unwrap();
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("GET")
                 .uri("/v1/models")
@@ -915,9 +915,9 @@ async fn http_metrics_record_list_models_requests() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn wrong_model_returns_not_found() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -941,9 +941,9 @@ async fn wrong_model_returns_not_found() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn invalid_request_returns_openai_error() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -976,7 +976,7 @@ async fn non_stream_chat_returns_json_response() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1076,10 +1076,10 @@ async fn non_stream_chat_includes_logprobs_and_prompt_logprobs() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
-    let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1125,7 +1125,7 @@ async fn happy_path_returns_sse_stream() {
     let before = METRICS.render().unwrap();
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1193,11 +1193,11 @@ async fn happy_path_returns_sse_stream() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn http_metrics_exclude_metrics_route() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let before = METRICS.render().unwrap();
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("GET")
                 .uri("/metrics")
@@ -1240,11 +1240,11 @@ async fn http_metrics_exclude_metrics_route() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn http_metrics_group_error_statuses() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let before = METRICS.render().unwrap();
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1286,7 +1286,7 @@ async fn load_endpoint_tracks_chat_stream_lifecycle() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1366,7 +1366,7 @@ async fn load_endpoint_resets_when_stream_response_is_dropped() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1404,7 +1404,7 @@ async fn stream_error_is_returned_as_openai_error_sse() {
     .await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1449,7 +1449,7 @@ async fn invalid_terminal_finish_reason_is_returned_as_openai_error_sse() {
             .await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1492,7 +1492,7 @@ async fn include_usage_adds_final_usage_chunk_before_done() {
     let (app, engine_task) = test_app_with_stream_output_specs(default_stream_output_specs()).await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1550,7 +1550,7 @@ async fn stream_without_include_usage_keeps_existing_shape() {
     let (app, engine_task) = test_app_with_stream_output_specs(default_stream_output_specs()).await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -1584,9 +1584,9 @@ async fn stream_without_include_usage_keeps_existing_shape() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn completions_invalid_request_returns_openai_error() {
-    let app = test_app().await;
+    let mut app = test_app().await;
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1619,7 +1619,7 @@ async fn non_stream_completions_return_json_response() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1664,7 +1664,7 @@ async fn non_stream_completions_echo_prepends_prompt_text() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1762,10 +1762,10 @@ async fn non_stream_completions_include_logprobs() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
-    let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1871,10 +1871,10 @@ async fn non_stream_completions_include_prompt_logprobs() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
-    let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -1964,10 +1964,10 @@ async fn non_stream_chat_uses_final_only_output_kind() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
-    let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -2029,10 +2029,10 @@ async fn non_stream_completions_use_final_only_output_kind() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
-    let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -2060,7 +2060,7 @@ async fn completions_happy_path_returns_sse_stream() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -2129,7 +2129,7 @@ async fn completions_echo_stream_emits_separate_prompt_chunk() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/completions")
@@ -2293,7 +2293,7 @@ async fn reasoning_blocks_are_mapped_to_reasoning_content_sse_chunks() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -2343,7 +2343,7 @@ async fn tool_calls_are_mapped_to_tool_call_sse_chunks() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -2479,7 +2479,7 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -2526,7 +2526,7 @@ async fn streaming_chat_prompt_logprobs_are_rejected() {
     let (app, engine_task) = test_app_with_engine_handle().await;
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
@@ -2574,7 +2574,7 @@ async fn reset_prefix_cache_route_sends_expected_utility_call() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/reset_prefix_cache?reset_running_requests=true&reset_external=true")
@@ -2615,7 +2615,7 @@ async fn reset_mm_cache_route_sends_expected_utility_call() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/reset_mm_cache")
@@ -2656,7 +2656,7 @@ async fn reset_encoder_cache_route_sends_expected_utility_call() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/reset_encoder_cache")
@@ -2700,7 +2700,7 @@ async fn sleep_route_uses_python_compatible_default_query_values() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/sleep")
@@ -2741,7 +2741,7 @@ async fn wake_up_route_without_tags_sends_none() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("POST")
                 .uri("/wake_up")
@@ -2782,7 +2782,7 @@ async fn is_sleeping_route_returns_json_payload() {
 
     let response = app
         .clone()
-        .oneshot(
+        .call(
             Request::builder()
                 .method("GET")
                 .uri("/is_sleeping")
@@ -2823,7 +2823,7 @@ async fn admin_routes_are_hidden_when_dev_mode_is_disabled() {
     ] {
         let response = app
             .clone()
-            .oneshot(
+            .call(
                 Request::builder()
                     .method(method)
                     .uri(uri)
