@@ -205,7 +205,11 @@ fn rewrite_serve_unknown_arg_error(args: &[OsString], error: clap::Error) -> cla
     if error.kind() != ErrorKind::UnknownArgument {
         return error;
     }
-    if args.get(1).and_then(|arg| arg.to_str()) != Some("serve") {
+    let subcommand = args
+        .iter()
+        .skip(1)
+        .find(|s| !s.to_string_lossy().starts_with('-'));
+    if subcommand.map(|s| s.as_os_str()) != Some("serve".as_ref()) {
         return error;
     }
     let Some(ContextValue::String(unrecognized_arg)) = error.get(ContextKind::InvalidArg) else {
