@@ -1,3 +1,8 @@
+// Route tests should use `Service::call` rather than `ServiceExt::oneshot`.
+// `oneshot` consumes the router and can drop `AppState` before a streaming
+// response body is fully drained, which closes the mock engine connection too
+// early and causes flaky `closed unexpectedly` failures.
+
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
