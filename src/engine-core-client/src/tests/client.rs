@@ -295,7 +295,7 @@ fn is_engine_core_dead(error: &Error) -> bool {
 
 fn is_decode_error(error: &Error) -> bool {
     match error {
-        Error::Decode(_) | Error::ValueDecodeExt { .. } => true,
+        Error::Decode(_) | Error::DecodeWithMessage { .. } | Error::ValueDecodeExt { .. } => true,
         Error::Shared(error) => is_decode_error(error),
         _ => false,
     }
