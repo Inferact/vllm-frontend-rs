@@ -160,6 +160,12 @@ impl CoordinatorRunner {
     /// Apply one engine-originated control output to the coordinator state machine.
     async fn handle_outputs(&mut self, outputs: EngineCoreOutputs) -> Result<()> {
         match outputs.classify() {
+            ClassifiedEngineCoreOutputs::RequestBatch(batch)
+                if batch.outputs.is_empty() && batch.finished_requests.is_none() =>
+            {
+                // Stats-only output for coordinator.
+                // Ignore since the Rust coordinator doesn't track stats for routing decisions.
+            }
             ClassifiedEngineCoreOutputs::DpControl {
                 engine_index,
                 control,
