@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use thiserror_ext::AsReport;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 use zeromq::prelude::SocketSend;
 use zeromq::{XPubSocket, ZmqMessage};
 
@@ -151,6 +151,11 @@ impl CoordinatorRunner {
                     }
                 })?;
                 self.state.lock().current_wave = wave;
+                debug!(
+                    wave,
+                    exclude_engine_index = target_engine_index,
+                    "starting DP wave after first request while engines were paused"
+                );
                 self.broadcast_start_wave(wave, target_engine_index).await?;
             }
         }
@@ -176,6 +181,12 @@ impl CoordinatorRunner {
                 DpControlMessage::WaveComplete(wave) => {
                     let mut state = self.state.lock();
                     if wave >= state.current_wave {
+                        let next_wave = wave + 1;
+                        debug!(
+                            wave,
+                            next_wave,
+                            "DP wave finished; pausing engines and advancing coordinator state"
+                        );
                         state.current_wave = wave + 1;
                         state.engines_running = false;
                     }
@@ -196,6 +207,11 @@ impl CoordinatorRunner {
                         }
                     };
                     if should_broadcast {
+                        debug!(
+                            wave,
+                            exclude_engine_index = engine_index,
+                            "starting DP wave after stale-wave notification from engine"
+                        );
                         self.broadcast_start_wave(wave, engine_index).await?;
                     }
                 }
