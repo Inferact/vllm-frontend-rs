@@ -185,6 +185,7 @@ async fn completion_chunk_stream(
 ) {
     pin_mut!(stream);
     let mut visible_text_len = 0_u32;
+    let mut output_token_count = 0_u32;
 
     while let Some(next) = stream.next().await {
         match next {
@@ -201,7 +202,12 @@ async fn completion_chunk_stream(
                     ));
                 }
             }
-            Ok(DecodedTextEvent::TextDelta { delta, logprobs }) => {
+            Ok(DecodedTextEvent::TextDelta {
+                delta,
+                token_ids,
+                logprobs,
+            }) => {
+                output_token_count += token_ids.len() as u32;
                 let delta_text_len = text_len(&delta);
                 let logprobs = if requested_logprobs.is_some() {
                     let decoded_logprobs = logprobs.as_ref().ok_or_else(|| {
@@ -228,8 +234,6 @@ async fn completion_chunk_stream(
             Ok(DecodedTextEvent::Done {
                 prompt_token_count,
                 finish_reason,
-                token_ids,
-                ..
             }) => {
                 yield CompletionSseChunk::Chunk(final_chunk(
                     &response_id,
@@ -243,7 +247,7 @@ async fn completion_chunk_stream(
                         &response_id,
                         &response_model,
                         created,
-                        Usage::from_counts(prompt_token_count as u32, token_ids.len() as u32),
+                        Usage::from_counts(prompt_token_count as u32, output_token_count),
                     ));
                 }
             }
@@ -415,6 +419,7 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "h".to_string(),
+                token_ids: vec![b'h' as u32],
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![
@@ -434,6 +439,7 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: String::new(),
+                token_ids: vec![b'!' as u32],
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![
@@ -452,9 +458,7 @@ mod tests {
                 }),
             }),
             Ok(DecodedTextEvent::Done {
-                text: "h".to_string(),
                 prompt_token_count: 5,
-                token_ids: vec![b'h' as u32, b'!' as u32],
                 finish_reason: FinishReason::stop_eos(),
             }),
         ]);

@@ -87,11 +87,15 @@ pub(crate) async fn reasoning_event_stream(
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
 ) {
     pin_mut!(decoded_stream);
+    let mut output_token_count = 0;
 
     // Without a parser, pass through as plain text deltas.
     let Some(reasoning_parser) = reasoning_parser else {
         while let Some(event) = decoded_stream.next().await.transpose()? {
-            for next in ContentEvent::from_decoded_plain_text(event) {
+            if let DecodedTextEvent::TextDelta { token_ids, .. } = &event {
+                output_token_count += token_ids.len();
+            }
+            for next in ContentEvent::from_decoded_plain_text(event, output_token_count) {
                 yield next;
             }
         }
@@ -111,7 +115,12 @@ pub(crate) async fn reasoning_event_stream(
                     prompt_logprobs,
                 }
             }
-            DecodedTextEvent::TextDelta { delta, logprobs } => {
+            DecodedTextEvent::TextDelta {
+                delta,
+                token_ids,
+                logprobs,
+            } => {
+                output_token_count += token_ids.len();
                 for next in state.process_delta(delta) {
                     yield next;
                 }
@@ -121,13 +130,11 @@ pub(crate) async fn reasoning_event_stream(
             }
             DecodedTextEvent::Done {
                 prompt_token_count,
-                token_ids,
                 finish_reason,
-                ..
             } => {
                 yield ContentEvent::Done {
                     prompt_token_count,
-                    token_ids,
+                    output_token_count,
                     finish_reason,
                 };
             }
@@ -191,16 +198,16 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "abc".to_string(),
+                token_ids: vec![],
                 logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "def".to_string(),
+                token_ids: vec![],
                 logprobs: None,
             }),
             Ok(DecodedTextEvent::Done {
-                text: "abcdef".to_string(),
                 prompt_token_count: 3,
-                token_ids: vec![],
                 finish_reason: FinishReason::stop_eos(),
             }),
         ]);
@@ -234,7 +241,7 @@ mod tests {
                 },
                 ContentEvent::Done {
                     prompt_token_count: 3,
-                    token_ids: vec![],
+                    output_token_count: 0,
                     finish_reason: FinishReason::stop_eos(),
                 },
             ]
@@ -250,6 +257,7 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "abc".to_string(),
+                token_ids: vec![],
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {

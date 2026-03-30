@@ -17,7 +17,7 @@ use futures::StreamExt as _;
 use rmpv::Value;
 use serde_json::json;
 use serial_test::serial;
-use tower::Service as _;
+use tower::{Service as _, ServiceExt as _};
 use vllm_chat::{
     ChatBackend, ChatEvent, ChatLlm, ChatMessage, ChatRequest, ChatRole, ChatTextBackend,
     ChatToolChoice, SamplingParams,

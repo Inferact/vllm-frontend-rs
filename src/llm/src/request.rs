@@ -40,7 +40,6 @@ pub struct GenerateRequest {
 #[derive(Debug)]
 pub(crate) struct PreparedGenerateRequest {
     pub engine_request: EngineCoreRequest,
-    pub output_kind: RequestOutputKind,
 }
 
 impl GenerateRequest {
@@ -55,7 +54,7 @@ impl GenerateRequest {
             request_id,
             prompt_token_ids,
             sampling_params,
-            output_kind,
+            output_kind: _,
             arrival_time,
             cache_salt,
             trace_headers,
@@ -85,17 +84,11 @@ impl GenerateRequest {
                 external_req_id: None,
                 reasoning_ended,
             },
-            output_kind,
         })
     }
 }
 
 impl PreparedGenerateRequest {
-    /// Return the requested output aggregation mode.
-    pub fn output_kind(&self) -> RequestOutputKind {
-        self.output_kind
-    }
-
     /// Return the original prompt token IDs copied into the raw engine request.
     pub fn prompt_token_ids(&self) -> &[u32] {
         self.engine_request
@@ -144,7 +137,6 @@ mod tests {
     fn prepare_builds_engine_core_request() {
         let prepared = sample_request().prepare().unwrap();
 
-        assert_eq!(prepared.output_kind(), RequestOutputKind::Delta);
         assert_eq!(prepared.prompt_token_ids(), &[11, 22, 33]);
 
         let request = prepared.engine_request;
@@ -204,8 +196,6 @@ mod tests {
             }
         "#]]
         .assert_debug_eq(&request);
-
-        assert_eq!(prepared.output_kind, RequestOutputKind::Delta);
     }
 
     #[test]

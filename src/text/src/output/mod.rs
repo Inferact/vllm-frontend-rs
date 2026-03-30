@@ -34,6 +34,10 @@ impl<T: TextOutputStream> T {
             let mut prompt_logprobs = None;
             let mut logprob_positions: Vec<DecodedPositionLogprobs> = Vec::new();
 
+            // TODO we should not need to accumulate here
+            let mut text = String::new();
+            let mut token_ids = Vec::new();
+
             while let Some(event) = stream.next().await.transpose()? {
                 match event {
                     DecodedTextEvent::Start {
@@ -42,15 +46,19 @@ impl<T: TextOutputStream> T {
                     } => {
                         prompt_logprobs = start_prompt_logprobs;
                     }
-                    DecodedTextEvent::TextDelta { logprobs, .. } => {
+                    DecodedTextEvent::TextDelta {
+                        delta,
+                        token_ids: delta_token_ids,
+                        logprobs,
+                    } => {
+                        text.push_str(&delta);
+                        token_ids.extend(delta_token_ids);
                         if let Some(logprobs) = logprobs {
                             logprob_positions.extend(logprobs.positions);
                         }
                     }
                     DecodedTextEvent::Done {
-                        text,
                         prompt_token_count,
-                        token_ids,
                         finish_reason,
                     } => {
                         return Ok(CollectedTextOutput {
@@ -101,6 +109,7 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: String::new(),
+                token_ids: vec![1],
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {
@@ -113,6 +122,7 @@ mod tests {
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: "bc".to_string(),
+                token_ids: vec![2],
                 logprobs: Some(DecodedLogprobs {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![DecodedTokenLogprob {
@@ -124,9 +134,7 @@ mod tests {
                 }),
             }),
             Ok(DecodedTextEvent::Done {
-                text: "bc".to_string(),
                 prompt_token_count: 2,
-                token_ids: vec![1, 2],
                 finish_reason: FinishReason::stop_eos(),
             }),
         ]);

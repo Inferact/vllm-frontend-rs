@@ -12,6 +12,7 @@ use super::logprobs::{
 use crate::backend::TextBackend;
 use crate::error::Error;
 use crate::incremental::IncrementalDecoder;
+use crate::take;
 
 /// Request-neutral options for incremental text decoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,15 +57,13 @@ pub enum DecodedTextEvent {
     /// Upper-level may further parse `delta` as reasoning or tool calls.
     TextDelta {
         delta: String,
+        token_ids: Vec<u32>,
         logprobs: Option<DecodedLogprobs>,
     },
-    /// Terminal event carrying the full decoded text and final metadata.
+    /// Terminal event carrying final metadata. The full decoded text and token IDs
+    /// are carried by preceding [`TextDelta`] events.
     Done {
-        text: String,
         prompt_token_count: usize,
-        /// Raw cumulative output token IDs, including a terminal stop token when
-        /// the engine emitted one.
-        token_ids: Vec<u32>,
         finish_reason: FinishReason,
     },
 }
@@ -76,16 +75,17 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
     backend: Arc<B>,
     raw_stream: GenerateOutputStream,
     mut decode_options: TextDecodeOptions,
+    intermediate: bool,
 ) {
     let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
     let mut started = false;
     let mut prompt_token_count: Option<usize> = None;
     let mut token_ids = Vec::new();
+    let mut logprobs: Option<DecodedLogprobs> = None;
 
     #[for_await]
     for next in raw_stream {
-        let output = next?;
-        token_ids.extend_from_slice(&output.token_ids);
+        let mut output = next?;
 
         let decoder = decoder.get_or_insert_with(|| {
             let prompt_token_ids = output
@@ -151,7 +151,8 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
 
         let mut delta: Option<String> = None;
         let mut truncate_output_to = None;
-        for &token_id in decodable_token_ids {
+        let mut tuncate_tokens_to = None;
+        for (tok_idx, &token_id) in decodable_token_ids.iter().enumerate() {
             let new_bytes = decoder.push_token(token_id)?;
             if let Some(stops) = decode_options.stop_strings.as_mut()
                 && let Some((idx, off)) = matches_stop_string(stops, decoder.output(), new_bytes)
@@ -162,15 +163,26 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                     false => Some(off),
                 };
                 finish_reason = Some(FinishReason::Stop(Some(StopReason::Text(stop_str))));
+                tuncate_tokens_to = Some(tok_idx + 1);
                 break;
             }
 
-            if let Some(chunk) = decoder.next_chunk() {
+            if intermediate && let Some(chunk) = decoder.next_chunk() {
                 if let Some(delta_str) = delta.as_mut() {
                     delta_str.push_str(&chunk);
                 } else {
                     delta = Some(chunk);
                 }
+            }
+        }
+
+        let mut new_token_ids = take(&mut output.token_ids);
+
+        // Trim tokens and logprobs if we matched stop string.
+        if let Some(num_tokens) = tuncate_tokens_to {
+            new_token_ids.truncate(num_tokens);
+            if let Some(logprobs) = &mut output.logprobs {
+                logprobs.positions.truncate(num_tokens);
             }
         }
 
@@ -186,47 +198,62 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             })
             .transpose()?;
 
+        if !intermediate {
+            token_ids.extend(&new_token_ids);
+            if let Some(dlp) = decoded_logprobs.as_ref() {
+                logprobs
+                    .get_or_insert_with(|| DecodedLogprobs { positions: vec![] })
+                    .positions
+                    .extend_from_slice(&dlp.positions);
+            }
+        }
+
         if let Some(reason) = finish_reason {
             // Flush any remaining buffered text.
-            let (last_chunk, text) = decoder.flush(truncate_output_to)?;
-            if let Some(chunk) = last_chunk {
-                if let Some(delta_str) = delta.as_mut() {
-                    delta_str.push_str(&chunk);
-                } else {
-                    delta = Some(chunk);
+            let (last_chunk, mut text) = decoder.flush(truncate_output_to)?;
+
+            if intermediate {
+                if let Some(chunk) = last_chunk {
+                    if let Some(delta_str) = delta.as_mut() {
+                        delta_str.push_str(&chunk);
+                    } else {
+                        delta = Some(chunk);
+                    }
                 }
+                token_ids = new_token_ids;
+                logprobs = decoded_logprobs;
+                text = delta.unwrap_or_default();
             }
 
-            // TODO: we don't want final output to be sent in a separate event.
-            // Need to chagne the event structure.
-            if delta.is_some() || decoded_logprobs.is_some() {
-                yield DecodedTextEvent::TextDelta {
-                    delta: delta.unwrap_or_default(),
-                    logprobs: decoded_logprobs,
-                };
-            }
-            // ----
+            let token_count = token_ids.len();
+            let text_len = text.len();
+
+            // In FinalOnly case the full output is returned here
+            yield DecodedTextEvent::TextDelta {
+                delta: text,
+                token_ids,
+                logprobs,
+            };
 
             info!(
                 request_id = %request_id,
                 finish_reason = ?reason,
-                text_length_bytes = text.len(),
-                token_count = token_ids.len(),
+                text_length_bytes = text_len,
+                token_count = token_count,
                 "request finished with terminal output"
             );
 
             yield DecodedTextEvent::Done {
-                text,
                 prompt_token_count,
-                token_ids,
                 finish_reason: reason,
             };
             return Ok(());
         }
 
-        if delta.is_some() || decoded_logprobs.is_some() {
+        if intermediate {
             yield DecodedTextEvent::TextDelta {
                 delta: delta.unwrap_or_default(),
+                token_ids: new_token_ids,
                 logprobs: decoded_logprobs,
             };
         }

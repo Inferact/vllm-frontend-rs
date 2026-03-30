@@ -349,33 +349,29 @@ async fn generate_streams_final_only_outputs() {
         .await
         .unwrap();
 
-    let final_output = stream.next().await.unwrap().unwrap();
+    let first = stream.next().await.unwrap().unwrap();
     assert_eq!(
-        final_output.prompt_info,
+        first.prompt_info,
         Some(GeneratePromptInfo {
             prompt_token_ids: vec![11, 22].into(),
             prompt_logprobs: Some(prompt_logprobs()),
         })
     );
-    assert_eq!(final_output.token_ids, vec![4, 5, 6]);
+    assert_eq!(first.token_ids, vec![4]);
     assert_eq!(
-        final_output.logprobs,
-        Some(Logprobs {
-            positions: vec![
-                logprobs_for_position(4, -0.11, 2, 14, -0.09)
-                    .positions
-                    .into_iter()
-                    .next()
-                    .unwrap(),
-                logprobs_for_position(5, -0.22, 3, 15, -0.12)
-                    .positions
-                    .into_iter()
-                    .next()
-                    .unwrap(),
-            ],
-        })
+        first.logprobs,
+        Some(logprobs_for_position(4, -0.11, 2, 14, -0.09))
     );
-    assert_eq!(final_output.finish_reason(), Some(FinishReason::Length));
+    assert_eq!(first.finish_reason(), None);
+
+    let second = stream.next().await.unwrap().unwrap();
+    assert_eq!(second.prompt_info, None);
+    assert_eq!(second.token_ids, vec![5, 6]);
+    assert_eq!(
+        second.logprobs,
+        Some(logprobs_for_position(5, -0.22, 3, 15, -0.12))
+    );
+    assert_eq!(second.finish_reason(), Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
     let _ = shutdown_tx.send(());

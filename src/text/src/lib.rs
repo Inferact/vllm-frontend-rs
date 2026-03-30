@@ -97,6 +97,7 @@ impl TextLlm {
             self.backend.clone(),
             raw_stream,
             prepared.text_request.decode_options,
+            prepared.text_request.intermediate,
         );
 
         Ok(decoded_stream)
