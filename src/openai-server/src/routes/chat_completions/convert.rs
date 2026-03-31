@@ -86,6 +86,7 @@ pub fn prepare_chat_request(
                 StringOrArray::String(string) => vec![string.clone()],
                 StringOrArray::Array(arr) => arr.clone(),
             }),
+            min_tokens: request.min_tokens.unwrap_or(0),
         },
         intermediate: request.stream,
     };
@@ -319,6 +320,7 @@ mod tests {
                     skip_special_tokens: false,
                     include_stop_str_in_output: false,
                     stop_strings: None,
+                    min_tokens: 0,
                 },
                 intermediate: true,
             }
@@ -370,6 +372,7 @@ mod tests {
                     skip_special_tokens: false,
                     include_stop_str_in_output: false,
                     stop_strings: None,
+                    min_tokens: 0,
                 },
                 intermediate: true,
             }
@@ -438,6 +441,7 @@ mod tests {
                     skip_special_tokens: false,
                     include_stop_str_in_output: false,
                     stop_strings: None,
+                    min_tokens: 0,
                 },
                 intermediate: true,
             }
@@ -534,6 +538,7 @@ mod tests {
                     skip_special_tokens: false,
                     include_stop_str_in_output: false,
                     stop_strings: None,
+                    min_tokens: 0,
                 },
                 intermediate: true,
             }
@@ -649,6 +654,7 @@ mod tests {
                     skip_special_tokens: false,
                     include_stop_str_in_output: false,
                     stop_strings: None,
+                    min_tokens: 0,
                 },
                 intermediate: true,
             }
