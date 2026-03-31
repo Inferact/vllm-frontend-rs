@@ -96,7 +96,7 @@ impl TextLlm {
         let raw_stream = self.llm.generate(prepared.generate_request).await?;
         let decoded_stream = output::decoded_text_event_stream(
             prepared.text_request.request_id,
-            self.backend.clone(),
+            tokenizer,
             raw_stream,
             prepared.text_request.decode_options,
             prepared.text_request.intermediate,

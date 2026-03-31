@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use futures_async_stream::try_stream;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -9,10 +7,10 @@ use vllm_llm::{FinishReason, GenerateOutputStream};
 use super::logprobs::{
     DecodedLogprobs, DecodedPromptLogprobs, decode_logprobs, decode_prompt_logprobs,
 };
-use crate::backend::TextBackend;
 use crate::error::Error;
 use crate::incremental::IncrementalDecoder;
 use crate::take;
+use crate::tokenizers::DynTokenizer;
 
 /// Request-neutral options for incremental text decoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,15 +73,13 @@ pub enum DecodedTextEvent {
 
 /// Convert the output token stream from the `vllm_llm` layer into incrementally decoded text.
 #[try_stream(ok = DecodedTextEvent, error = Error)]
-pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
+pub async fn decoded_text_event_stream(
     request_id: String,
-    backend: Arc<B>,
+    tokenizer: DynTokenizer,
     raw_stream: GenerateOutputStream,
     mut decode_options: TextDecodeOptions,
     intermediate: bool,
 ) {
-    let tokenizer = backend.tokenizer();
-
     let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
     let mut started = false;
     let mut prompt_token_count: Option<usize> = None;
