@@ -2,22 +2,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use thiserror::Error;
+use thiserror_ext::Macro;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Public error type for the Rust engine-core client.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Macro)]
 pub enum Error {
     #[error("messagepack encode failed")]
     Encode(#[from] rmp_serde::encode::Error),
     #[error("messagepack decode failed")]
     Decode(#[from] rmp_serde::decode::Error),
+    #[error("messagepack decode failed for {target_type}: {message}")]
+    DecodeWithMessage {
+        target_type: &'static str,
+        message: String,
+    },
     #[error("messagepack value decode failed")]
     ValueDecode(#[from] rmpv::decode::Error),
     #[error("messagepack ext value encode failed")]
-    ValueEncodeExt(String),
+    ValueEncodeExt { message: String },
     #[error("messagepack ext value decode failed")]
-    ValueDecodeExt(String),
+    ValueDecodeExt { message: String },
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("transport error")]
@@ -33,8 +39,14 @@ pub enum Error {
     InputRegistrationTimeout { timeout: Duration },
     #[error("unexpected engine id in startup handshake: expected {expected:?}, got {actual:?}")]
     UnexpectedHandshakeIdentity { expected: Vec<u8>, actual: Vec<u8> },
-    #[error("unexpected startup handshake message: {reason}")]
-    UnexpectedHandshakeMessage { reason: String },
+    #[error("unexpected startup handshake message: {message}")]
+    UnexpectedHandshakeMessage { message: String },
+    #[error("unexpected non-control output on coordinator path: {message}")]
+    UnexpectedCoordinatorOutput { message: String },
+    #[error("unexpected output on main dispatcher path: {message}")]
+    UnexpectedDispatcherOutput { message: String },
+    #[error("coordinator requires a Python-compatible two-byte engine id, got {engine_id:?}")]
+    UnsupportedCoordinatorEngineId { engine_id: Vec<u8> },
     #[error("unsupported auxiliary frame(s): expected 1 frame, got {frame_count}")]
     UnsupportedAuxFrames { frame_count: usize },
     #[error("unsupported field `{field}` in {context}")]
@@ -42,14 +54,14 @@ pub enum Error {
         context: &'static str,
         field: &'static str,
     },
-    #[error("engine control channel closed unexpectedly: {0}")]
-    ControlClosed(String),
+    #[error("engine control channel closed unexpectedly: {message}")]
+    ControlClosed { message: String },
     #[error("request `{request_id}` is already in flight")]
     DuplicateRequestId { request_id: String },
-    #[error("engine-core output dispatcher closed: {reason}")]
-    DispatcherClosed { reason: String },
-    #[error("engine-core client is closed: {reason}")]
-    ClientClosed { reason: String },
+    #[error("engine-core output dispatcher closed: {message}")]
+    DispatcherClosed { message: String },
+    #[error("engine-core client is closed: {message}")]
+    ClientClosed { message: String },
     #[error("request output stream for `{request_id}` closed unexpectedly")]
     RequestStreamClosed { request_id: String },
     #[error("utility call `{method}` failed (call_id={call_id}): {message}")]
@@ -58,11 +70,11 @@ pub enum Error {
         call_id: i64,
         message: String,
     },
-    #[error("utility call `{method}` returned an invalid result (call_id={call_id}): {reason}")]
+    #[error("utility call `{method}` returned an invalid result (call_id={call_id}): {message}")]
     UtilityResultDecode {
         method: String,
         call_id: i64,
-        reason: String,
+        message: String,
     },
     #[error("utility call `{method}` closed unexpectedly (call_id={call_id})")]
     UtilityCallClosed { method: String, call_id: i64 },

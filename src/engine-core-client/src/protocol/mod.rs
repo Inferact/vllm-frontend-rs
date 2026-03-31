@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
@@ -9,7 +10,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use thiserror_ext::AsReport;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, value_encode_ext};
 use crate::protocol::stats::SchedulerStats;
 
 // TODO: This module currently mixes reusable frontend-facing semantic types
@@ -33,8 +34,7 @@ pub mod handshake;
 mod logprobs;
 pub mod stats;
 pub use classfied_outputs::{
-    ClassifiedEngineCoreOutputs, DpControlMessage, OtherEngineCoreOutputs, RequestBatchOutputs,
-    UtilityCallOutput,
+    ClassifiedEngineCoreOutputs, DpControlMessage, RequestBatchOutputs, UtilityCallOutput,
 };
 pub use logprobs::{
     Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,
@@ -55,7 +55,7 @@ pub enum EngineCoreRequestType {
 }
 
 impl EngineCoreRequestType {
-    pub fn as_frame(self) -> Bytes {
+    pub fn to_frame(self) -> Bytes {
         Bytes::from_static(match self {
             Self::Add => b"\x00",
             Self::Abort => b"\x01",
@@ -301,10 +301,7 @@ impl EngineCoreUtilityRequest {
         T: Serialize,
     {
         let args = rmpv::ext::to_value(args).map_err(|error| {
-            Error::ValueEncodeExt(format!(
-                "failed to encode utility args: {}",
-                error.as_report()
-            ))
+            value_encode_ext!("failed to encode utility args: {}", error.as_report())
         })?;
         let args = match args {
             Value::Nil => Value::Array(Vec::new()),
@@ -424,7 +421,7 @@ impl UtilityOutput {
         rmpv::ext::from_value(result).map_err(|error| Error::UtilityResultDecode {
             method: method.to_string(),
             call_id: self.call_id,
-            reason: error.to_string(),
+            message: error.to_report_string(),
         })
     }
 }
@@ -470,10 +467,19 @@ pub fn decode_msgpack<T>(bytes: &[u8]) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    Ok(rmp_serde::from_slice(bytes)?)
+    fn decode_value_preview(bytes: &[u8]) -> String {
+        match decode_value(bytes) {
+            Ok(value) => format!("{value}"),
+            Err(error) => format!("<value decode failed: {error}>"),
+        }
+    }
+
+    rmp_serde::from_slice(bytes).map_err(|error| Error::DecodeWithMessage {
+        target_type: type_name::<T>(),
+        message: format!("{error}; value fallback: {}", decode_value_preview(bytes)),
+    })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn decode_value(bytes: &[u8]) -> Result<Value> {
     Ok(rmpv::decode::read_value(&mut Cursor::new(bytes))?)
 }
@@ -636,5 +642,15 @@ mod tests {
         }
         .into_typed_result::<()>("sleep")
         .unwrap();
+    }
+
+    #[test]
+    fn decode_msgpack_includes_type_name_and_value_fallback() {
+        let error = decode_msgpack::<u64>(
+            &rmp_serde::to_vec_named(&BTreeMap::from([("status", "READY")])).unwrap(),
+        )
+        .unwrap_err();
+
+        expect_test::expect![[r#"messagepack decode failed for u64: wrong msgpack marker FixMap(1); value fallback: {"status": "READY"}"#]].assert_eq(&error.to_report_string());
     }
 }

@@ -12,7 +12,7 @@ mod state;
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 pub use config::Config;
 use futures::FutureExt as _;
 use tokio::net::TcpListener;
@@ -29,6 +29,25 @@ use crate::state::AppState;
 
 /// Build the shared application state for one configured model and one engine client.
 async fn build_state(config: &Config) -> Result<Arc<AppState>> {
+    // Build chat on top of the already loaded text backend so tokenizer/model metadata stay
+    // shared between raw completions and chat requests.
+    let text_backend = Arc::new(
+        HfTextBackend::from_model(&config.model)
+            .await
+            .context("failed to create text backend")?,
+    );
+    let chat_backend = Arc::new(
+        HfChatBackend::from_text_backend(&text_backend).context("failed to create chat backend")?,
+    );
+
+    let enable_inproc_coordinator = config.engine_count > 1 && text_backend.is_moe();
+    info!(
+        engine_count = config.engine_count,
+        model_is_moe = text_backend.is_moe(),
+        enable_inproc_coordinator,
+        "resolved in-process coordinator mode"
+    );
+
     let client = EngineCoreClient::connect(EngineCoreClientConfig {
         handshake_address: config.handshake_address.clone(),
         engine_count: config.engine_count,
@@ -36,13 +55,10 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
         local_host: config.advertised_host.clone(),
         ready_timeout: config.ready_timeout,
         client_index: 0,
+        enable_inproc_coordinator,
     })
-    .await?;
-
-    // Build chat on top of the already loaded text backend so tokenizer/model metadata stay
-    // shared between raw completions and chat requests.
-    let text_backend = Arc::new(HfTextBackend::from_model(&config.model).await?);
-    let chat_backend = Arc::new(HfChatBackend::from_text_backend(&text_backend)?);
+    .await
+    .context("failed to connect to engine core")?;
 
     let mut text = TextLlm::new(Llm::new(client), text_backend);
     if let Some(max_model_len) = config.max_model_len {

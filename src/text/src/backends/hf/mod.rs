@@ -10,7 +10,7 @@ use tekken::Tekkenizer;
 use thiserror_ext::AsReport;
 use tiktoken_rs::CoreBPE;
 use tokenizers::Tokenizer as HfTokenizer;
-use tracing::info;
+use tracing::{info, warn};
 
 use self::config::{
     GenerationConfig, HfTokenizerConfig, ModelConfig, load_generation_config, load_model_config,
@@ -24,6 +24,10 @@ use crate::error::{Error, Result};
 /// Set this environment variable to `1` to disable `fastokens` and fall back to the HuggingFace
 /// `tokenizers` crate.
 const DISABLE_FASTOKENS_ENV: &str = "VLLM_RS_DISABLE_FASTOKENS";
+
+fn fastokens_disabled() -> bool {
+    std::env::var(DISABLE_FASTOKENS_ENV).is_ok_and(|value| value == "1")
+}
 
 /// Default regex pattern used when loading tiktoken from a BPE file. This is the same
 /// `cl100k_base` pattern that HuggingFace transformers uses as its default in
@@ -42,11 +46,6 @@ enum TokenizerImpl {
     Fastokens(Box<FastokensTokenizer>),
     Tiktoken(Box<CoreBPE>),
     Tekken(Box<Tekkenizer>),
-}
-
-/// Returns `true` when the user has opted out of `fastokens` via [`DISABLE_FASTOKENS_ENV`].
-fn fastokens_disabled() -> bool {
-    std::env::var(DISABLE_FASTOKENS_ENV).is_ok_and(|v| v == "1")
 }
 
 impl TokenizerImpl {
@@ -113,10 +112,19 @@ impl TokenizerImpl {
             Ok(Self::Hf(Box::new(t)))
         } else {
             info!("loading tokenizer with fastokens");
-            let t = FastokensTokenizer::from_file(path).map_err(|error| {
-                Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
-            })?;
-            Ok(Self::Fastokens(Box::new(t)))
+            match FastokensTokenizer::from_file(path) {
+                Ok(t) => Ok(Self::Fastokens(Box::new(t))),
+                Err(error) => {
+                    warn!(
+                        error = %error.as_report(),
+                        "failed to load tokenizer with fastokens; falling back to HuggingFace tokenizers"
+                    );
+                    let t = HfTokenizer::from_file(path).map_err(|error| {
+                        Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
+                    })?;
+                    Ok(Self::Hf(Box::new(t)))
+                }
+            }
         }
     }
 
@@ -366,6 +374,11 @@ impl HfTextBackend {
     pub fn resolved_model_files(&self) -> &ResolvedModelFiles {
         &self.inner.files
     }
+
+    /// Return whether the loaded model config indicates a mixture-of-experts model.
+    pub fn is_moe(&self) -> bool {
+        self.inner.model_config.is_moe()
+    }
 }
 
 impl TextBackend for HfTextBackend {
@@ -391,7 +404,7 @@ impl TextBackend for HfTextBackend {
             default_min_p: self.inner.generation_config.min_p,
             default_repetition_penalty: self.inner.generation_config.repetition_penalty,
             default_max_tokens: self.inner.generation_config.max_new_tokens,
-            max_model_len: self.inner.model_config.max_position_embeddings,
+            max_model_len: self.inner.model_config.effective_max_position_embeddings(),
         })
     }
 }
