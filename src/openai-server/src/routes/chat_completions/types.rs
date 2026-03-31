@@ -359,12 +359,27 @@ pub(super) struct ChatCompletionStreamResponse {
     pub usage: Option<Usage>,
 }
 
+impl ChatCompletionStreamResponse {
+    /// Create a stream response with the standard envelope fields pre-filled.
+    pub fn new(id: &str, model: &str, created: u64) -> Self {
+        Self {
+            id: id.to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created,
+            model: model.to_string(),
+            choices: Vec::new(),
+            usage: None,
+        }
+    }
+}
+
 /// Mirrors the Python vLLM `ChatCompletionResponseStreamChoice` class.
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct ChatCompletionStreamChoice {
     pub index: u32,
     pub delta: ChatMessageDelta,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
@@ -372,7 +387,7 @@ pub(super) struct ChatCompletionStreamChoice {
 
 /// Mirrors the Python vLLM `DeltaMessage` class.
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct ChatMessageDelta {
     pub role: Option<String>,
     pub content: Option<String>,

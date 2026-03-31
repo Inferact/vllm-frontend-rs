@@ -268,20 +268,13 @@ fn delta_chunk(
     text: String,
     logprobs: Option<LogProbs>,
 ) -> CompletionStreamResponse {
-    CompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "text_completion".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![CompletionStreamChoice {
-            index: 0,
-            text,
-            logprobs,
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(CompletionStreamChoice {
+        text,
+        logprobs,
+        ..Default::default()
+    });
+    chunk
 }
 
 fn final_chunk(
@@ -292,20 +285,12 @@ fn final_chunk(
 ) -> Result<CompletionStreamResponse, ApiError> {
     let finish_reason = completion_finish_reason_to_openai(finish_reason)?;
 
-    Ok(CompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "text_completion".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![CompletionStreamChoice {
-            index: 0,
-            text: String::new(),
-            logprobs: None,
-            finish_reason: Some(finish_reason.to_string()),
-            stop_reason: None,
-        }],
-        usage: None,
-    })
+    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(CompletionStreamChoice {
+        finish_reason: Some(finish_reason.to_string()),
+        ..Default::default()
+    });
+    Ok(chunk)
 }
 
 fn completion_finish_reason_to_openai(
@@ -326,14 +311,9 @@ fn usage_chunk(
     created: u64,
     usage: Usage,
 ) -> CompletionStreamResponse {
-    CompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "text_completion".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: Vec::new(),
-        usage: Some(usage),
-    }
+    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    chunk.usage = Some(usage);
+    chunk
 }
 
 /// Convert one chunk stream into OpenAI-style SSE events.

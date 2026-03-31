@@ -197,12 +197,27 @@ pub(super) struct CompletionStreamResponse {
     pub usage: Option<Usage>,
 }
 
+impl CompletionStreamResponse {
+    /// Create a stream response with the standard envelope fields pre-filled.
+    pub fn new(id: &str, model: &str, created: u64) -> Self {
+        Self {
+            id: id.to_string(),
+            object: "text_completion".to_string(),
+            created,
+            model: model.to_string(),
+            choices: Vec::new(),
+            usage: None,
+        }
+    }
+}
+
 /// Mirrors the Python vLLM `CompletionResponseStreamChoice` class.
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct CompletionStreamChoice {
     pub index: u32,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<LogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,

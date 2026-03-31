@@ -333,14 +333,9 @@ fn usage_chunk(
     created: u64,
     usage: Usage,
 ) -> ChatCompletionStreamResponse {
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: Vec::new(),
-        usage: Some(usage),
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.usage = Some(usage);
+    chunk
 }
 
 /// One in-flight chat-completions SSE chunk being assembled at the route layer.
@@ -367,12 +362,7 @@ struct PendingChatChunk {
 impl Default for PendingChatChunk {
     fn default() -> Self {
         Self {
-            delta: ChatMessageDelta {
-                role: None,
-                content: None,
-                tool_calls: None,
-                reasoning: None,
-            },
+            delta: ChatMessageDelta::default(),
             logprobs: None,
         }
     }
@@ -447,20 +437,13 @@ impl PendingChatChunk {
             return None;
         }
 
-        Some(ChatCompletionStreamResponse {
-            id: response_id.to_string(),
-            object: "chat.completion.chunk".to_string(),
-            created,
-            model: response_model.to_string(),
-            choices: vec![ChatCompletionStreamChoice {
-                index: 0,
-                delta: self.take_delta(),
-                logprobs,
-                finish_reason: None,
-                stop_reason: None,
-            }],
-            usage: None,
-        })
+        let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+        chunk.choices.push(ChatCompletionStreamChoice {
+            delta: self.take_delta(),
+            logprobs,
+            ..Default::default()
+        });
+        Some(chunk)
     }
 
     /// Take the currently buffered OpenAI delta payload and leave this pending
@@ -532,25 +515,15 @@ fn start_chunk(
     response_model: &str,
     created: u64,
 ) -> ChatCompletionStreamResponse {
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatMessageDelta {
-                role: Some("assistant".to_string()),
-                content: None,
-                tool_calls: None,
-                reasoning: None,
-            },
-            logprobs: None,
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        delta: ChatMessageDelta {
+            role: Some("assistant".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    chunk
 }
 
 /// Build one content-delta SSE chunk from one internal assistant block delta.
@@ -563,36 +536,24 @@ fn block_delta_chunk(
 ) -> ChatCompletionStreamResponse {
     let delta = match kind {
         AssistantBlockKind::Text => ChatMessageDelta {
-            role: None,
             content: Some(delta),
-            tool_calls: None,
-            reasoning: None,
+            ..Default::default()
         },
         AssistantBlockKind::Reasoning => ChatMessageDelta {
-            role: None,
-            content: None,
-            tool_calls: None,
             reasoning: Some(delta),
+            ..Default::default()
         },
         AssistantBlockKind::ToolCall => {
             unreachable!("tool calls must flow through dedicated tool-call chunks")
         }
     };
 
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta,
-            logprobs: None,
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        delta,
+        ..Default::default()
+    });
+    chunk
 }
 
 fn tool_call_start_chunk(
@@ -603,33 +564,23 @@ fn tool_call_start_chunk(
     id: String,
     name: String,
 ) -> ChatCompletionStreamResponse {
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatMessageDelta {
-                role: None,
-                content: None,
-                tool_calls: Some(vec![ToolCallDelta {
-                    index: tool_index,
-                    id: Some(id),
-                    tool_type: Some("function".to_string()),
-                    function: Some(FunctionCallDelta {
-                        name: Some(name),
-                        arguments: None,
-                    }),
-                }]),
-                reasoning: None,
-            },
-            logprobs: None,
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        delta: ChatMessageDelta {
+            tool_calls: Some(vec![ToolCallDelta {
+                index: tool_index,
+                id: Some(id),
+                tool_type: Some("function".to_string()),
+                function: Some(FunctionCallDelta {
+                    name: Some(name),
+                    arguments: None,
+                }),
+            }]),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    chunk
 }
 
 fn tool_call_arguments_chunk(
@@ -640,33 +591,23 @@ fn tool_call_arguments_chunk(
     id: String,
     delta: String,
 ) -> ChatCompletionStreamResponse {
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatMessageDelta {
-                role: None,
-                content: None,
-                tool_calls: Some(vec![ToolCallDelta {
-                    index: tool_index,
-                    id: Some(id),
-                    tool_type: None,
-                    function: Some(FunctionCallDelta {
-                        name: None,
-                        arguments: Some(delta),
-                    }),
-                }]),
-                reasoning: None,
-            },
-            logprobs: None,
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        delta: ChatMessageDelta {
+            tool_calls: Some(vec![ToolCallDelta {
+                index: tool_index,
+                id: Some(id),
+                tool_type: None,
+                function: Some(FunctionCallDelta {
+                    name: None,
+                    arguments: Some(delta),
+                }),
+            }]),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    chunk
 }
 
 fn logprobs_only_chunk(
@@ -675,25 +616,12 @@ fn logprobs_only_chunk(
     created: u64,
     logprobs: ChatLogProbs,
 ) -> ChatCompletionStreamResponse {
-    ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatMessageDelta {
-                role: None,
-                content: None,
-                tool_calls: None,
-                reasoning: None,
-            },
-            logprobs: Some(logprobs),
-            finish_reason: None,
-            stop_reason: None,
-        }],
-        usage: None,
-    }
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        logprobs: Some(logprobs),
+        ..Default::default()
+    });
+    chunk
 }
 
 /// Build the terminal SSE chunk carrying the OpenAI finish reason.
@@ -714,25 +642,13 @@ fn final_chunk(
         "chat stream finished"
     );
 
-    Ok(ChatCompletionStreamResponse {
-        id: response_id.to_string(),
-        object: "chat.completion.chunk".to_string(),
-        created,
-        model: response_model.to_string(),
-        choices: vec![ChatCompletionStreamChoice {
-            index: 0,
-            delta: ChatMessageDelta {
-                role: None,
-                content: None,
-                tool_calls: None,
-                reasoning: None,
-            },
-            logprobs: None,
-            finish_reason: Some(finish_reason.to_string()),
-            stop_reason,
-        }],
-        usage: None,
-    })
+    let mut chunk = ChatCompletionStreamResponse::new(response_id, response_model, created);
+    chunk.choices.push(ChatCompletionStreamChoice {
+        finish_reason: Some(finish_reason.to_string()),
+        stop_reason,
+        ..Default::default()
+    });
+    Ok(chunk)
 }
 
 fn chat_finish_reason_to_openai(
