@@ -4,14 +4,17 @@
 //! - Engine args: <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/engine/arg_utils.py#L657-L1311>
 //! - Environment variables: <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/envs.py#L472>
 
+mod unsupported;
 mod utils;
 
 use std::ffi::OsString;
 use std::time::Duration;
 
 use bpaf::{Args, Bpaf, ParseFailure};
+use educe::Educe;
 use vllm_openai_server::Config;
 
+use crate::cli::unsupported::{UnsupportedServeArgs, unsupported_serve_args};
 use crate::cli::utils::{not_help, rewrite_serve_legacy_aliases, split_name_from_args};
 use crate::managed_engine::ManagedEngineConfig;
 
@@ -152,7 +155,8 @@ impl FrontendArgs {
 }
 
 /// Arguments for the managed-engine mode that spawns Python on behalf of the user.
-#[derive(Debug, Clone, PartialEq, Eq, Bpaf)]
+#[derive(Educe, Clone, PartialEq, Eq, Bpaf)]
+#[educe(Debug)]
 pub struct ServeArgs {
     /// Only launch the managed Python headless engine and do not start the Rust frontend.
     #[bpaf(long("headless"))]
@@ -191,6 +195,9 @@ pub struct ServeArgs {
         fallback(1)
     )]
     pub engine_count: usize,
+    #[bpaf(external(unsupported_serve_args))]
+    #[educe(Debug(ignore))]
+    pub unsupported: UnsupportedServeArgs,
     #[bpaf(external(frontend_runtime_args))]
     pub runtime: FrontendRuntimeArgs,
     /// Additional arguments forwarded to `python -m vllm.entrypoints.cli.main serve ...` to launch
@@ -559,5 +566,74 @@ mod tests {
             }
         "#]]
         .assert_debug_eq(&config);
+    }
+
+    #[test]
+    fn serve_help_lists_unsupported_frontend_owned_arguments() {
+        let help = Cli::try_parse_from(["vllm-rs", "serve", "--help"])
+            .unwrap_err()
+            .unwrap_stdout();
+
+        assert!(help.contains("--tokenizer"));
+        assert!(help.contains("--data-parallel-rank"));
+        assert!(help.contains("VLLM_DP_RANK"));
+        assert!(help.contains("--structured-outputs-config"));
+        assert!(help.contains("--enable-lora"));
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_frontend_owned_value_arg() {
+        let stderr =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--tokenizer", "foo"])
+                .unwrap_err()
+                .unwrap_stderr();
+
+        assert!(stderr.contains("--tokenizer"));
+        assert!(stderr.contains("not implemented in vllm-rs"));
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_frontend_owned_bool_arg() {
+        let stderr =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--no-enable-lora"])
+                .unwrap_err()
+                .unwrap_stderr();
+
+        assert!(stderr.contains("--enable-lora"));
+        assert!(stderr.contains("not implemented in vllm-rs"));
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_hf_token_value_form() {
+        let stderr = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--hf-token",
+            "hf_xxx",
+        ])
+        .unwrap_err()
+        .unwrap_stderr();
+
+        assert!(stderr.contains("--hf-token"));
+        assert!(stderr.contains("not implemented in vllm-rs"));
+    }
+
+    #[test]
+    fn serve_args_keep_unsupported_frontend_owned_args_after_separator_in_passthrough() {
+        let cli = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--",
+            "--tokenizer",
+            "foo",
+        ])
+        .unwrap();
+
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve args");
+        };
+        assert_eq!(args.python_args, ["--tokenizer", "foo"]);
     }
 }
