@@ -31,6 +31,7 @@ mod error;
 mod lower;
 pub mod output;
 mod request;
+pub mod tokenizers;
 
 /// Shared streamed text output type used by raw completions and other text-only northbound paths.
 pub trait TextOutputStream = Stream<Item = Result<DecodedTextEvent>> + Send + 'static;

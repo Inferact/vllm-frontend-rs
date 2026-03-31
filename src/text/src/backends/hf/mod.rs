@@ -15,7 +15,6 @@ use tracing::{info, warn};
 use self::config::{
     GenerationConfig, ModelConfig, load_generation_config, load_model_config, load_tokenizer_config,
 };
-use self::model_files::resolve_model_files;
 pub use self::model_files::{ResolvedModelFiles, TokenizerSource};
 use crate::backend::{SamplingHints, TextBackend};
 use crate::error::{Error, Result};
@@ -273,7 +272,7 @@ impl fmt::Debug for HfTextBackend {
 impl HfTextBackend {
     /// Load one Hugging Face model tokenizer plus adjacent model metadata.
     pub async fn from_model(model_id: &str) -> Result<Self> {
-        let files = resolve_model_files(model_id).await?;
+        let files = ResolvedModelFiles::new(model_id).await?;
         Self::from_resolved_model_files(files, model_id.to_string())
     }
 

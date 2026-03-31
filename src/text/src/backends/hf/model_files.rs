@@ -43,14 +43,15 @@ pub struct ResolvedModelFiles {
     pub config_path: Option<PathBuf>,
 }
 
-/// Resolve tokenizer/config files from the local HF cache first, then fall back
-/// to downloading the known metadata files from the Hub.
-pub(super) async fn resolve_model_files(model_id: &str) -> Result<ResolvedModelFiles> {
-    if let Some(files) = resolve_cached_model_files(model_id)? {
-        return Ok(files);
+impl ResolvedModelFiles {
+    /// Resolve tokenizer/config files from the local HF cache first, then fall back to downloading
+    /// the known metadata files from the Hub.
+    pub async fn new(model_id: &str) -> Result<Self> {
+        if let Some(files) = resolve_cached_model_files(model_id)? {
+            return Ok(files);
+        }
+        resolve_remote_model_files(model_id).await
     }
-
-    resolve_remote_model_files(model_id).await
 }
 
 async fn resolve_remote_model_files(model_id: &str) -> Result<ResolvedModelFiles> {
