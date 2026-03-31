@@ -34,7 +34,7 @@ impl TiktokenTokenizer {
     ///
     /// Special / added tokens are read from `tokenizer_config.json` in the same directory when
     /// present. The `cl100k_base` regex pattern is used as a reasonable default.
-    pub fn new(path: &Path) -> Result<Self> {
+    pub fn from_tiktoken_bpe_file(path: &Path) -> Result<Self> {
         info!(path = %path.display(), "loading tokenizer with tiktoken (BPE file)");
 
         // Parse the BPE file.
@@ -143,4 +143,92 @@ fn parse_added_tokens_from_config(
         }
     }
     Some(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TiktokenTokenizer;
+    use crate::backend::TextBackend;
+    use crate::error::Result;
+    use crate::tokenizers::Tokenizer;
+
+    /// Minimal [`TextBackend`] wrapper around [`TiktokenTokenizer`] for testing.
+    struct TiktokenBackend(TiktokenTokenizer);
+
+    impl TextBackend for TiktokenBackend {
+        fn encode(&self, text: &str) -> Result<Vec<u32>> {
+            self.0.encode(text)
+        }
+
+        fn decode(&self, token_ids: &[u32], skip_special_tokens: bool) -> Result<String> {
+            self.0.decode(token_ids, skip_special_tokens)
+        }
+    }
+
+    fn tiktoken_backend() -> TiktokenBackend {
+        let bpe = tiktoken_rs::cl100k_base().expect("cl100k_base should load");
+        TiktokenBackend(TiktokenTokenizer { inner: bpe })
+    }
+
+    /// Verify that tiktoken decode uses lossy UTF-8 (producing `\u{FFFD}`) rather than
+    /// returning an error for incomplete multi-byte sequences. This is critical for streaming
+    /// decode — `DecodeStream` relies on `\u{FFFD}` to detect incomplete characters.
+    #[test]
+    fn tiktoken_decode_incomplete_utf8_produces_replacement_char() {
+        let backend = tiktoken_backend();
+
+        let ids = backend.encode("你").unwrap();
+        let full = backend.decode(&ids, false).unwrap();
+        assert_eq!(full, "你");
+
+        let text_with_multibyte = "Hello你好World";
+        let all_ids = backend.encode(text_with_multibyte).unwrap();
+        for &id in &all_ids {
+            let result = backend.decode(&[id], false);
+            assert!(result.is_ok(), "decode of token {id} should not error");
+        }
+    }
+
+    /// Streaming decode of CJK text through tiktoken should produce the original text without
+    /// errors, even though individual tokens may represent partial UTF-8 byte sequences.
+    #[test]
+    fn tiktoken_streaming_decode_multibyte() {
+        let backend = tiktoken_backend();
+        let text = "你好世界"; // 4 CJK characters
+        let ids = backend.encode(text).unwrap();
+
+        let mut decoder = backend.create_decode_stream(&[], false);
+        let mut output = String::new();
+        for &id in &ids {
+            if let Some(chunk) = decoder.step(id).unwrap() {
+                output.push_str(&chunk);
+            }
+        }
+        if let Some(chunk) = decoder.flush().unwrap() {
+            output.push_str(&chunk);
+        }
+
+        assert_eq!(output, text);
+    }
+
+    /// Mixed ASCII and multi-byte text should stream correctly through tiktoken.
+    #[test]
+    fn tiktoken_streaming_decode_mixed_ascii_and_multibyte() {
+        let backend = tiktoken_backend();
+        let text = "Hello 你好 World 🌍";
+        let ids = backend.encode(text).unwrap();
+
+        let mut decoder = backend.create_decode_stream(&[], false);
+        let mut output = String::new();
+        for &id in &ids {
+            if let Some(chunk) = decoder.step(id).unwrap() {
+                output.push_str(&chunk);
+            }
+        }
+        if let Some(chunk) = decoder.flush().unwrap() {
+            output.push_str(&chunk);
+        }
+
+        assert_eq!(output, text);
+    }
 }
