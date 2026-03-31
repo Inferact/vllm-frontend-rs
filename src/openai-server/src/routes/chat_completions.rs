@@ -12,10 +12,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
-use openai_protocol::chat::{
-    ChatChoice, ChatCompletionMessage, ChatCompletionStreamResponse, ChatMessageDelta,
-    ChatStreamChoice,
-};
 use openai_protocol::common::{
     ChatLogProbs, FunctionCallDelta, FunctionCallResponse, ToolCall, ToolCallDelta, Usage,
 };
@@ -31,7 +27,10 @@ use vllm_engine_core_client::protocol::StopReason;
 
 use crate::error::{ApiError, bail_server_error, server_error};
 use crate::routes::chat_completions::convert::prepare_chat_request;
-use crate::routes::chat_completions::types::{ChatCompletionRequest, ChatCompletionResponse};
+use crate::routes::chat_completions::types::{
+    ChatCompletionChoice, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse,
+    ChatCompletionStreamChoice, ChatCompletionStreamResponse, ChatMessageDelta,
+};
 use crate::routes::utils::logprobs::{
     decoded_logprobs_to_openai_chat, decoded_prompt_logprobs_to_maps,
 };
@@ -124,7 +123,7 @@ async fn collect_chat_completion(
         output_token_count,
         finish_reason,
     } = collected;
-    let matched_stop = finish_reason.as_stop_reason().map(stop_reason_to_json);
+    let stop_reason = finish_reason.as_stop_reason().map(stop_reason_to_json);
     let saw_tool_calls = message.tool_calls().next().is_some();
     let finish_reason = chat_finish_reason_to_openai(&finish_reason, saw_tool_calls)?.to_string();
     let tool_calls = message
@@ -165,18 +164,17 @@ async fn collect_chat_completion(
         object: "chat.completion".to_string(),
         created,
         model: response_model,
-        choices: vec![ChatChoice {
+        choices: vec![ChatCompletionChoice {
             index: 0,
             message: ChatCompletionMessage {
                 role: "assistant".to_string(),
                 content: Some(message.text()).filter(|text| !text.is_empty()),
                 tool_calls: Some(tool_calls).filter(|calls| !calls.is_empty()),
-                reasoning_content: message.reasoning(),
+                reasoning: message.reasoning(),
             },
             logprobs,
             finish_reason: Some(finish_reason),
-            matched_stop,
-            hidden_states: None,
+            stop_reason,
         }],
         usage: Some(usage),
         system_fingerprint: None,
@@ -340,7 +338,6 @@ fn usage_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
         choices: Vec::new(),
         usage: Some(usage),
     }
@@ -374,7 +371,7 @@ impl Default for PendingChatChunk {
                 role: None,
                 content: None,
                 tool_calls: None,
-                reasoning_content: None,
+                reasoning: None,
             },
             logprobs: None,
         }
@@ -386,9 +383,7 @@ impl PendingChatChunk {
     fn push_block_delta(&mut self, kind: AssistantBlockKind, delta: String) {
         match kind {
             AssistantBlockKind::Text => append_delta_text(&mut self.delta.content, delta),
-            AssistantBlockKind::Reasoning => {
-                append_delta_text(&mut self.delta.reasoning_content, delta)
-            }
+            AssistantBlockKind::Reasoning => append_delta_text(&mut self.delta.reasoning, delta),
             AssistantBlockKind::ToolCall => {
                 unreachable!("tool calls must flow through dedicated tool-call chunks")
             }
@@ -445,7 +440,7 @@ impl PendingChatChunk {
         created: u64,
     ) -> Option<ChatCompletionStreamResponse> {
         let has_delta = self.delta.content.is_some()
-            || self.delta.reasoning_content.is_some()
+            || self.delta.reasoning.is_some()
             || self.delta.tool_calls.is_some();
         let logprobs = self.logprobs.take();
         if !has_delta && logprobs.is_none() {
@@ -457,13 +452,12 @@ impl PendingChatChunk {
             object: "chat.completion.chunk".to_string(),
             created,
             model: response_model.to_string(),
-            system_fingerprint: None,
-            choices: vec![ChatStreamChoice {
+            choices: vec![ChatCompletionStreamChoice {
                 index: 0,
                 delta: self.take_delta(),
                 logprobs,
                 finish_reason: None,
-                matched_stop: None,
+                stop_reason: None,
             }],
             usage: None,
         })
@@ -476,7 +470,7 @@ impl PendingChatChunk {
             role: self.delta.role.take(),
             content: self.delta.content.take(),
             tool_calls: self.delta.tool_calls.take(),
-            reasoning_content: self.delta.reasoning_content.take(),
+            reasoning: self.delta.reasoning.take(),
         }
     }
 }
@@ -543,18 +537,17 @@ fn start_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
-        choices: vec![ChatStreamChoice {
+        choices: vec![ChatCompletionStreamChoice {
             index: 0,
             delta: ChatMessageDelta {
                 role: Some("assistant".to_string()),
                 content: None,
                 tool_calls: None,
-                reasoning_content: None,
+                reasoning: None,
             },
             logprobs: None,
             finish_reason: None,
-            matched_stop: None,
+            stop_reason: None,
         }],
         usage: None,
     }
@@ -573,13 +566,13 @@ fn block_delta_chunk(
             role: None,
             content: Some(delta),
             tool_calls: None,
-            reasoning_content: None,
+            reasoning: None,
         },
         AssistantBlockKind::Reasoning => ChatMessageDelta {
             role: None,
             content: None,
             tool_calls: None,
-            reasoning_content: Some(delta),
+            reasoning: Some(delta),
         },
         AssistantBlockKind::ToolCall => {
             unreachable!("tool calls must flow through dedicated tool-call chunks")
@@ -591,13 +584,12 @@ fn block_delta_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
-        choices: vec![ChatStreamChoice {
+        choices: vec![ChatCompletionStreamChoice {
             index: 0,
             delta,
             logprobs: None,
             finish_reason: None,
-            matched_stop: None,
+            stop_reason: None,
         }],
         usage: None,
     }
@@ -616,8 +608,7 @@ fn tool_call_start_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
-        choices: vec![ChatStreamChoice {
+        choices: vec![ChatCompletionStreamChoice {
             index: 0,
             delta: ChatMessageDelta {
                 role: None,
@@ -631,11 +622,11 @@ fn tool_call_start_chunk(
                         arguments: None,
                     }),
                 }]),
-                reasoning_content: None,
+                reasoning: None,
             },
             logprobs: None,
             finish_reason: None,
-            matched_stop: None,
+            stop_reason: None,
         }],
         usage: None,
     }
@@ -654,8 +645,7 @@ fn tool_call_arguments_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
-        choices: vec![ChatStreamChoice {
+        choices: vec![ChatCompletionStreamChoice {
             index: 0,
             delta: ChatMessageDelta {
                 role: None,
@@ -669,11 +659,11 @@ fn tool_call_arguments_chunk(
                         arguments: Some(delta),
                     }),
                 }]),
-                reasoning_content: None,
+                reasoning: None,
             },
             logprobs: None,
             finish_reason: None,
-            matched_stop: None,
+            stop_reason: None,
         }],
         usage: None,
     }
@@ -690,18 +680,17 @@ fn logprobs_only_chunk(
         object: "chat.completion.chunk".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
-        choices: vec![ChatStreamChoice {
+        choices: vec![ChatCompletionStreamChoice {
             index: 0,
             delta: ChatMessageDelta {
                 role: None,
                 content: None,
                 tool_calls: None,
-                reasoning_content: None,
+                reasoning: None,
             },
             logprobs: Some(logprobs),
             finish_reason: None,
-            matched_stop: None,
+            stop_reason: None,
         }],
         usage: None,
     }
@@ -715,22 +704,35 @@ fn final_chunk(
     finish_reason: FinishReason,
     saw_tool_calls: bool,
 ) -> Result<ChatCompletionStreamResponse, ApiError> {
-    let matched_stop = finish_reason.as_stop_reason().map(stop_reason_to_json);
+    let stop_reason = finish_reason.as_stop_reason().map(stop_reason_to_json);
     let finish_reason = chat_finish_reason_to_openai(&finish_reason, saw_tool_calls)?;
 
     debug!(
         request_id = %response_id,
         finish_reason = %finish_reason,
-        matched_stop = ?matched_stop,
+        stop_reason = ?stop_reason,
         "chat stream finished"
     );
 
-    Ok(
-        ChatCompletionStreamResponse::builder(response_id.to_string(), response_model.to_string())
-            .created(created)
-            .add_choice_finish_reason(0, finish_reason, matched_stop)
-            .build(),
-    )
+    Ok(ChatCompletionStreamResponse {
+        id: response_id.to_string(),
+        object: "chat.completion.chunk".to_string(),
+        created,
+        model: response_model.to_string(),
+        choices: vec![ChatCompletionStreamChoice {
+            index: 0,
+            delta: ChatMessageDelta {
+                role: None,
+                content: None,
+                tool_calls: None,
+                reasoning: None,
+            },
+            logprobs: None,
+            finish_reason: Some(finish_reason.to_string()),
+            stop_reason,
+        }],
+        usage: None,
+    })
 }
 
 fn chat_finish_reason_to_openai(
@@ -748,7 +750,7 @@ fn chat_finish_reason_to_openai(
     }
 }
 
-/// Convert one internal stop reason into the OpenAI-compatible `matched_stop` JSON shape.
+/// Convert one internal stop reason into the OpenAI-compatible `stop_reason` JSON shape.
 fn stop_reason_to_json(stop_reason: &StopReason) -> Value {
     serde_json::to_value(stop_reason).expect("StopReason must serialize to JSON")
 }
@@ -775,11 +777,11 @@ mod tests {
         );
         assert_eq!(chunk.choices[0].delta.role, None);
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("hello"));
-        assert_eq!(chunk.choices[0].delta.reasoning_content, None);
+        assert_eq!(chunk.choices[0].delta.reasoning, None);
     }
 
     #[test]
-    fn reasoning_chunk_uses_reasoning_content_only_delta() {
+    fn reasoning_chunk_uses_reasoning_only_delta() {
         let chunk = block_delta_chunk(
             "chatcmpl-1",
             "model",
@@ -790,13 +792,13 @@ mod tests {
         assert_eq!(chunk.choices[0].delta.role, None);
         assert_eq!(chunk.choices[0].delta.content, None);
         assert_eq!(
-            chunk.choices[0].delta.reasoning_content.as_deref(),
+            chunk.choices[0].delta.reasoning.as_deref(),
             Some("thinking")
         );
     }
 
     #[test]
-    fn final_chunk_maps_stop_finish_reason_and_matched_stop() {
+    fn final_chunk_maps_stop_finish_reason_and_stop_reason() {
         let chunk = final_chunk(
             "chatcmpl-1",
             "model",
@@ -807,7 +809,7 @@ mod tests {
         .expect("finish reason is valid");
 
         assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
-        assert_eq!(chunk.choices[0].matched_stop, Some(json!("stop")));
+        assert_eq!(chunk.choices[0].stop_reason, Some(json!("stop")));
     }
 
     #[test]
@@ -816,7 +818,7 @@ mod tests {
             .expect("finish reason is valid");
 
         assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("length"));
-        assert_eq!(chunk.choices[0].matched_stop, None);
+        assert_eq!(chunk.choices[0].stop_reason, None);
     }
 
     #[test]
@@ -948,7 +950,7 @@ mod tests {
 
         assert_eq!(chunks.len(), 3);
         assert_eq!(
-            chunks[1].choices[0].delta.reasoning_content.as_deref(),
+            chunks[1].choices[0].delta.reasoning.as_deref(),
             Some("think")
         );
         assert!(chunks[1].choices[0].logprobs.is_some());

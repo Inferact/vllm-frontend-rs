@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use openai_protocol::chat::{ChatChoice, ChatMessage, MessageContent};
+use openai_protocol::chat::{ChatMessage, MessageContent};
 use openai_protocol::common::{
-    ResponseFormat, StreamOptions, StringOrArray, Tool, ToolChoice, ToolChoiceValue, ToolReference,
-    Usage, default_true, validate_stop,
+    ChatLogProbs, ResponseFormat, StreamOptions, StringOrArray, Tool, ToolCall, ToolCallDelta,
+    ToolChoice, ToolChoiceValue, ToolReference, Usage, default_true, validate_stop,
 };
 use openai_protocol::sampling_params::{validate_top_k_value, validate_top_p_value};
 use openai_protocol::validated::Normalizable;
@@ -312,10 +312,7 @@ impl Normalizable for ChatCompletionRequest {
     }
 }
 
-/// Mirrors [`openai_protocol::chat::ChatCompletionResponse`].
-///
-/// The top-level shape stays aligned with upstream, and the only local extension is the vLLM-only
-/// `prompt_logprobs` payload.
+/// Mirrors the Python vLLM `ChatCompletionResponse` class.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ChatCompletionResponse {
@@ -323,10 +320,64 @@ pub(super) struct ChatCompletionResponse {
     pub object: String,
     pub created: u64,
     pub model: String,
-    pub choices: Vec<ChatChoice>,
+    pub choices: Vec<ChatCompletionChoice>,
     pub usage: Option<Usage>,
     pub system_fingerprint: Option<String>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
+}
+
+/// Mirrors the Python vLLM `ChatCompletionResponseChoice` class.
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ChatCompletionChoice {
+    pub index: u32,
+    pub message: ChatCompletionMessage,
+    pub logprobs: Option<ChatLogProbs>,
+    pub finish_reason: Option<String>,
+    pub stop_reason: Option<Value>,
+}
+
+/// Mirrors the Python vLLM response `ChatMessage` class.
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ChatCompletionMessage {
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub reasoning: Option<String>,
+}
+
+/// Mirrors the Python vLLM `ChatCompletionStreamResponse` class.
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ChatCompletionStreamResponse {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<ChatCompletionStreamChoice>,
+    pub usage: Option<Usage>,
+}
+
+/// Mirrors the Python vLLM `ChatCompletionResponseStreamChoice` class.
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ChatCompletionStreamChoice {
+    pub index: u32,
+    pub delta: ChatMessageDelta,
+    pub logprobs: Option<ChatLogProbs>,
+    pub finish_reason: Option<String>,
+    pub stop_reason: Option<Value>,
+}
+
+/// Mirrors the Python vLLM `DeltaMessage` class.
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ChatMessageDelta {
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+    pub reasoning: Option<String>,
 }
 
 fn default_model() -> String {

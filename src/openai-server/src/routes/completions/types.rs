@@ -160,10 +160,7 @@ pub struct CompletionRequest {
 
 impl Normalizable for CompletionRequest {}
 
-/// Mirrors [`openai_protocol::completion::CompletionResponse`].
-///
-/// The top-level response shape stays aligned with upstream; the vLLM-specific prompt logprobs
-/// payload lives on [`CompletionChoice`].
+/// Mirrors the Python vLLM `CompletionResponse` class.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CompletionResponse {
@@ -176,41 +173,39 @@ pub(super) struct CompletionResponse {
     pub system_fingerprint: Option<String>,
 }
 
-/// Mirrors [`openai_protocol::completion::CompletionChoice`].
-///
-/// Adds the vLLM-only `prompt_logprobs` payload on top of the upstream `matched_stop`
-/// metadata.
+/// Mirrors the Python vLLM `CompletionResponseChoice` class.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CompletionChoice {
-    pub text: String,
     pub index: u32,
+    pub text: String,
     pub logprobs: Option<LogProbs>,
     pub finish_reason: Option<String>,
-    pub matched_stop: Option<Value>,
+    pub stop_reason: Option<Value>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
 }
 
-/// Mirrors [`openai_protocol::completion::CompletionStreamResponse`].
+/// Mirrors the Python vLLM `CompletionStreamResponse` class.
+#[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CompletionStreamResponse {
     pub id: String,
     pub object: String,
     pub created: u64,
-    pub choices: Vec<CompletionStreamChoice>,
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_fingerprint: Option<String>,
+    pub choices: Vec<CompletionStreamChoice>,
+    pub usage: Option<Usage>,
 }
 
-/// Mirrors [`openai_protocol::completion::CompletionStreamChoice`].
+/// Mirrors the Python vLLM `CompletionResponseStreamChoice` class.
+#[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CompletionStreamChoice {
-    pub text: String,
     pub index: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: String,
     pub logprobs: Option<LogProbs>,
     pub finish_reason: Option<String>,
+    pub stop_reason: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,21 +214,5 @@ pub(super) enum CompletionSseChunk {
     /// Ordinary OpenAI completions delta/final chunk.
     Chunk(CompletionStreamResponse),
     /// Final usage chunk emitted before `[DONE]` when `include_usage=true`.
-    Usage(CompletionUsageChunk),
-}
-
-/// Local wrapper for the extra streamed usage chunk.
-///
-/// This is not a direct `openai_protocol` mirror. It extends the streamed completion chunk shape
-/// with a terminal `usage` field for the accounting event emitted before `[DONE]`.
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct CompletionUsageChunk {
-    pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub choices: Vec<CompletionStreamChoice>,
-    pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_fingerprint: Option<String>,
-    pub usage: Usage,
+    Usage(CompletionStreamResponse),
 }

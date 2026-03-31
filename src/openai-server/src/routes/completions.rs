@@ -26,7 +26,7 @@ use crate::error::{ApiError, bail_server_error, server_error};
 use crate::routes::completions::convert::prepare_completion_request;
 use crate::routes::completions::types::{
     CompletionChoice, CompletionRequest, CompletionResponse, CompletionSseChunk,
-    CompletionStreamChoice, CompletionStreamResponse, CompletionUsageChunk,
+    CompletionStreamChoice, CompletionStreamResponse,
 };
 use crate::state::AppState;
 
@@ -116,7 +116,7 @@ async fn collect_completion(
         .await
         .map_err(|error| server_error!("completion stream failed: {}", error.to_report_string()))?;
     let finish_reason = collected.finish_reason.clone();
-    let matched_stop = finish_reason
+    let stop_reason = finish_reason
         .as_stop_reason()
         .map(|sr| serde_json::to_value(sr).expect("StopReason must serialize to JSON"));
 
@@ -155,11 +155,11 @@ async fn collect_completion(
         created,
         model: response_model,
         choices: vec![CompletionChoice {
-            text,
             index: 0,
+            text,
             logprobs,
             finish_reason: Some(completion_finish_reason_to_openai(finish_reason)?.into()),
-            matched_stop,
+            stop_reason,
             prompt_logprobs,
         }],
         usage: Some(Usage::from_counts(
@@ -273,13 +273,14 @@ fn delta_chunk(
         object: "text_completion".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
         choices: vec![CompletionStreamChoice {
-            text,
             index: 0,
+            text,
             logprobs,
             finish_reason: None,
+            stop_reason: None,
         }],
+        usage: None,
     }
 }
 
@@ -289,8 +290,6 @@ fn final_chunk(
     created: u64,
     finish_reason: FinishReason,
 ) -> Result<CompletionStreamResponse, ApiError> {
-    // Match the chat route's finish-reason policy so engine-native abort/error termination still
-    // becomes an OpenAI-style streamed error rather than an invalid terminal chunk.
     let finish_reason = completion_finish_reason_to_openai(finish_reason)?;
 
     Ok(CompletionStreamResponse {
@@ -298,13 +297,14 @@ fn final_chunk(
         object: "text_completion".to_string(),
         created,
         model: response_model.to_string(),
-        system_fingerprint: None,
         choices: vec![CompletionStreamChoice {
-            text: String::new(),
             index: 0,
+            text: String::new(),
             logprobs: None,
             finish_reason: Some(finish_reason.to_string()),
+            stop_reason: None,
         }],
+        usage: None,
     })
 }
 
@@ -325,15 +325,14 @@ fn usage_chunk(
     response_model: &str,
     created: u64,
     usage: Usage,
-) -> CompletionUsageChunk {
-    CompletionUsageChunk {
+) -> CompletionStreamResponse {
+    CompletionStreamResponse {
         id: response_id.to_string(),
         object: "text_completion".to_string(),
         created,
-        choices: Vec::new(),
         model: response_model.to_string(),
-        system_fingerprint: None,
-        usage,
+        choices: Vec::new(),
+        usage: Some(usage),
     }
 }
 
