@@ -5,13 +5,16 @@
 //! - Environment variables: <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/envs.py#L472>
 
 mod serve_validate;
+mod unsupported;
 
 use std::ffi::OsString;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
+use educe::Educe;
 use vllm_openai_server::Config;
 
+use crate::cli::unsupported::UnsupportedArgs;
 use crate::managed_engine::ManagedEngineConfig;
 
 /// Top-level parser for the `vllm-rs` binary.
@@ -77,6 +80,9 @@ pub struct FrontendRuntimeArgs {
     /// instead of the model's `max_position_embeddings` from `config.json`.
     #[arg(long)]
     pub max_model_len: Option<u32>,
+    /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
+    #[command(flatten)]
+    pub unsupported: UnsupportedArgs,
 }
 
 impl FrontendRuntimeArgs {
@@ -103,10 +109,9 @@ impl FrontendRuntimeArgs {
 }
 
 /// Arguments for connecting the Rust frontend to an already running headless engine.
-#[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[derive(Educe, Clone, Args, PartialEq, Eq)]
+#[educe(Debug)]
 pub struct FrontendArgs {
-    #[command(flatten)]
-    pub runtime: FrontendRuntimeArgs,
     /// Host/IP advertised by the frontend to headless engines for shared input/output ZMQ sockets.
     #[arg(long, env = "VLLM_HOST_IP", default_value = "127.0.0.1")]
     pub advertised_host: String,
@@ -116,6 +121,10 @@ pub struct FrontendArgs {
     /// Number of engines expected to connect on the shared handshake socket.
     #[arg(long, default_value_t = 1)]
     pub engine_count: usize,
+    /// Shared frontend arguments.
+    #[educe(Debug(ignore))]
+    #[command(flatten)]
+    pub runtime: FrontendRuntimeArgs,
 }
 
 impl FrontendArgs {
@@ -132,8 +141,6 @@ impl FrontendArgs {
 /// Arguments for the managed-engine mode that spawns Python on behalf of the user.
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct ServeArgs {
-    #[command(flatten)]
-    pub runtime: FrontendRuntimeArgs,
     /// Only launch the managed Python headless engine and do not start the Rust frontend.
     #[arg(long)]
     pub headless: bool,
@@ -164,11 +171,19 @@ pub struct ServeArgs {
         default_value_t = 1
     )]
     pub engine_count: usize,
+    /// Shared frontend arguments.
+    #[command(flatten)]
+    pub runtime: FrontendRuntimeArgs,
+
     /// Additional arguments forwarded to `python -m vllm.entrypoints.cli.main serve ...`.
     ///
     /// These arguments must be placed after `--` so the Rust frontend can parse its own options
     /// first and then pass the remaining argv through to Python unchanged.
-    #[arg(last = true, allow_hyphen_values = true)]
+    #[arg(
+        last = true,
+        allow_hyphen_values = true,
+        help_heading = "Passthrough arguments"
+    )]
     pub python_args: Vec<String>,
 }
 
@@ -298,15 +313,6 @@ mod tests {
             Cli {
                 command: Frontend(
                     FrontendArgs {
-                        runtime: FrontendRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            host: "127.0.0.1",
-                            port: 8000,
-                            ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: None,
-                        },
                         advertised_host: "127.0.0.1",
                         handshake_address: "tcp://127.0.0.1:62100",
                         engine_count: 2,
