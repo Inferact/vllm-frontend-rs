@@ -16,7 +16,8 @@ use crate::managed_engine::ManagedEngineConfig;
 #[derive(Debug, Clone, PartialEq, Eq, Bpaf)]
 #[bpaf(
     options("vllm-rs"),
-    descr("Rust frontend and managed-engine CLI for vLLM.")
+    descr("Rust frontend and managed-engine CLI for vLLM."),
+    fallback_to_usage
 )]
 pub struct Cli {
     #[bpaf(external(command))]
