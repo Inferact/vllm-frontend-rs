@@ -1931,10 +1931,10 @@ async fn non_stream_completions_include_prompt_logprobs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
-async fn non_stream_chat_uses_final_only_output_kind() {
+async fn non_stream_chat_completions_still_succeed() {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
-    let engine_id = b"engine-openai-chat-final-only".to_vec();
+    let engine_id = b"engine-openai-chat-non-stream".to_vec();
 
     let engine_task = MockEngineTask::new(spawn_mock_engine_task(
         handshake_address.clone(),
@@ -1996,10 +1996,10 @@ async fn non_stream_chat_uses_final_only_output_kind() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
-async fn non_stream_completions_use_final_only_output_kind() {
+async fn non_stream_completions_still_succeed() {
     let ipc = IpcNamespace::new().expect("create ipc namespace");
     let handshake_address = ipc.handshake_endpoint();
-    let engine_id = b"engine-openai-completion-final-only".to_vec();
+    let engine_id = b"engine-openai-completion-non-stream".to_vec();
 
     let engine_task = MockEngineTask::new(spawn_mock_engine_task(
         handshake_address.clone(),
