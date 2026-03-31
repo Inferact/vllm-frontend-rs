@@ -59,14 +59,15 @@ This starts the Rust OpenAI-compatible server on `127.0.0.1:8000` by default.
 ```bash
 vllm-rs serve Qwen/Qwen3-0.6B \
   --python xxx/vllm/.venv/bin/python \
+  --tensor-parallel-size 2 \
   --data-parallel-size 2 \
   --max-model-len 4096 \
-  -- \
-  --tensor-parallel-size 2 \
   --more-engine-args ...
 ```
 
-Note that not all original `vllm serve` args are supported yet. For additional args that are only recognized by the Python engine, you have to place them after `--` to bypass Rust-side parsing and directly forward them to the managed Python engine.
+Note that not all original `vllm serve` args are supported yet.
+For unrecognized args, they will be treated as additional engine args and passed through to the Python engine when starting up.
+You can also explicitly put additional engine args after `--` to avoid any ambiguity.
 
 ### External Engine
 

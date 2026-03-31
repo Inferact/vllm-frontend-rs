@@ -21,6 +21,7 @@ async-openai = "0.33.1"
 async-trait = "0.1.89"
 axum = "0.8.8"
 base64 = "0.22.1"
+bpaf = { version = "0.9.24", features = ["derive"] }
 byteorder = "1.5.0"
 bytes = "1.11.1"
 clap = { version = "4.5.38", features = ["derive", "env"] }
