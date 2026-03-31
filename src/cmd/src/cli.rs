@@ -346,6 +346,19 @@ mod tests {
     }
 
     #[test]
+    fn serve_args_reject_unsupported_bare_hf_token() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--hf-token"]).unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'true' for '--hf-token [<HF_TOKEN>]': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
     fn frontend_args_accept_engine_count() {
         let cli = Cli::try_parse_from([
             "vllm-rs",
@@ -591,6 +604,60 @@ mod tests {
 
             Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
             Use "--data-parallel-size" before `--` to configure `vllm-rs serve`.
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_python_multi_char_alias_for_unsupported_value_arg_after_separator() {
+        let error = Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--", "-dpn", "1"])
+            .unwrap_err();
+
+        expect![[r#"
+            error: misplaced serve argument "-dpn" after `--`
+
+            Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
+            Use "--data-parallel-rank" before `--` to configure `vllm-rs serve`.
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_python_multi_char_alias_for_unsupported_flag_after_separator() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--", "-dph"]).unwrap_err();
+
+        expect![[r#"
+            error: misplaced serve argument "-dph" after `--`
+
+            Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
+            Use "--data-parallel-hybrid-lb" before `--` to configure `vllm-rs serve`.
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_python_multi_char_alias_for_unsupported_external_lb_after_separator() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--", "-dpe"]).unwrap_err();
+
+        expect![[r#"
+            error: misplaced serve argument "-dpe" after `--`
+
+            Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
+            Use "--data-parallel-external-lb" before `--` to configure `vllm-rs serve`.
 
             Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
 

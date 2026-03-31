@@ -10,8 +10,11 @@ use crate::cli::{Cli, Command};
 /// data-parallel flags, but `clap` cannot model them as Rust-side aliases directly.
 const EXTRA_PASSTHROUGH_ALIASES: &[(&str, &str)] = &[
     ("-dp", "--data-parallel-size"),
+    ("-dpn", "--data-parallel-rank"),
     ("-dpa", "--data-parallel-address"),
     ("-dpp", "--data-parallel-rpc-port"),
+    ("-dph", "--data-parallel-hybrid-lb"),
+    ("-dpe", "--data-parallel-external-lb"),
 ];
 
 /// Rewrite clap errors about unknown arguments in the `serve` subcommand to clarify the `--`

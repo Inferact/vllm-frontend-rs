@@ -136,7 +136,7 @@ pub struct UnsupportedArgs {
     /// The token to use as HTTP bearer authorization for remote files. If
     /// `True`, will use the token generated when running `hf auth login`
     /// (stored in `~/.cache/huggingface/token`).
-    #[arg(long)]
+    #[arg(long, default_missing_value = "true", num_args = 0..=1)]
     pub hf_token: Option<Unsupported>,
 
     /// If a dictionary, contains arguments to be forwarded to the Hugging Face
@@ -270,6 +270,11 @@ pub struct UnsupportedArgs {
     pub aggregate_engine_logging: Option<Unsupported>,
 
     /// Log requests.
-    #[arg(long, default_missing_value = "true", num_args = 0..=1)]
+    #[arg(
+        long,
+        visible_alias = "no-enable-log-requests",
+        default_missing_value = "true",
+        num_args = 0..=1
+    )]
     pub enable_log_requests: Option<Unsupported>,
 }
