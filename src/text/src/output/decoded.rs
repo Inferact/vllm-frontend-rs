@@ -82,6 +82,8 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
     mut decode_options: TextDecodeOptions,
     intermediate: bool,
 ) {
+    let tokenizer = backend.tokenizer();
+
     let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
     let mut started = false;
     let mut prompt_token_count: Option<usize> = None;
@@ -98,7 +100,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 .prompt_token_ids()
                 .expect("first llm output must carry prompt token ids");
             prompt_token_count = Some(prompt_token_ids.len());
-            backend.create_decode_stream(
+            tokenizer.create_decode_stream(
                 prompt_token_ids,
                 decode_options.skip_special_tokens,
                 // If we are excluding stop strings from output, we need to buffer
@@ -127,7 +129,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                     .prompt_logprobs()
                     .map(|logprobs| {
                         decode_prompt_logprobs(
-                            backend.as_ref(),
+                            tokenizer.as_ref(),
                             output
                                 .prompt_token_ids()
                                 .expect("first llm output must carry prompt token ids"),
@@ -199,7 +201,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             .as_ref()
             .map(|logprobs| {
                 decode_logprobs(
-                    backend.as_ref(),
+                    tokenizer.as_ref(),
                     logprobs,
                     decode_options.skip_special_tokens,
                 )

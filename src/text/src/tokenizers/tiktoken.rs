@@ -34,7 +34,7 @@ impl TiktokenTokenizer {
     ///
     /// Special / added tokens are read from `tokenizer_config.json` in the same directory when
     /// present. The `cl100k_base` regex pattern is used as a reasonable default.
-    pub fn from_tiktoken_bpe_file(path: &Path) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         info!(path = %path.display(), "loading tokenizer with tiktoken (BPE file)");
 
         // Parse the BPE file.
@@ -148,26 +148,11 @@ fn parse_added_tokens_from_config(
 #[cfg(test)]
 mod tests {
     use super::TiktokenTokenizer;
-    use crate::backend::TextBackend;
-    use crate::error::Result;
     use crate::tokenizers::Tokenizer;
 
-    /// Minimal [`TextBackend`] wrapper around [`TiktokenTokenizer`] for testing.
-    struct TiktokenBackend(TiktokenTokenizer);
-
-    impl TextBackend for TiktokenBackend {
-        fn encode(&self, text: &str) -> Result<Vec<u32>> {
-            self.0.encode(text)
-        }
-
-        fn decode(&self, token_ids: &[u32], skip_special_tokens: bool) -> Result<String> {
-            self.0.decode(token_ids, skip_special_tokens)
-        }
-    }
-
-    fn tiktoken_backend() -> TiktokenBackend {
+    fn tiktoken_backend() -> TiktokenTokenizer {
         let bpe = tiktoken_rs::cl100k_base().expect("cl100k_base should load");
-        TiktokenBackend(TiktokenTokenizer { inner: bpe })
+        TiktokenTokenizer { inner: bpe }
     }
 
     /// Verify that tiktoken decode uses lossy UTF-8 (producing `\u{FFFD}`) rather than
@@ -197,18 +182,21 @@ mod tests {
         let text = "你好世界"; // 4 CJK characters
         let ids = backend.encode(text).unwrap();
 
-        let mut decoder = backend.create_decode_stream(&[], false);
+        let mut decoder = backend.create_decode_stream(&[], false, 0);
         let mut output = String::new();
         for &id in &ids {
-            if let Some(chunk) = decoder.step(id).unwrap() {
+            decoder.push_token(id).unwrap();
+            if let Some(chunk) = decoder.next_chunk() {
                 output.push_str(&chunk);
             }
         }
-        if let Some(chunk) = decoder.flush().unwrap() {
+        let (last_chunk, full_text) = decoder.flush(None).unwrap();
+        if let Some(chunk) = last_chunk {
             output.push_str(&chunk);
         }
 
         assert_eq!(output, text);
+        assert_eq!(full_text, text);
     }
 
     /// Mixed ASCII and multi-byte text should stream correctly through tiktoken.
@@ -218,17 +206,20 @@ mod tests {
         let text = "Hello 你好 World 🌍";
         let ids = backend.encode(text).unwrap();
 
-        let mut decoder = backend.create_decode_stream(&[], false);
+        let mut decoder = backend.create_decode_stream(&[], false, 0);
         let mut output = String::new();
         for &id in &ids {
-            if let Some(chunk) = decoder.step(id).unwrap() {
+            decoder.push_token(id).unwrap();
+            if let Some(chunk) = decoder.next_chunk() {
                 output.push_str(&chunk);
             }
         }
-        if let Some(chunk) = decoder.flush().unwrap() {
+        let (last_chunk, full_text) = decoder.flush(None).unwrap();
+        if let Some(chunk) = last_chunk {
             output.push_str(&chunk);
         }
 
         assert_eq!(output, text);
+        assert_eq!(full_text, text);
     }
 }

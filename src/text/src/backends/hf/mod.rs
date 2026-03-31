@@ -17,11 +17,9 @@ use crate::tokenizers::{DynTokenizer, HuggingFaceTokenizer, TekkenTokenizer, Tik
 
 fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
     match tokenizer {
-        TokenizerSource::HuggingFace(path) => Ok(Box::new(HuggingFaceTokenizer::new(path)?)),
-        TokenizerSource::Tiktoken(path) => {
-            Ok(Box::new(TiktokenTokenizer::from_tiktoken_bpe_file(path)?))
-        }
-        TokenizerSource::Tekken(path) => Ok(Box::new(TekkenTokenizer::new(path)?)),
+        TokenizerSource::HuggingFace(path) => Ok(Arc::new(HuggingFaceTokenizer::new(path)?)),
+        TokenizerSource::Tiktoken(path) => Ok(Arc::new(TiktokenTokenizer::new(path)?)),
+        TokenizerSource::Tekken(path) => Ok(Arc::new(TekkenTokenizer::new(path)?)),
     }
 }
 
@@ -111,12 +109,8 @@ impl HfTextBackend {
 }
 
 impl TextBackend for HfTextBackend {
-    fn encode(&self, text: &str) -> Result<Vec<u32>> {
-        self.inner.tokenizer.encode(text)
-    }
-
-    fn decode(&self, token_ids: &[u32], skip_special_tokens: bool) -> Result<String> {
-        self.inner.tokenizer.decode(token_ids, skip_special_tokens)
+    fn tokenizer(&self) -> DynTokenizer {
+        self.inner.tokenizer.clone()
     }
 
     fn model_id(&self) -> Option<&str> {

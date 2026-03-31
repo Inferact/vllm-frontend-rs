@@ -80,8 +80,9 @@ impl TextLlm {
     pub async fn generate(&self, mut request: TextRequest) -> Result<impl TextOutputStream> {
         request.validate()?;
 
+        let tokenizer = self.backend.tokenizer();
         let prompt_token_ids = match take(&mut request.prompt) {
-            Prompt::Text(text) => self.backend.encode(&text)?,
+            Prompt::Text(text) => tokenizer.encode(&text)?,
             // Pre-tokenized prompts are the main completions-side escape hatch that lets benchmark
             // and infra workloads bypass chat rendering and tokenizer overhead entirely.
             Prompt::TokenIds(token_ids) => token_ids,
