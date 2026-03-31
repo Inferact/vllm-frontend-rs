@@ -13,11 +13,10 @@ use tokenizers::Tokenizer as HfTokenizer;
 use tracing::{info, warn};
 
 use self::config::{
-    GenerationConfig, HfTokenizerConfig, ModelConfig, load_generation_config, load_model_config,
-    load_tokenizer_config,
+    GenerationConfig, ModelConfig, load_generation_config, load_model_config, load_tokenizer_config,
 };
-pub use self::model_files::ResolvedModelFiles;
-use self::model_files::{discover_tiktoken_in_dir, is_tiktoken_file, resolve_model_files};
+use self::model_files::resolve_model_files;
+pub use self::model_files::{ResolvedModelFiles, TokenizerSource};
 use crate::backend::{SamplingHints, TextBackend};
 use crate::error::{Error, Result};
 
@@ -41,45 +40,13 @@ enum TokenizerImpl {
 }
 
 impl TokenizerImpl {
-    /// Choose and load the tokenizer backend.
-    ///
-    /// Selection order:
-    /// 1. `tekken.json` — Mistral native tokenizer (preferred over HF `tokenizer.json` because the
-    ///    HF version has a known regex bug for Mistral models).
-    /// 2. File extension — `.tiktoken` / `tiktoken.model` files use tiktoken from BPE data.
-    /// 3. `tokenizer_class` in `tokenizer_config.json` — classes containing "Tiktoken" (case-
-    ///    insensitive) trigger tiktoken loading from a sibling BPE file.
-    /// 4. Default — `tokenizer.json` loaded via fastokens, with HuggingFace tokenizers as a
-    ///    fallback if fastokens fails to parse the file.
-    fn load(
-        tokenizer_path: &std::path::Path,
-        tekken_path: Option<&std::path::Path>,
-        tokenizer_config: &HfTokenizerConfig,
-    ) -> Result<Self> {
-        // 1. tekken.json → Mistral Tekken tokenizer.
-        if let Some(tekken_path) = tekken_path {
-            return Self::from_tekken(tekken_path);
+    /// Load the tokenizer backend selected by the resolver.
+    fn load(tokenizer: &TokenizerSource) -> Result<Self> {
+        match tokenizer {
+            TokenizerSource::HuggingFace(path) => Self::from_hf_json(path),
+            TokenizerSource::Tiktoken(path) => Self::from_tiktoken_bpe_file(path),
+            TokenizerSource::Tekken(path) => Self::from_tekken(path),
         }
-
-        // 2. File extension: tiktoken.model / *.tiktoken → load from BPE file.
-        if is_tiktoken_file(tokenizer_path) {
-            return Self::from_tiktoken_bpe_file(tokenizer_path);
-        }
-
-        // 3. tokenizer_class hint — e.g. "PreTrainedTokenizerFast" with tiktoken BPE data next to
-        //    it, or classes like "DeepSeekV2Tokenizer" / "QwenTokenizer" that are known to use
-        //    tiktoken internally. When `tokenizer_class` contains "Tiktoken", look for a sibling
-        //    tiktoken file.
-        if let Some(ref cls) = tokenizer_config.tokenizer_class
-            && cls.to_ascii_lowercase().contains("tiktoken")
-            && let Some(dir) = tokenizer_path.parent()
-            && let Some(tiktoken_path) = discover_tiktoken_in_dir(dir)
-        {
-            return Self::from_tiktoken_bpe_file(&tiktoken_path);
-        }
-
-        // 4. Default: tokenizer.json via fastokens / HuggingFace tokenizers.
-        Self::from_hf_json(tokenizer_path)
     }
 
     /// Load a Mistral Tekken tokenizer from a `tekken.json` file.
@@ -315,11 +282,7 @@ impl HfTextBackend {
         model_id: String,
     ) -> Result<Self> {
         let tokenizer_config = load_tokenizer_config(files.tokenizer_config_path.as_deref())?;
-        let tokenizer = TokenizerImpl::load(
-            &files.tokenizer_path,
-            files.tekken_path.as_deref(),
-            &tokenizer_config,
-        )?;
+        let tokenizer = TokenizerImpl::load(&files.tokenizer)?;
         let primary_eos_token_id = tokenizer_config
             .eos_token
             .as_ref()
