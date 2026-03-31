@@ -164,50 +164,46 @@ impl Stream for GenerateOutputStream {
     type Item = Result<GenerateOutput>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            let raw = match ready!(Pin::new(&mut self.raw_stream).poll_next(cx)) {
-                Some(Ok(raw)) => raw,
-                Some(Err(error)) => return Poll::Ready(Some(Err(error.into()))),
-                None => return Poll::Ready(None),
-            };
+        let raw = match ready!(Pin::new(&mut self.raw_stream).poll_next(cx)) {
+            Some(Ok(raw)) => raw,
+            Some(Err(error)) => return Poll::Ready(Some(Err(error.into()))),
+            None => return Poll::Ready(None),
+        };
 
-            let received_at = current_unix_timestamp_secs();
-            self.request_metrics.observe_output(
-                raw.engine_index,
-                raw.timestamp,
-                received_at,
-                &raw.output,
-            );
+        let received_at = current_unix_timestamp_secs();
+        self.request_metrics.observe_output(
+            raw.engine_index,
+            raw.timestamp,
+            received_at,
+            &raw.output,
+        );
 
-            let raw = raw.output;
+        let raw = raw.output;
 
-            // Populate the one-time prompt info on the first output.
-            if let Some(info) = &mut self.pending_prompt_info
-                && info.prompt_logprobs.is_none()
-            {
-                info.prompt_logprobs = raw.new_prompt_logprobs_tensors.as_deref().cloned();
-            }
-
-            let finished = raw.finished();
-            let step_logprobs = raw.new_logprobs.as_deref().cloned();
-            let output = Some(GenerateOutput {
-                request_id: raw.request_id.clone(),
-                prompt_info: self.pending_prompt_info.take(),
-                token_ids: raw.new_token_ids.clone(),
-                logprobs: step_logprobs,
-                raw,
-            });
-
-            if let Some(finish_reason) = output.as_ref().and_then(|o| o.finish_reason()) {
-                assert!(finished, "only finished outputs can have finish reasons");
-                self.request_metrics
-                    .record_finished(received_at, finish_reason);
-            }
-
-            if let Some(output) = output {
-                return Poll::Ready(Some(Ok(output)));
-            }
+        // Populate the one-time prompt info on the first output.
+        if let Some(info) = &mut self.pending_prompt_info
+            && info.prompt_logprobs.is_none()
+        {
+            info.prompt_logprobs = raw.new_prompt_logprobs_tensors.as_deref().cloned();
         }
+
+        let finished = raw.finished();
+        let step_logprobs = raw.new_logprobs.as_deref().cloned();
+        let output = GenerateOutput {
+            request_id: raw.request_id.clone(),
+            prompt_info: self.pending_prompt_info.take(),
+            token_ids: raw.new_token_ids.clone(),
+            logprobs: step_logprobs,
+            raw,
+        };
+
+        if let Some(finish_reason) = output.finish_reason() {
+            assert!(finished, "only finished outputs can have finish reasons");
+            self.request_metrics
+                .record_finished(received_at, finish_reason);
+        }
+
+        Poll::Ready(Some(Ok(output)))
     }
 }
 
