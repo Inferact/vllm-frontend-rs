@@ -99,13 +99,6 @@ pub struct ChatCompletionRequest {
     /// Effort level for reasoning models (none, low, medium, high)
     pub reasoning_effort: Option<String>,
 
-    /// Token budget for reasoning/thinking
-    pub thinking_token_budget: Option<i64>,
-
-    /// Whether to include reasoning content in the response
-    #[serde(default = "default_true")]
-    pub include_reasoning: bool,
-
     /// Whether to enable parallel function calling during tool use
     pub parallel_tool_calls: Option<bool>,
 
@@ -168,6 +161,13 @@ pub struct ChatCompletionRequest {
     pub bad_words: Option<Vec<String>>,
 
     // -------- Extra vLLM Parameters --------
+    /// Token budget for reasoning/thinking
+    pub thinking_token_budget: Option<i64>,
+
+    /// Whether to include reasoning content in the response
+    #[serde(default = "default_true")]
+    pub include_reasoning: bool,
+
     /// If true, the new message will be prepended with the last message if they belong to the same
     /// role.
     #[serde(default)]

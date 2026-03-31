@@ -61,9 +61,6 @@ pub struct CompletionRequest {
     #[serde(default)]
     pub stream: bool,
 
-    /// Options for streaming response
-    pub stream_options: Option<StreamOptions>,
-
     /// The suffix that comes after a completion of inserted text
     pub suffix: Option<String>,
 
@@ -77,6 +74,9 @@ pub struct CompletionRequest {
     pub user: Option<String>,
 
     // -------- vLLM Sampling Parameters --------
+    /// Options for streaming response
+    pub stream_options: Option<StreamOptions>,
+
     /// Use beam search instead of sampling
     #[serde(default)]
     pub use_beam_search: bool,
