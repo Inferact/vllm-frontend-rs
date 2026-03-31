@@ -185,7 +185,6 @@ async fn completion_chunk_stream(
 ) {
     pin_mut!(stream);
     let mut visible_text_len = 0_u32;
-    let mut output_token_count = 0_u32;
 
     while let Some(next) = stream.next().await {
         match next {
@@ -204,10 +203,10 @@ async fn completion_chunk_stream(
             }
             Ok(DecodedTextEvent::TextDelta {
                 delta,
-                token_ids,
                 logprobs,
+                finished,
+                ..
             }) => {
-                output_token_count += token_ids.len() as u32;
                 let delta_text_len = text_len(&delta);
                 let logprobs = if requested_logprobs.is_some() {
                     let decoded_logprobs = logprobs.as_ref().ok_or_else(|| {
@@ -230,25 +229,26 @@ async fn completion_chunk_stream(
                     logprobs,
                 ));
                 visible_text_len = visible_text_len.saturating_add(delta_text_len);
-            }
-            Ok(DecodedTextEvent::Done {
-                prompt_token_count,
-                finish_reason,
-            }) => {
-                yield CompletionSseChunk::Chunk(final_chunk(
-                    &response_id,
-                    &response_model,
-                    created,
-                    finish_reason,
-                )?);
 
-                if include_usage {
-                    yield CompletionSseChunk::Usage(usage_chunk(
+                if let Some(finished) = finished {
+                    yield CompletionSseChunk::Chunk(final_chunk(
                         &response_id,
                         &response_model,
                         created,
-                        Usage::from_counts(prompt_token_count as u32, output_token_count),
-                    ));
+                        finished.finish_reason,
+                    )?);
+
+                    if include_usage {
+                        yield CompletionSseChunk::Usage(usage_chunk(
+                            &response_id,
+                            &response_model,
+                            created,
+                            Usage::from_counts(
+                                finished.prompt_token_count as u32,
+                                finished.output_token_count as u32,
+                            ),
+                        ));
+                    }
                 }
             }
             Err(error) => {
@@ -384,7 +384,7 @@ mod tests {
     use futures::{StreamExt as _, stream};
     use vllm_text::{
         DecodedLogprobs, DecodedPositionLogprobs, DecodedTextEvent, DecodedTokenLogprob,
-        FinishReason,
+        FinishReason, Finished,
     };
 
     use super::{CompletionSseChunk, completion_chunk_stream, final_chunk};
@@ -436,6 +436,7 @@ mod tests {
                         ],
                     }],
                 }),
+                finished: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
                 delta: String::new(),
@@ -456,10 +457,11 @@ mod tests {
                         ],
                     }],
                 }),
-            }),
-            Ok(DecodedTextEvent::Done {
-                prompt_token_count: 5,
-                finish_reason: FinishReason::stop_eos(),
+                finished: Some(Finished {
+                    prompt_token_count: 5,
+                    output_token_count: 2,
+                    finish_reason: FinishReason::stop_eos(),
+                }),
             }),
         ]);
 

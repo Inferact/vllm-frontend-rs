@@ -18,7 +18,7 @@ pub use lower::{
 };
 pub use output::{
     CollectedTextOutput, DecodedLogprobs, DecodedPositionLogprobs, DecodedPromptLogprobs,
-    DecodedTextEvent, DecodedTokenLogprob, TextDecodeOptions, TextOutputStreamExt,
+    DecodedTextEvent, DecodedTokenLogprob, Finished, TextDecodeOptions, TextOutputStreamExt,
 };
 pub use request::{Prompt, SamplingParams, TextRequest};
 use vllm_engine_core_client::EngineCoreClient;

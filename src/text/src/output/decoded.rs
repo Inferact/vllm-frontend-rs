@@ -32,6 +32,14 @@ impl Default for TextDecodeOptions {
     }
 }
 
+/// Terminal metadata carried on the final [`DecodedTextEvent`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finished {
+    pub prompt_token_count: usize,
+    pub output_token_count: usize,
+    pub finish_reason: FinishReason,
+}
+
 /// Internal decoded-text event emitted before higher-level assistant adaptation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecodedTextEvent {
@@ -55,16 +63,13 @@ pub enum DecodedTextEvent {
     /// positions becoming decodable together.
     ///
     /// Upper-level may further parse `delta` as reasoning or tool calls.
+    ///
+    /// When `finished` is `Some`, this is the terminal event for the request.
     TextDelta {
         delta: String,
         token_ids: Vec<u32>,
         logprobs: Option<DecodedLogprobs>,
-    },
-    /// Terminal event carrying final metadata. The full decoded text and token IDs
-    /// are carried by preceding [`TextDelta`] events.
-    Done {
-        prompt_token_count: usize,
-        finish_reason: FinishReason,
+        finished: Option<Finished>,
     },
 }
 
@@ -81,6 +86,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
     let mut started = false;
     let mut prompt_token_count: Option<usize> = None;
     let mut token_ids = Vec::new();
+    let mut output_token_count: usize = 0;
     let mut logprobs: Option<DecodedLogprobs> = None;
 
     #[for_await]
@@ -186,6 +192,8 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
             }
         }
 
+        output_token_count += new_token_ids.len();
+
         let decoded_logprobs = output
             .logprobs
             .as_ref()
@@ -225,27 +233,25 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 text = delta.unwrap_or_default();
             }
 
-            let token_count = token_ids.len();
             let text_len = text.len();
-
-            // In FinalOnly case the full output is returned here
-            yield DecodedTextEvent::TextDelta {
-                delta: text,
-                token_ids,
-                logprobs,
-            };
 
             info!(
                 request_id = %request_id,
                 finish_reason = ?reason,
                 text_length_bytes = text_len,
-                token_count = token_count,
+                output_token_count = output_token_count,
                 "request finished with terminal output"
             );
 
-            yield DecodedTextEvent::Done {
-                prompt_token_count,
-                finish_reason: reason,
+            yield DecodedTextEvent::TextDelta {
+                delta: text,
+                token_ids,
+                logprobs,
+                finished: Some(Finished {
+                    prompt_token_count,
+                    output_token_count,
+                    finish_reason: reason,
+                }),
             };
             return Ok(());
         }
@@ -255,6 +261,7 @@ pub async fn decoded_text_event_stream<B: TextBackend + ?Sized>(
                 delta: delta.unwrap_or_default(),
                 token_ids: new_token_ids,
                 logprobs: decoded_logprobs,
+                finished: None,
             };
         }
     }

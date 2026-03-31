@@ -1,6 +1,6 @@
 //! Output processing helpers shared by text and chat layers.
 
-pub use decoded::{DecodedTextEvent, TextDecodeOptions, decoded_text_event_stream};
+pub use decoded::{DecodedTextEvent, Finished, TextDecodeOptions, decoded_text_event_stream};
 pub use logprobs::{
     DecodedLogprobs, DecodedPositionLogprobs, DecodedPromptLogprobs, DecodedTokenLogprob,
 };
@@ -32,46 +32,31 @@ impl<T: TextOutputStream> T {
             let stream = self;
             pin_mut!(stream);
             let mut prompt_logprobs = None;
-            let mut logprob_positions: Vec<DecodedPositionLogprobs> = Vec::new();
-
-            // TODO we should not need to accumulate here
-            let mut text = String::new();
-            let mut token_ids = Vec::new();
 
             while let Some(event) = stream.next().await.transpose()? {
                 match event {
                     DecodedTextEvent::Start {
                         prompt_logprobs: start_prompt_logprobs,
-                        prompt_token_count: _,
+                        ..
                     } => {
                         prompt_logprobs = start_prompt_logprobs;
                     }
                     DecodedTextEvent::TextDelta {
                         delta,
-                        token_ids: delta_token_ids,
+                        token_ids,
                         logprobs,
-                    } => {
-                        text.push_str(&delta);
-                        token_ids.extend(delta_token_ids);
-                        if let Some(logprobs) = logprobs {
-                            logprob_positions.extend(logprobs.positions);
-                        }
-                    }
-                    DecodedTextEvent::Done {
-                        prompt_token_count,
-                        finish_reason,
+                        finished: Some(finished),
                     } => {
                         return Ok(CollectedTextOutput {
-                            text,
-                            prompt_token_count,
+                            text: delta,
+                            prompt_token_count: finished.prompt_token_count,
                             prompt_logprobs,
-                            logprobs: (!logprob_positions.is_empty()).then_some(DecodedLogprobs {
-                                positions: logprob_positions,
-                            }),
+                            logprobs,
                             token_ids,
-                            finish_reason,
+                            finish_reason: finished.finish_reason,
                         });
                     }
+                    DecodedTextEvent::TextDelta { .. } => {}
                 }
             }
 
@@ -108,34 +93,31 @@ mod tests {
                 }),
             }),
             Ok(DecodedTextEvent::TextDelta {
-                delta: String::new(),
-                token_ids: vec![1],
-                logprobs: Some(DecodedLogprobs {
-                    positions: vec![DecodedPositionLogprobs {
-                        entries: vec![DecodedTokenLogprob {
-                            token: "a".to_string(),
-                            logprob: -0.2,
-                            rank: 1,
-                        }],
-                    }],
-                }),
-            }),
-            Ok(DecodedTextEvent::TextDelta {
                 delta: "bc".to_string(),
-                token_ids: vec![2],
+                token_ids: vec![1, 2],
                 logprobs: Some(DecodedLogprobs {
-                    positions: vec![DecodedPositionLogprobs {
-                        entries: vec![DecodedTokenLogprob {
-                            token: "bc".to_string(),
-                            logprob: -0.3,
-                            rank: 1,
-                        }],
-                    }],
+                    positions: vec![
+                        DecodedPositionLogprobs {
+                            entries: vec![DecodedTokenLogprob {
+                                token: "a".to_string(),
+                                logprob: -0.2,
+                                rank: 1,
+                            }],
+                        },
+                        DecodedPositionLogprobs {
+                            entries: vec![DecodedTokenLogprob {
+                                token: "bc".to_string(),
+                                logprob: -0.3,
+                                rank: 1,
+                            }],
+                        },
+                    ],
                 }),
-            }),
-            Ok(DecodedTextEvent::Done {
-                prompt_token_count: 2,
-                finish_reason: FinishReason::stop_eos(),
+                finished: Some(Finished {
+                    prompt_token_count: 2,
+                    output_token_count: 2,
+                    finish_reason: FinishReason::stop_eos(),
+                }),
             }),
         ]);
 
