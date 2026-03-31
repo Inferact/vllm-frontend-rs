@@ -21,14 +21,6 @@ use self::model_files::{discover_tiktoken_in_dir, is_tiktoken_file, resolve_mode
 use crate::backend::{SamplingHints, TextBackend};
 use crate::error::{Error, Result};
 
-/// Set this environment variable to `1` to disable `fastokens` and fall back to the HuggingFace
-/// `tokenizers` crate.
-const DISABLE_FASTOKENS_ENV: &str = "VLLM_RS_DISABLE_FASTOKENS";
-
-fn fastokens_disabled() -> bool {
-    std::env::var(DISABLE_FASTOKENS_ENV).is_ok_and(|value| value == "1")
-}
-
 /// Default regex pattern used when loading tiktoken from a BPE file. This is the same
 /// `cl100k_base` pattern that HuggingFace transformers uses as its default in
 /// `TikTokenConverter`.
@@ -57,8 +49,8 @@ impl TokenizerImpl {
     /// 2. File extension — `.tiktoken` / `tiktoken.model` files use tiktoken from BPE data.
     /// 3. `tokenizer_class` in `tokenizer_config.json` — classes containing "Tiktoken" (case-
     ///    insensitive) trigger tiktoken loading from a sibling BPE file.
-    /// 4. Default — `tokenizer.json` loaded via fastokens (or HuggingFace if disabled via
-    ///    `VLLM_RS_DISABLE_FASTOKENS=1`).
+    /// 4. Default — `tokenizer.json` loaded via fastokens, with HuggingFace tokenizers as a
+    ///    fallback if fastokens fails to parse the file.
     fn load(
         tokenizer_path: &std::path::Path,
         tekken_path: Option<&std::path::Path>,
@@ -104,26 +96,18 @@ impl TokenizerImpl {
 
     /// Load from `tokenizer.json` via fastokens or HuggingFace tokenizers.
     fn from_hf_json(path: &std::path::Path) -> Result<Self> {
-        if fastokens_disabled() {
-            info!("loading tokenizer with HuggingFace tokenizers");
-            let t = HfTokenizer::from_file(path).map_err(|error| {
-                Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
-            })?;
-            Ok(Self::Hf(Box::new(t)))
-        } else {
-            info!("loading tokenizer with fastokens");
-            match FastokensTokenizer::from_file(path) {
-                Ok(t) => Ok(Self::Fastokens(Box::new(t))),
-                Err(error) => {
-                    warn!(
-                        error = %error.as_report(),
-                        "failed to load tokenizer with fastokens; falling back to HuggingFace tokenizers"
-                    );
-                    let t = HfTokenizer::from_file(path).map_err(|error| {
-                        Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
-                    })?;
-                    Ok(Self::Hf(Box::new(t)))
-                }
+        info!("loading tokenizer with fastokens");
+        match FastokensTokenizer::from_file(path) {
+            Ok(t) => Ok(Self::Fastokens(Box::new(t))),
+            Err(error) => {
+                warn!(
+                    error = %error.as_report(),
+                    "failed to load tokenizer with fastokens; falling back to HuggingFace tokenizers"
+                );
+                let t = HfTokenizer::from_file(path).map_err(|error| {
+                    Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
+                })?;
+                Ok(Self::Hf(Box::new(t)))
             }
         }
     }
