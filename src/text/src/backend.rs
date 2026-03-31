@@ -24,6 +24,11 @@ pub trait TextBackend: Send + Sync {
     /// Return the tokenizer used by this backend.
     fn tokenizer(&self) -> DynTokenizer;
 
+    /// Return whether the loaded model is a mixture-of-experts model.
+    fn is_moe(&self) -> bool {
+        false
+    }
+
     /// Return the backend model ID when available.
     fn model_id(&self) -> Option<&str> {
         None

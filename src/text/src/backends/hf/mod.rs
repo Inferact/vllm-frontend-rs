@@ -2,7 +2,6 @@ mod config;
 mod model_files;
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::sync::Arc;
 
 use tracing::info;
@@ -24,12 +23,7 @@ fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
 }
 
 /// [`TextBackend`] implementation built on Hugging Face model files.
-#[derive(Clone)]
 pub struct HfTextBackend {
-    inner: Arc<HfTextBackendInner>,
-}
-
-struct HfTextBackendInner {
     model_id: String,
     files: ResolvedModelFiles,
     tokenizer: DynTokenizer,
@@ -42,12 +36,6 @@ struct HfTextBackendInner {
     generation_config: GenerationConfig,
     /// Model config (`config.json`).
     model_config: ModelConfig,
-}
-
-impl fmt::Debug for HfTextBackend {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HfTextBackend").finish_non_exhaustive()
-    }
 }
 
 impl HfTextBackend {
@@ -85,49 +73,46 @@ impl HfTextBackend {
         );
 
         Ok(Self {
-            inner: Arc::new(HfTextBackendInner {
-                model_id,
-                files,
-                tokenizer,
-                primary_eos_token_id,
-                extra_eos_token_ids,
-                generation_config,
-                model_config,
-            }),
+            model_id,
+            files,
+            tokenizer,
+            primary_eos_token_id,
+            extra_eos_token_ids,
+            generation_config,
+            model_config,
         })
     }
 
     /// Expose the resolved model files for use by the chat backend to load the chat template.
     pub fn resolved_model_files(&self) -> &ResolvedModelFiles {
-        &self.inner.files
-    }
-
-    /// Return whether the loaded model config indicates a mixture-of-experts model.
-    pub fn is_moe(&self) -> bool {
-        self.inner.model_config.is_moe()
+        &self.files
     }
 }
 
 impl TextBackend for HfTextBackend {
     fn tokenizer(&self) -> DynTokenizer {
-        self.inner.tokenizer.clone()
+        self.tokenizer.clone()
+    }
+
+    fn is_moe(&self) -> bool {
+        self.model_config.is_moe()
     }
 
     fn model_id(&self) -> Option<&str> {
-        Some(&self.inner.model_id)
+        Some(&self.model_id)
     }
 
     fn sampling_hints(&self) -> Result<SamplingHints> {
         Ok(SamplingHints {
-            primary_eos_token_id: self.inner.primary_eos_token_id,
-            extra_eos_token_ids: self.inner.extra_eos_token_ids.clone(),
-            default_temperature: self.inner.generation_config.temperature,
-            default_top_p: self.inner.generation_config.top_p,
-            default_top_k: self.inner.generation_config.top_k,
-            default_min_p: self.inner.generation_config.min_p,
-            default_repetition_penalty: self.inner.generation_config.repetition_penalty,
-            default_max_tokens: self.inner.generation_config.max_new_tokens,
-            max_model_len: self.inner.model_config.effective_max_position_embeddings(),
+            primary_eos_token_id: self.primary_eos_token_id,
+            extra_eos_token_ids: self.extra_eos_token_ids.clone(),
+            default_temperature: self.generation_config.temperature,
+            default_top_p: self.generation_config.top_p,
+            default_top_k: self.generation_config.top_k,
+            default_min_p: self.generation_config.min_p,
+            default_repetition_penalty: self.generation_config.repetition_penalty,
+            default_max_tokens: self.generation_config.max_new_tokens,
+            max_model_len: self.model_config.effective_max_position_embeddings(),
         })
     }
 }
