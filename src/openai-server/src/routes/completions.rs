@@ -56,8 +56,6 @@ pub(super) async fn completions(
         "completion"
     );
 
-    // TODO: as optimization consider passing streaming flag so that underlying stream
-    //       doesn't need to produce delta strings
     let text_stream = match state.chat.text().generate(prepared.text_request).await {
         Ok(stream) => stream,
         Err(error) => {

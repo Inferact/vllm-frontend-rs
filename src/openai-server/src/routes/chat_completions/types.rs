@@ -195,7 +195,7 @@ pub struct ChatCompletionRequest {
     pub return_hidden_states: bool,
 
     /// Random seed for sampling for deterministic outputs
-    pub sampling_seed: Option<u64>,
+    pub sampling_seed: Option<i64>,
 
     /// If true, the new message will be prepended with the last message if they belong to the same
     /// role.

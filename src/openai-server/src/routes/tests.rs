@@ -2788,7 +2788,7 @@ async fn non_stream_completions_stop_string_excluded_from_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn non_stream_completions_stop_string_included_in_output() {
-    // Same tokens but no_stop_trim=true includes the stop string in the output.
+    // Same tokens but include_stop_str_in_output=true includes the stop string in the output.
     let output_specs = vec![
         (bytes_to_token_ids(b"say"), None),
         (
@@ -2811,7 +2811,7 @@ async fn non_stream_completions_stop_string_included_in_output() {
                         "prompt": "hello",
                         "stream": false,
                         "stop": ["wor"],
-                        "no_stop_trim": true
+                        "include_stop_str_in_output": true
                     })
                     .to_string(),
                 ))
@@ -2924,7 +2924,7 @@ async fn stream_completions_stop_string_included_in_output() {
                         "prompt": "hello",
                         "stream": true,
                         "stop": ["wor"],
-                        "no_stop_trim": true
+                        "include_stop_str_in_output": true
                     })
                     .to_string(),
                 ))
@@ -2953,7 +2953,7 @@ async fn stream_completions_stop_string_included_in_output() {
         }
     }
 
-    // With no_stop_trim, the stop string "wor" should be included.
+    // With include_stop_str_in_output, the stop string "wor" should be included.
     assert_eq!(full_text, "say wor", "full streamed text: {text}");
 
     assert!(
