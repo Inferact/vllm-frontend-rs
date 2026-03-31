@@ -4,6 +4,8 @@
 //! - Engine args: <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/engine/arg_utils.py#L657-L1311>
 //! - Environment variables: <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/envs.py#L472>
 
+mod utils;
+
 use std::ffi::OsString;
 use std::time::Duration;
 
@@ -12,8 +14,6 @@ use vllm_openai_server::Config;
 
 use crate::cli::utils::{not_help, rewrite_serve_legacy_aliases, split_name_from_args};
 use crate::managed_engine::ManagedEngineConfig;
-
-mod utils;
 
 const MAX_WIDTH: usize = 100;
 
