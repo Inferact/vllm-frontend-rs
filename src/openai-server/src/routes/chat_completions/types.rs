@@ -2,14 +2,16 @@ use std::collections::HashMap;
 
 use openai_protocol::chat::{ChatMessage, MessageContent};
 use openai_protocol::common::{
-    ChatLogProbs, ResponseFormat, StreamOptions, StringOrArray, Tool, ToolCall, ToolCallDelta,
-    ToolChoice, ToolChoiceValue, ToolReference, Usage, default_true, validate_stop,
+    ResponseFormat, StringOrArray, Tool, ToolCall, ToolCallDelta, ToolChoice, ToolChoiceValue,
+    ToolReference, default_true, validate_stop,
 };
 use openai_protocol::sampling_params::{validate_top_k_value, validate_top_p_value};
 use openai_protocol::validated::Normalizable;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use validator::Validate;
+
+use crate::routes::utils::types::{ChatLogProbs, StreamOptions, Usage};
 
 /// vLLM-compatible request type for the Chat Completions API.
 ///

@@ -12,9 +12,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
-use openai_protocol::common::{
-    ChatLogProbs, FunctionCallDelta, FunctionCallResponse, ToolCall, ToolCallDelta, Usage,
-};
+use openai_protocol::common::{FunctionCallDelta, FunctionCallResponse, ToolCall, ToolCallDelta};
 use openai_protocol::validated::ValidatedJson;
 use serde_json::Value;
 use thiserror_ext::AsReport as _;
@@ -34,6 +32,7 @@ use crate::routes::chat_completions::types::{
 use crate::routes::utils::logprobs::{
     decoded_logprobs_to_openai_chat, decoded_prompt_logprobs_to_maps,
 };
+use crate::routes::utils::types::{ChatLogProbs, Usage};
 use crate::routes::utils::unix_timestamp;
 use crate::state::AppState;
 
@@ -349,7 +348,7 @@ fn usage_chunk(
 /// following `LogprobsDelta` and flushes one combined chunk. It relies on the
 /// current `vllm-chat` invariant that all semantic events from one decoded
 /// update are emitted before that update's `LogprobsDelta`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct PendingChatChunk {
     /// The currently buffered OpenAI delta payload assembled from one or more
     /// chat semantic events belonging to the same decoded update.
@@ -357,15 +356,6 @@ struct PendingChatChunk {
     /// The token-aligned logprobs for that same decoded update, filled only
     /// once [`ChatEvent::LogprobsDelta`] arrives.
     logprobs: Option<ChatLogProbs>,
-}
-
-impl Default for PendingChatChunk {
-    fn default() -> Self {
-        Self {
-            delta: ChatMessageDelta::default(),
-            logprobs: None,
-        }
-    }
 }
 
 impl PendingChatChunk {
@@ -674,13 +664,13 @@ fn stop_reason_to_json(stop_reason: &StopReason) -> Value {
 #[cfg(test)]
 mod tests {
     use futures::{StreamExt as _, stream};
-    use openai_protocol::common::ChatLogProbs;
     use serde_json::json;
     use vllm_chat::{AssistantBlockKind, ChatEvent, FinishReason};
     use vllm_engine_core_client::protocol::StopReason;
     use vllm_text::{DecodedLogprobs, DecodedPositionLogprobs, DecodedTokenLogprob};
 
     use super::{block_delta_chunk, chat_completion_chunk_stream, final_chunk};
+    use crate::routes::utils::types::ChatLogProbs;
 
     #[test]
     fn text_chunk_uses_content_only_delta() {
@@ -805,14 +795,9 @@ mod tests {
 
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[1].choices[0].delta.content.as_deref(), Some("hi"));
-        match chunks[1].choices[0].logprobs.as_ref().expect("logprobs") {
-            ChatLogProbs::Detailed {
-                content: Some(content),
-            } => {
-                assert_eq!(content[0].token, "hi");
-            }
-            other => panic!("unexpected chat logprobs shape: {other:?}"),
-        }
+        let logprobs = chunks[1].choices[0].logprobs.as_ref().expect("logprobs");
+        let content = logprobs.content.as_ref().expect("logprobs content");
+        assert_eq!(content[0].token, "hi");
     }
 
     #[tokio::test]

@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use openai_protocol::common::{
-    LogProbs, StreamOptions, StringOrArray, Usage, default_true, validate_stop,
-};
+use openai_protocol::common::{LogProbs, StringOrArray, default_true, validate_stop};
 use openai_protocol::validated::Normalizable;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use validator::Validate;
 use vllm_text::Prompt;
+
+use crate::routes::utils::types::{StreamOptions, Usage};
 
 /// vLLM-compatible request type for the Completions API.
 ///

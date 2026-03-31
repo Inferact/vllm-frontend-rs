@@ -11,7 +11,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
-use openai_protocol::common::{LogProbs, Usage};
+use openai_protocol::common::LogProbs;
 use openai_protocol::validated::ValidatedJson;
 use thiserror_ext::AsReport as _;
 use tracing::{debug, error, info};
@@ -21,6 +21,7 @@ use super::utils::logprobs::{
     collected_logprobs_to_openai, decoded_logprobs_to_openai, decoded_prompt_logprobs_to_maps,
     text_len,
 };
+use super::utils::types::Usage;
 use super::utils::unix_timestamp;
 use crate::error::{ApiError, bail_server_error, server_error};
 use crate::routes::completions::convert::prepare_completion_request;
