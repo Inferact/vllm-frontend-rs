@@ -55,7 +55,8 @@ pub enum Command {
 }
 
 /// Runtime arguments shared by the external-engine and managed-engine paths.
-#[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[derive(Educe, Clone, Args, PartialEq, Eq)]
+#[educe(Debug)]
 pub struct FrontendRuntimeArgs {
     /// Hugging Face model identifier used both for backend loading and public model ID.
     pub model: String,
@@ -81,6 +82,7 @@ pub struct FrontendRuntimeArgs {
     #[arg(long)]
     pub max_model_len: Option<u32>,
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
+    #[educe(Debug(ignore))]
     #[command(flatten)]
     pub unsupported: UnsupportedArgs,
 }
@@ -242,6 +244,11 @@ mod tests {
             Cli {
                 command: Serve(
                     ServeArgs {
+                        headless: false,
+                        python: "../vllm/.venv/bin/python",
+                        handshake_host: "127.0.0.1",
+                        handshake_port: None,
+                        engine_count: 1,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
@@ -253,11 +260,6 @@ mod tests {
                                 512,
                             ),
                         },
-                        headless: false,
-                        python: "../vllm/.venv/bin/python",
-                        handshake_host: "127.0.0.1",
-                        handshake_port: None,
-                        engine_count: 1,
                         python_args: [
                             "--dtype",
                             "float16",
@@ -290,6 +292,53 @@ mod tests {
                 vllm-rs serve <model> -- --dtype
 
             Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_value_arg() {
+        let error = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--tokenizer-mode",
+            "auto",
+        ])
+        .unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'auto' for '--tokenizer-mode <TOKENIZER_MODE>': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_flag_arg() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--trust-remote-code"])
+                .unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'true' for '--trust-remote-code [<TRUST_REMOTE_CODE>]': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_no_flag_alias() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--no-enable-lora"])
+                .unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'true' for '--enable-lora [<ENABLE_LORA>]': argument is not implemented in Rust frontend yet
 
             For more information, try '--help'.
         "#]]
@@ -344,6 +393,13 @@ mod tests {
             Cli {
                 command: Serve(
                     ServeArgs {
+                        headless: false,
+                        python: "python3",
+                        handshake_host: "10.99.48.128",
+                        handshake_port: Some(
+                            13345,
+                        ),
+                        engine_count: 4,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
@@ -353,13 +409,6 @@ mod tests {
                             reasoning_parser: None,
                             max_model_len: None,
                         },
-                        headless: false,
-                        python: "python3",
-                        handshake_host: "10.99.48.128",
-                        handshake_port: Some(
-                            13345,
-                        ),
-                        engine_count: 4,
                         python_args: [],
                     },
                 ),
@@ -409,6 +458,11 @@ mod tests {
             Cli {
                 command: Serve(
                     ServeArgs {
+                        headless: false,
+                        python: "python3",
+                        handshake_host: "127.0.0.1",
+                        handshake_port: None,
+                        engine_count: 2,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
@@ -418,11 +472,6 @@ mod tests {
                             reasoning_parser: None,
                             max_model_len: None,
                         },
-                        headless: false,
-                        python: "python3",
-                        handshake_host: "127.0.0.1",
-                        handshake_port: None,
-                        engine_count: 2,
                         python_args: [],
                     },
                 ),
@@ -462,6 +511,11 @@ mod tests {
             Cli {
                 command: Serve(
                     ServeArgs {
+                        headless: false,
+                        python: "python3",
+                        handshake_host: "127.0.0.1",
+                        handshake_port: None,
+                        engine_count: 1,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
@@ -471,11 +525,6 @@ mod tests {
                             reasoning_parser: None,
                             max_model_len: None,
                         },
-                        headless: false,
-                        python: "python3",
-                        handshake_host: "127.0.0.1",
-                        handshake_port: None,
-                        engine_count: 1,
                         python_args: [
                             "--tensor-parallel-size",
                             "2",
