@@ -32,9 +32,7 @@ impl<T: TextOutputStream> T {
             let stream = self;
             pin_mut!(stream);
             let mut prompt_logprobs = None;
-            let mut text = String::new();
-            let mut token_ids = Vec::new();
-            let mut logprobs: Option<DecodedLogprobs> = None;
+            let mut collected: Option<CollectedTextOutput> = None;
 
             while let Some(event) = stream.next().await.transpose()? {
                 match event {
@@ -47,27 +45,36 @@ impl<T: TextOutputStream> T {
                     DecodedTextEvent::TextDelta {
                         delta,
                         token_ids: delta_token_ids,
-                        logprobs: delta_logprobs,
+                        logprobs: mut delta_logprobs,
                         finished,
                     } => {
-                        text.push_str(&delta);
-                        token_ids.extend(delta_token_ids);
-                        if let Some(delta_logprobs) = delta_logprobs {
-                            logprobs
-                                .get_or_insert_with(|| DecodedLogprobs { positions: vec![] })
-                                .positions
-                                .extend(delta_logprobs.positions);
-                        }
+                        if let Some(c) = collected.as_mut() {
+                            c.text.push_str(&delta);
+                            c.token_ids.extend(delta_token_ids);
+                            if let Some(dlp) = delta_logprobs.as_mut() {
+                                if let Some(lp) = c.logprobs.as_mut() {
+                                    lp.positions.extend_from_slice(&dlp.positions);
+                                } else {
+                                    c.logprobs = delta_logprobs;
+                                }
+                            }
+                        } else {
+                            collected = Some(CollectedTextOutput {
+                                text: delta,
+                                prompt_logprobs: prompt_logprobs.take(),
+                                logprobs: delta_logprobs,
+                                token_ids: delta_token_ids,
+                                // These are updated below.
+                                prompt_token_count: 0,
+                                finish_reason: FinishReason::Error,
+                            })
+                        };
 
                         if let Some(finished) = finished {
-                            return Ok(CollectedTextOutput {
-                                text,
-                                prompt_token_count: finished.prompt_token_count,
-                                prompt_logprobs,
-                                logprobs,
-                                token_ids,
-                                finish_reason: finished.finish_reason,
-                            });
+                            let mut collected = collected.unwrap();
+                            collected.prompt_token_count = finished.prompt_token_count;
+                            collected.finish_reason = finished.finish_reason;
+                            return Ok(collected);
                         }
                     }
                 }
