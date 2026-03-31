@@ -10,14 +10,20 @@ use std::time::Duration;
 use bpaf::{Args, Bpaf, ParseFailure};
 use vllm_openai_server::Config;
 
+use crate::cli::utils::{not_help, rewrite_serve_legacy_aliases, split_name_from_args};
 use crate::managed_engine::ManagedEngineConfig;
+
+mod utils;
+
+const MAX_WIDTH: usize = 100;
 
 /// Top-level parser for the `vllm-rs` binary.
 #[derive(Debug, Clone, PartialEq, Eq, Bpaf)]
 #[bpaf(
     options("vllm-rs"),
     descr("Rust frontend and managed-engine CLI for vLLM."),
-    fallback_to_usage
+    fallback_to_usage,
+    max_width(MAX_WIDTH)
 )]
 pub struct Cli {
     #[bpaf(external(command))]
@@ -26,16 +32,19 @@ pub struct Cli {
 
 impl Cli {
     pub fn parse() -> Self {
-        cli().run()
+        Self::try_parse_from(std::env::args_os()).unwrap_or_else(|failure| {
+            failure.print_message(MAX_WIDTH);
+            std::process::exit(failure.exit_code());
+        })
     }
 
-    #[allow(dead_code)]
     fn try_parse_from<I, T>(itr: I) -> Result<Self, ParseFailure>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString>,
     {
         let (name, args) = split_name_from_args(itr);
+        let args = rewrite_serve_legacy_aliases(args);
         cli().run_inner(Args::from(args.as_slice()).set_name(&name))
     }
 }
@@ -222,23 +231,6 @@ impl ServeArgs {
     }
 }
 
-fn split_name_from_args<I, T>(itr: I) -> (String, Vec<OsString>)
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString>,
-{
-    let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
-    let name = args
-        .first()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "vllm-rs".to_string());
-    (name, args.into_iter().skip(1).collect())
-}
-
-fn not_help(arg: String) -> Option<String> {
-    (!matches!(arg.as_str(), "--help" | "-h")).then_some(arg)
-}
-
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
@@ -355,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_args_leave_python_multi_char_single_dash_aliases_in_passthrough() {
+    fn serve_args_rewrite_legacy_multi_char_single_dash_aliases_before_separator() {
         let cli = Cli::try_parse_from([
             "vllm-rs",
             "serve",
@@ -377,7 +369,7 @@ mod tests {
                         python: "python3",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        engine_count: 1,
+                        engine_count: 4,
                         runtime: FrontendRuntimeArgs {
                             host: "127.0.0.1",
                             port: 9123,
@@ -387,15 +379,56 @@ mod tests {
                             max_model_len: None,
                             model: "Qwen/Qwen3-0.6B",
                         },
-                        python_args: [
-                            "-dp",
-                            "4",
-                        ],
+                        python_args: [],
                     },
                 ),
             }
         "#]]
         .assert_debug_eq(&cli);
+    }
+
+    #[test]
+    fn serve_args_accept_legacy_data_parallel_aliases_before_separator() {
+        let cli = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "-dpa",
+            "10.99.48.128",
+            "-dpp=13345",
+            "-dp",
+            "4",
+            "Qwen/Qwen3-0.6B",
+        ])
+        .unwrap();
+
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve args");
+        };
+        assert_eq!(args.handshake_host, "10.99.48.128");
+        assert_eq!(args.handshake_port, Some(13345));
+        assert_eq!(args.engine_count, 4);
+        assert!(args.python_args.is_empty());
+    }
+
+    #[test]
+    fn serve_args_keep_legacy_aliases_after_separator_in_passthrough() {
+        let cli = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--",
+            "-dpa=10.99.48.128",
+            "-dpp",
+            "13345",
+        ])
+        .unwrap();
+
+        let Command::Serve(args) = cli.command else {
+            panic!("expected serve args");
+        };
+        assert_eq!(args.handshake_host, "127.0.0.1");
+        assert_eq!(args.handshake_port, None);
+        assert_eq!(args.python_args, ["-dpa=10.99.48.128", "-dpp", "13345"]);
     }
 
     #[test]
