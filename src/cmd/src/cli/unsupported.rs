@@ -438,7 +438,7 @@ pub struct ServerUnsupportedArgs {
     pub tool_server: Option<Unsupported>,
 
     /// Path to logging config JSON file for both vllm and uvicorn
-    #[arg(long, env = "VLLM_LOGGING_CONFIG_PATH")]
+    #[arg(long, /* env = "VLLM_LOGGING_CONFIG_PATH" */)]
     pub log_config_file: Option<Unsupported>,
 
     /// Max number of prompt characters or prompt ID numbers being printed in
@@ -507,7 +507,7 @@ pub struct ServerUnsupportedArgs {
     /// If set to True, log the stack trace of error responses
     #[arg(
         long,
-        env = "VLLM_SERVER_DEV_MODE",
+        // env = "VLLM_SERVER_DEV_MODE",
         visible_alias = "no-log-error-stack",
         default_missing_value = "true",
         num_args = 0..=1
