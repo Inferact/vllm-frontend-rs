@@ -1,10 +1,10 @@
 [package]
-name = "vllm-openai-server"
+name = "vllm-server"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "vllm_openai_server"
+name = "vllm_server"
 path = "src/lib.rs"
 
 [dependencies]
