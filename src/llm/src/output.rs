@@ -8,7 +8,7 @@ use futures::stream::FusedStream;
 use serde::{Deserialize, Serialize};
 use vllm_engine_core_client::EngineCoreOutputStream;
 use vllm_engine_core_client::protocol::{
-    EngineCoreFinishReason, EngineCoreOutput, Logprobs, StopReason,
+    EngineCoreFinishReason, EngineCoreOutput, Logprobs, OpaqueValue, StopReason,
 };
 
 use crate::error::Result;
@@ -124,6 +124,13 @@ impl GenerateOutput {
             EngineCoreFinishReason::Error => FinishReason::Error,
             EngineCoreFinishReason::Repetition => FinishReason::Repetition,
         })
+    }
+
+    /// Takes connector-specific KV transfer parameters from the engine output, if present.
+    ///
+    /// These are only populated on the terminal output for disaggregated-serving requests.
+    pub fn take_kv_transfer_params(&mut self) -> Option<OpaqueValue> {
+        self.raw.kv_transfer_params.take()
     }
 
     /// Returns whether this output is terminal for the request.
