@@ -77,6 +77,25 @@ fn serve_args_reject_python_flags_without_separator() {
 }
 
 #[test]
+fn serve_args_reject_python_multi_char_engine_alias_without_separator() {
+    let error =
+        Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "-tp", "2"]).unwrap_err();
+
+    expect![[r#"
+            error: unrecognized serve argument "--tensor-parallel-size"
+
+            This may be a flag the Rust frontend does not support yet, or a Python vLLM engine flag.
+            If it is a Python engine flag, pass it after `--`, for example:
+                vllm-rs serve <model> -- --tensor-parallel-size
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+    .assert_eq(&error.to_string());
+}
+
+#[test]
 fn serve_args_reject_unsupported_value_arg() {
     let error = Cli::try_parse_from([
         "vllm-rs",
@@ -376,6 +395,53 @@ fn serve_args_keep_python_passthrough_flags_after_separator() {
 }
 
 #[test]
+fn serve_args_keep_python_multi_char_alias_after_separator() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "serve",
+        "Qwen/Qwen3-0.6B",
+        "--python",
+        "python3",
+        "--",
+        "-tp",
+        "2",
+        "--dtype",
+        "float16",
+    ])
+    .unwrap();
+
+    expect![[r#"
+            Cli {
+                command: Serve(
+                    ServeArgs {
+                        headless: false,
+                        python: "python3",
+                        handshake_host: "127.0.0.1",
+                        handshake_port: None,
+                        runtime: SharedRuntimeArgs {
+                            model: "Qwen/Qwen3-0.6B",
+                            host: "127.0.0.1",
+                            port: 8000,
+                            engine_count: 1,
+                            ready_timeout_secs: 300,
+                            tool_call_parser: None,
+                            reasoning_parser: None,
+                            max_model_len: None,
+                        },
+                        python_args: [
+                            "-tp",
+                            "2",
+                            "--dtype",
+                            "float16",
+                        ],
+                    },
+                ),
+            }
+        "#]]
+    .assert_debug_eq(&cli);
+}
+
+#[test]
 fn serve_args_reject_rust_long_flag_after_separator() {
     let error = Cli::try_parse_from([
         "vllm-rs",
@@ -455,6 +521,26 @@ fn serve_args_reject_python_multi_char_alias_for_unsupported_value_arg_after_sep
 }
 
 #[test]
+fn serve_args_keep_python_multi_char_engine_aliases_after_separator() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "serve",
+        "Qwen/Qwen3-0.6B",
+        "--",
+        "-dpr",
+        "1",
+        "-dpl",
+        "2",
+    ])
+    .unwrap();
+
+    let Command::Serve(args) = cli.command else {
+        panic!("expected serve args");
+    };
+    assert_eq!(args.python_args, vec!["-dpr", "1", "-dpl", "2"]);
+}
+
+#[test]
 fn serve_args_reject_python_multi_char_alias_for_unsupported_flag_after_separator() {
     let error =
         Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--", "-dph"]).unwrap_err();
@@ -507,6 +593,24 @@ fn serve_args_reject_unsupported_server_arg_after_separator() {
 
             Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
             Use "--uds" before `--` to configure `vllm-rs serve`.
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+    .assert_eq(&error.to_string());
+}
+
+#[test]
+fn serve_args_reject_python_multi_char_alias_for_serve_only_arg_after_separator() {
+    let error = Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--", "-asc", "2"])
+        .unwrap_err();
+
+    expect![[r#"
+            error: misplaced serve argument "-asc" after `--`
+
+            Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
+            Use "--api-server-count" before `--` to configure `vllm-rs serve`.
 
             Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
 

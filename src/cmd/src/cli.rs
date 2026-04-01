@@ -39,8 +39,9 @@ impl Cli {
         T: Into<OsString>,
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
-        <Self as Parser>::try_parse_from(args.clone())
-            .map_err(|error| serve_validate::rewrite_unknown_arg_error(&args, error))
+        let normalized_args = serve_validate::normalize_python_arg_aliases(&args);
+        <Self as Parser>::try_parse_from(normalized_args.clone())
+            .map_err(|error| serve_validate::rewrite_unknown_arg_error(&normalized_args, error))
             .and_then(serve_validate::validate_passthrough_args)
     }
 }
