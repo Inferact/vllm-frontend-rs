@@ -344,6 +344,57 @@ mod tests {
     }
 
     #[test]
+    fn serve_args_reject_unsupported_server_value_arg() {
+        let error = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--uds",
+            "/tmp/vllm.sock",
+        ])
+        .unwrap_err();
+
+        expect![[r#"
+            error: invalid value '/tmp/vllm.sock' for '--uds <UDS>': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_server_flag_arg() {
+        let error =
+            Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--allow-credentials"])
+                .unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'true' for '--allow-credentials [<ALLOW_CREDENTIALS>]': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_server_no_flag_alias() {
+        let error = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--no-enable-log-deltas",
+        ])
+        .unwrap_err();
+
+        expect![[r#"
+            error: invalid value 'true' for '--enable-log-deltas [<ENABLE_LOG_DELTAS>]': argument is not implemented in Rust frontend yet
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
     fn frontend_args_accept_engine_count() {
         let cli = Cli::try_parse_from([
             "vllm-rs",
@@ -642,6 +693,31 @@ mod tests {
 
             Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
             Use "--data-parallel-external-lb" before `--` to configure `vllm-rs serve`.
+
+            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+
+            For more information, try '--help'.
+        "#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn serve_args_reject_unsupported_server_arg_after_separator() {
+        let error = Cli::try_parse_from([
+            "vllm-rs",
+            "serve",
+            "Qwen/Qwen3-0.6B",
+            "--",
+            "--uds",
+            "/tmp/vllm.sock",
+        ])
+        .unwrap_err();
+
+        expect![[r#"
+            error: misplaced serve argument "--uds" after `--`
+
+            Arguments after `--` are forwarded directly to the managed Python `vllm serve --headless` process.
+            Use "--uds" before `--` to configure `vllm-rs serve`.
 
             Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
 

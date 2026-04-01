@@ -9,6 +9,7 @@ use crate::cli::{Cli, Command};
 /// Python `argparse` accepts these multi-character single-dash aliases for overlapping
 /// data-parallel flags, but `clap` cannot model them as Rust-side aliases directly.
 const EXTRA_PASSTHROUGH_ALIASES: &[(&str, &str)] = &[
+    ("-asc", "--api-server-count"),
     ("-dp", "--data-parallel-size"),
     ("-dpn", "--data-parallel-rank"),
     ("-dpa", "--data-parallel-address"),
