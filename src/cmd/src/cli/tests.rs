@@ -427,26 +427,26 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
     let config = args.to_frontend_config("tcp://10.99.48.128:29550".to_string());
 
     expect![[r#"
-            Config {
-                transport_mode: HandshakeOwner {
-                    handshake_address: "tcp://10.99.48.128:29550",
-                    advertised_host: "10.99.48.128",
-                    engine_count: 4,
-                    ready_timeout: 300s,
-                    local_input_address: None,
-                    local_output_address: None,
-                },
-                coordinator_mode: InProc,
-                model: "Qwen/Qwen3-0.6B",
-                listener_mode: Bind {
-                    host: "127.0.0.1",
-                    port: 8000,
-                },
-                tool_call_parser: None,
-                reasoning_parser: None,
-                max_model_len: None,
-            }
-        "#]]
+        Config {
+            transport_mode: HandshakeOwner {
+                handshake_address: "tcp://10.99.48.128:29550",
+                advertised_host: "10.99.48.128",
+                engine_count: 4,
+                ready_timeout: 300s,
+                local_input_address: None,
+                local_output_address: None,
+            },
+            coordinator_mode: MaybeInProc,
+            model: "Qwen/Qwen3-0.6B",
+            listener_mode: Bind {
+                host: "127.0.0.1",
+                port: 8000,
+            },
+            tool_call_parser: None,
+            reasoning_parser: None,
+            max_model_len: None,
+        }
+    "#]]
     .assert_debug_eq(&config);
 }
 
