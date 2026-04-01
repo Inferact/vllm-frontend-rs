@@ -3,10 +3,6 @@ name = "vllm-server"
 version.workspace = true
 edition.workspace = true
 
-[lib]
-name = "vllm_server"
-path = "src/lib.rs"
-
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
