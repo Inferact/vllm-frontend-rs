@@ -92,10 +92,15 @@ fn serve_args_keep_frontend_unsupported_args_before_separator() {
     .unwrap_err();
 
     expect![[r#"
-            error: invalid value 'auto' for '--tokenizer-mode <TOKENIZER_MODE>': argument is not implemented in Rust frontend yet
+        error: invalid value 'auto' for '--tokenizer-mode <TOKENIZER_MODE>': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -105,10 +110,15 @@ fn serve_args_reject_unsupported_flag_arg() {
         .unwrap_err();
 
     expect![[r#"
-            error: invalid value 'true' for '--trust-remote-code [<TRUST_REMOTE_CODE>]': argument is not implemented in Rust frontend yet
+        error: invalid value 'true' for '--trust-remote-code [<TRUST_REMOTE_CODE>]': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -118,10 +128,15 @@ fn serve_args_reject_unsupported_no_flag_alias() {
         .unwrap_err();
 
     expect![[r#"
-            error: invalid value 'true' for '--enable-lora [<ENABLE_LORA>]': argument is not implemented in Rust frontend yet
+        error: invalid value 'true' for '--enable-lora [<ENABLE_LORA>]': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -131,10 +146,15 @@ fn serve_args_reject_unsupported_bare_hf_token() {
         Cli::try_parse_from(["vllm-rs", "serve", "Qwen/Qwen3-0.6B", "--hf-token"]).unwrap_err();
 
     expect![[r#"
-            error: invalid value 'true' for '--hf-token [<HF_TOKEN>]': argument is not implemented in Rust frontend yet
+        error: invalid value 'true' for '--hf-token [<HF_TOKEN>]': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -150,10 +170,15 @@ fn serve_args_reject_unsupported_server_value_arg() {
     .unwrap_err();
 
     expect![[r#"
-            error: invalid value '/tmp/vllm.sock' for '--uds <UDS>': argument is not implemented in Rust frontend yet
+        error: invalid value '/tmp/vllm.sock' for '--uds <UDS>': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -163,10 +188,15 @@ fn serve_args_reject_unsupported_server_flag_arg() {
         .unwrap_err();
 
     expect![[r#"
-            error: invalid value 'true' for '--allow-credentials [<ALLOW_CREDENTIALS>]': argument is not implemented in Rust frontend yet
+        error: invalid value 'true' for '--allow-credentials [<ALLOW_CREDENTIALS>]': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -181,10 +211,15 @@ fn serve_args_reject_unsupported_server_no_flag_alias() {
     .unwrap_err();
 
     expect![[r#"
-            error: invalid value 'true' for '--enable-log-deltas [<ENABLE_LOG_DELTAS>]': argument is not implemented in Rust frontend yet
+        error: invalid value 'true' for '--enable-log-deltas [<ENABLE_LOG_DELTAS>]': argument is not implemented in Rust frontend yet
 
-            For more information, try '--help'.
-        "#]]
+        Remove this unsupported argument to continue.
+
+        Alternatively, if you intend to pass it only to the Python engine, put it after `--` (e.g., `-- <arg>`).
+        This may lead to unexpected behavior as the Rust frontend will completely ignore that argument.
+
+        For more information, try '--help'.
+    "#]]
     .assert_eq(&error.to_string());
 }
 
@@ -216,21 +251,6 @@ fn frontend_args_accept_engine_count() {
                         tool_call_parser: None,
                         reasoning_parser: None,
                         max_model_len: None,
-            Cli {
-                command: Frontend(
-                    FrontendArgs {
-                        advertised_host: "127.0.0.1",
-                        handshake_address: "tcp://127.0.0.1:62100",
-                        runtime: SharedRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            host: "127.0.0.1",
-                            port: 8000,
-                            engine_count: 2,
-                            ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: None,
-                        },
                     },
                 },
             ),
