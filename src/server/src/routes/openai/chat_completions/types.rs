@@ -326,6 +326,7 @@ pub(super) struct ChatCompletionResponse {
     pub usage: Option<Usage>,
     pub system_fingerprint: Option<String>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
+    pub prompt_token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM `ChatCompletionResponseChoice` class.
@@ -337,6 +338,7 @@ pub(super) struct ChatCompletionChoice {
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
+    pub token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM response `ChatMessage` class.
@@ -359,6 +361,7 @@ pub(super) struct ChatCompletionStreamResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionStreamChoice>,
     pub usage: Option<Usage>,
+    pub prompt_token_ids: Option<Vec<u32>>,
 }
 
 impl ChatCompletionStreamResponse {
@@ -371,6 +374,7 @@ impl ChatCompletionStreamResponse {
             model: model.to_string(),
             choices: Vec::new(),
             usage: None,
+            prompt_token_ids: None,
         }
     }
 }
@@ -385,6 +389,7 @@ pub(super) struct ChatCompletionStreamChoice {
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
+    pub token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM `DeltaMessage` class.
