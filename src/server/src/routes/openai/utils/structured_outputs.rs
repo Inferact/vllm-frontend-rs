@@ -13,7 +13,7 @@ pub struct JsonSchemaFormat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// The actual JSON schema object.
-    #[serde(alias = "json_schema", default)]
+    #[serde(alias = "json_schema")]
     pub schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
