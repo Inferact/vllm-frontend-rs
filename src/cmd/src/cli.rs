@@ -66,6 +66,9 @@ pub struct FrontendRuntimeArgs {
     /// HTTP bind port for the OpenAI-compatible server.
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
+    /// Total number of data-parallel engines expected to join the shared handshake socket.
+    #[arg(long, visible_alias = "data-parallel-size", default_value_t = 1)]
+    pub engine_count: usize,
     /// Maximum time to wait for the engine handshake to complete.
     #[arg(long, env = "VLLM_ENGINE_READY_TIMEOUT_S", default_value_t = 300)]
     pub ready_timeout_secs: u64,
@@ -89,15 +92,10 @@ pub struct FrontendRuntimeArgs {
 
 impl FrontendRuntimeArgs {
     /// Build one OpenAI-server runtime config for the resolved handshake address.
-    fn into_config(
-        self,
-        handshake_address: String,
-        engine_count: usize,
-        advertised_host: String,
-    ) -> Config {
+    fn into_config(self, handshake_address: String, advertised_host: String) -> Config {
         Config {
             handshake_address,
-            engine_count,
+            engine_count: self.engine_count,
             model: self.model,
             host: self.host,
             port: self.port,
@@ -120,9 +118,7 @@ pub struct FrontendArgs {
     /// Headless vLLM engine handshake endpoint, for example `tcp://127.0.0.1:62100`.
     #[arg(long)]
     pub handshake_address: String,
-    /// Number of engines expected to connect on the shared handshake socket.
-    #[arg(long, default_value_t = 1)]
-    pub engine_count: usize,
+
     /// Shared frontend arguments.
     #[educe(Debug(ignore))]
     #[command(flatten)]
@@ -132,11 +128,8 @@ pub struct FrontendArgs {
 impl FrontendArgs {
     /// Convert the CLI arguments into the OpenAI server's runtime config.
     pub fn into_config(self) -> Config {
-        self.runtime.into_config(
-            self.handshake_address,
-            self.engine_count,
-            self.advertised_host,
-        )
+        self.runtime
+            .into_config(self.handshake_address, self.advertised_host)
     }
 }
 
@@ -166,13 +159,7 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u16).range(1..)
     )]
     pub handshake_port: Option<u16>,
-    /// Total number of data-parallel engines expected to join the shared handshake socket.
-    #[arg(
-        long = "data-parallel-size",
-        visible_alias = "engine-count",
-        default_value_t = 1
-    )]
-    pub engine_count: usize,
+
     /// Shared frontend arguments.
     #[command(flatten)]
     pub runtime: FrontendRuntimeArgs,
@@ -192,11 +179,9 @@ pub struct ServeArgs {
 impl ServeArgs {
     /// Build the OpenAI-server runtime config that should connect to the managed engine.
     pub fn to_frontend_config(&self, handshake_address: String) -> Config {
-        self.runtime.clone().into_config(
-            handshake_address,
-            self.engine_count,
-            self.handshake_host.clone(),
-        )
+        self.runtime
+            .clone()
+            .into_config(handshake_address, self.handshake_host.clone())
     }
 
     /// Build the managed Python-engine spawn configuration for one resolved handshake port.
@@ -212,7 +197,7 @@ impl ServeArgs {
             model: self.runtime.model,
             handshake_host: self.handshake_host,
             handshake_port,
-            engine_count: self.engine_count,
+            engine_count: self.runtime.engine_count,
             python_args,
         }
     }
@@ -248,11 +233,11 @@ mod tests {
                         python: "../vllm/.venv/bin/python",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        engine_count: 1,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
+                            engine_count: 1,
                             ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
@@ -377,7 +362,6 @@ mod tests {
                     FrontendArgs {
                         advertised_host: "127.0.0.1",
                         handshake_address: "tcp://127.0.0.1:62100",
-                        engine_count: 2,
                     },
                 ),
             }
@@ -412,11 +396,11 @@ mod tests {
                         handshake_port: Some(
                             13345,
                         ),
-                        engine_count: 4,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
+                            engine_count: 4,
                             ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
@@ -451,7 +435,7 @@ mod tests {
         assert!(!args.headless);
         assert_eq!(args.handshake_host, "10.99.48.128");
         assert_eq!(args.handshake_port, Some(13345));
-        assert_eq!(args.engine_count, 4);
+        assert_eq!(args.runtime.engine_count, 4);
     }
 
     #[test]
@@ -475,11 +459,11 @@ mod tests {
                         python: "python3",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        engine_count: 2,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
+                            engine_count: 2,
                             ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
@@ -528,11 +512,11 @@ mod tests {
                         python: "python3",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        engine_count: 1,
                         runtime: FrontendRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
+                            engine_count: 1,
                             ready_timeout_secs: 300,
                             tool_call_parser: None,
                             reasoning_parser: None,
