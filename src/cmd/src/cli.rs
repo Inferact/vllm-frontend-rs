@@ -57,7 +57,7 @@ pub enum Command {
 /// Runtime arguments shared by the external-engine and managed-engine paths.
 #[derive(Educe, Clone, Args, PartialEq, Eq)]
 #[educe(Debug)]
-pub struct FrontendRuntimeArgs {
+pub struct SharedRuntimeArgs {
     /// Hugging Face model identifier used both for backend loading and public model ID.
     pub model: String,
     /// HTTP bind host for the OpenAI-compatible server.
@@ -90,7 +90,7 @@ pub struct FrontendRuntimeArgs {
     pub unsupported: UnsupportedArgs,
 }
 
-impl FrontendRuntimeArgs {
+impl SharedRuntimeArgs {
     /// Build one OpenAI-server runtime config for the resolved handshake address.
     fn into_config(self, handshake_address: String, advertised_host: String) -> Config {
         Config {
@@ -122,7 +122,7 @@ pub struct FrontendArgs {
     /// Shared frontend arguments.
     #[educe(Debug(ignore))]
     #[command(flatten)]
-    pub runtime: FrontendRuntimeArgs,
+    pub runtime: SharedRuntimeArgs,
 }
 
 impl FrontendArgs {
@@ -162,7 +162,7 @@ pub struct ServeArgs {
 
     /// Shared frontend arguments.
     #[command(flatten)]
-    pub runtime: FrontendRuntimeArgs,
+    pub runtime: SharedRuntimeArgs,
 
     /// Additional arguments forwarded to `python -m vllm.entrypoints.cli.main serve ...`.
     ///
@@ -233,7 +233,7 @@ mod tests {
                         python: "../vllm/.venv/bin/python",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        runtime: FrontendRuntimeArgs {
+                        runtime: SharedRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
@@ -396,7 +396,7 @@ mod tests {
                         handshake_port: Some(
                             13345,
                         ),
-                        runtime: FrontendRuntimeArgs {
+                        runtime: SharedRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
@@ -459,7 +459,7 @@ mod tests {
                         python: "python3",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        runtime: FrontendRuntimeArgs {
+                        runtime: SharedRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
@@ -512,7 +512,7 @@ mod tests {
                         python: "python3",
                         handshake_host: "127.0.0.1",
                         handshake_port: None,
-                        runtime: FrontendRuntimeArgs {
+                        runtime: SharedRuntimeArgs {
                             model: "Qwen/Qwen3-0.6B",
                             host: "127.0.0.1",
                             port: 8000,
