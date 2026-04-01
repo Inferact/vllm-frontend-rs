@@ -160,7 +160,7 @@ pub async fn decoded_text_event_stream(
 
         let mut delta: Option<String> = None;
         let mut truncate_output_to = None;
-        let mut tuncate_tokens_to = None;
+        let mut truncate_tokens_to = None;
         for (tok_idx, &token_id) in decodable_token_ids.iter().enumerate() {
             let new_bytes = decoder.push_token(token_id)?;
             if output_token_count + tok_idx + 1 > decode_options.min_tokens as usize
@@ -173,7 +173,7 @@ pub async fn decoded_text_event_stream(
                     false => Some(off),
                 };
                 finish_reason = Some(FinishReason::Stop(Some(StopReason::Text(stop_str))));
-                tuncate_tokens_to = Some(tok_idx + 1);
+                truncate_tokens_to = Some(tok_idx + 1);
                 break;
             }
 
@@ -189,7 +189,7 @@ pub async fn decoded_text_event_stream(
         let mut new_token_ids = take(&mut output.token_ids);
 
         // Trim tokens and logprobs if we matched stop string.
-        if let Some(num_tokens) = tuncate_tokens_to {
+        if let Some(num_tokens) = truncate_tokens_to {
             new_token_ids.truncate(num_tokens);
             if let Some(logprobs) = &mut output.logprobs {
                 logprobs.positions.truncate(num_tokens);
