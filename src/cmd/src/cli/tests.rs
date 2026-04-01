@@ -267,7 +267,7 @@ fn serve_args_reject_flags_before_model() {
     expect![[r#"
             error: serve requires the model to appear immediately after the subcommand
 
-            Usage: serve [OPTIONS] <MODEL> [-- <PYTHON_ARGS>...]
+            Usage: vllm-rs serve <MODEL> [OPTIONS] [-- <PYTHON_ARGS>...]
 
             For more information, try '--help'.
         "#]]

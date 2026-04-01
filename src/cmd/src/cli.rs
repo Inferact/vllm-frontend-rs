@@ -133,6 +133,7 @@ impl FrontendArgs {
 
 /// Arguments for the managed-engine mode that spawns Python on behalf of the user.
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[command(override_usage = "vllm-rs serve <MODEL> [OPTIONS] [-- <PYTHON_ARGS>...]")]
 pub struct ServeArgs {
     /// Only launch the managed Python headless engine and do not start the Rust frontend.
     #[arg(long)]
