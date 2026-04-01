@@ -7,7 +7,7 @@
 mod serve_validate;
 mod unsupported;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
@@ -40,7 +40,22 @@ impl Cli {
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
         let repartitioned_args = serve_validate::repartition_serve_args(&args)?;
-        <Self as Parser>::try_parse_from(repartitioned_args)
+        <Self as Parser>::try_parse_from(&repartitioned_args).inspect(|cli| {
+            if let Command::Serve(serve) = &cli.command
+                && serve.debug_cli
+            {
+                println!(
+                    "Original CLI args: {}\n",
+                    args.join(OsStr::new(" ")).display()
+                );
+                println!(
+                    "Repartitioned CLI args: {}\n",
+                    repartitioned_args.join(OsStr::new(" ")).display()
+                );
+                println!("Passthrough Python args: {}", serve.python_args.join(" "));
+                std::process::exit(0);
+            }
+        })
     }
 }
 
@@ -132,7 +147,8 @@ impl FrontendArgs {
 }
 
 /// Arguments for the managed-engine mode that spawns Python on behalf of the user.
-#[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[derive(Educe, Clone, Args, PartialEq, Eq)]
+#[educe(Debug)]
 #[command(override_usage = "vllm-rs serve <MODEL> [OPTIONS] [-- <PYTHON_ARGS>...]")]
 pub struct ServeArgs {
     /// Only launch the managed Python headless engine and do not start the Rust frontend.
@@ -158,6 +174,11 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u16).range(1..)
     )]
     pub handshake_port: Option<u16>,
+
+    /// Flag to print debug information about CLI argument parsing and exit.
+    #[educe(Debug(ignore))]
+    #[arg(long, hide = true, env = "VLLM_RS_DEBUG_CLI")]
+    pub debug_cli: bool,
 
     /// Shared frontend arguments.
     #[command(flatten)]
