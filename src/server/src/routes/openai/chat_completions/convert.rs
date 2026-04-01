@@ -12,6 +12,7 @@ use vllm_chat::{
 use super::types::ChatCompletionRequest;
 use super::validate;
 use crate::error::{ApiError, bail_invalid_request};
+use crate::routes::utils::convert_logit_bias;
 
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +82,7 @@ pub fn prepare_chat_request(
             repetition_penalty: request.repetition_penalty,
             stop_token_ids: request.stop_token_ids.clone(),
             ignore_eos: request.ignore_eos,
-            logit_bias: request.logit_bias.clone(),
+            logit_bias: convert_logit_bias(request.logit_bias.clone())?,
             allowed_token_ids: request.allowed_token_ids.clone(),
             bad_words: request.bad_words.clone(),
             vllm_xargs: request.vllm_xargs.clone(),

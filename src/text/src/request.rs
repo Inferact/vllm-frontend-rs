@@ -69,7 +69,8 @@ pub struct SamplingParams {
     /// If true, do not stop on the model's primary EOS token.
     pub ignore_eos: bool,
     /// Modify the likelihood of specified tokens appearing in the completion.
-    pub logit_bias: Option<HashMap<String, f32>>,
+    /// Keys are token IDs.
+    pub logit_bias: Option<HashMap<u32, f32>>,
     /// Restrict output to these token IDs only.
     pub allowed_token_ids: Option<Vec<u32>>,
     /// List of bad words to avoid during generation.

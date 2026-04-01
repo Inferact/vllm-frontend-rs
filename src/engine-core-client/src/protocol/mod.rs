@@ -195,8 +195,9 @@ pub struct EngineCoreSamplingParams {
     #[serde(rename = "_all_stop_token_ids")]
     pub all_stop_token_ids: BTreeSet<u32>,
     /// Logit biases to apply during sampling.
+    /// Keys are token IDs
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logit_bias: Option<HashMap<String, f32>>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
     /// Restrict output to these token IDs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_token_ids: Option<Vec<u32>>,
