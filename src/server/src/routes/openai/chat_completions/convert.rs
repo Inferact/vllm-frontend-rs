@@ -12,7 +12,7 @@ use vllm_chat::{
 use super::types::ChatCompletionRequest;
 use super::validate;
 use crate::error::{ApiError, bail_invalid_request};
-use crate::routes::utils::convert_logit_bias;
+use crate::utils::convert_logit_bias;
 
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]

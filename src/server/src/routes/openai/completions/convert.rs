@@ -5,7 +5,7 @@ use vllm_text::{Prompt, SamplingParams, TextDecodeOptions, TextRequest};
 use super::types::CompletionRequest;
 use crate::error::ApiError;
 use crate::routes::openai::completions::validate;
-use crate::routes::utils::convert_logit_bias;
+use crate::utils::convert_logit_bias;
 
 /// Lowered completion request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
