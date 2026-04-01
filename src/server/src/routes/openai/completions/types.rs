@@ -136,7 +136,7 @@ pub struct CompletionRequest {
     pub structured_outputs: Option<Value>,
 
     /// Request scheduling priority (lower means earlier; default 0)
-    pub priority: Option<i64>,
+    pub priority: Option<i32>,
 
     /// Tokens represented as strings of the form 'token_id:{token_id}' in logprobs
     pub return_tokens_as_token_ids: Option<bool>,

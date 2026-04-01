@@ -87,6 +87,7 @@ pub fn prepare_completion_request(
             min_tokens: request.min_tokens.unwrap_or(0),
         },
         intermediate: request.stream,
+        priority: request.priority.unwrap_or(0),
     };
 
     Ok(PreparedRequest {

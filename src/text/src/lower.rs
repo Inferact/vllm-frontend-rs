@@ -36,7 +36,7 @@ pub fn lower_text_request(
         arrival_time: None,
         cache_salt: None,
         trace_headers: None,
-        priority: 0,
+        priority: request.priority,
         data_parallel_rank: None,
         reasoning_ended: None,
         lora_request: None,
@@ -193,6 +193,7 @@ mod tests {
             sampling_params: SamplingParams::default(),
             decode_options: Default::default(),
             intermediate: true,
+            priority: 0,
         }
     }
 

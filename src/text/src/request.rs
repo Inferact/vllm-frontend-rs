@@ -120,6 +120,9 @@ pub struct TextRequest {
     /// If `false`, callers only observe the terminal accumulated output. If `true`, callers may
     /// receive zero or more incremental decoded updates before the final terminal event.
     pub intermediate: bool,
+    /// Request scheduling priority (lower means earlier handling; default 0).
+    #[serde(default)]
+    pub priority: i32,
 }
 
 impl TextRequest {
