@@ -3,9 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
-use vllm_engine_core_client::{
-    CoordinatorMode, EngineCoreClient, EngineCoreClientConfig, TransportMode,
-};
+use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig, TransportMode};
 
 #[derive(Debug, Parser)]
 #[command(about = "Smoke-test EngineCoreClient utility calls against an external vLLM engine.")]
@@ -63,7 +61,7 @@ async fn main() -> Result<()> {
             local_input_address: None,
             local_output_address: None,
         },
-        coordinator_mode: CoordinatorMode::None,
+        coordinator_mode: None,
         model_name: args.model.clone(),
         client_index: args.client_index,
     })

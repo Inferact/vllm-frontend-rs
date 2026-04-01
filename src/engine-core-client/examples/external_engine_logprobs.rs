@@ -9,8 +9,7 @@ use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreRequest, EngineCoreSamplingParams,
 };
 use vllm_engine_core_client::{
-    CoordinatorMode, EngineCoreClient, EngineCoreClientConfig, EngineCoreStreamOutput,
-    TransportMode,
+    EngineCoreClient, EngineCoreClientConfig, EngineCoreStreamOutput, TransportMode,
 };
 
 const BASE_PROMPT_TOKEN_IDS: &[u32] = &[20841, 448, 6896, 25, 23811];
@@ -124,7 +123,7 @@ async fn main() -> Result<()> {
             local_input_address: None,
             local_output_address: None,
         },
-        coordinator_mode: CoordinatorMode::None,
+        coordinator_mode: None,
         model_name: args.model.clone(),
         client_index: args.client_index,
     })

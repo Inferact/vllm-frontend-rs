@@ -12,8 +12,8 @@ use clap::Parser;
 use futures::StreamExt as _;
 use tokio::sync::oneshot;
 use tracing_subscriber::EnvFilter;
-use vllm_engine_core_client::{CoordinatorMode, TransportMode};
-use vllm_server::{Config, HttpListenerMode, serve};
+use vllm_engine_core_client::TransportMode;
+use vllm_server::{Config, CoordinatorMode, HttpListenerMode, serve};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,11 +51,7 @@ async fn main() -> Result<()> {
             local_input_address: None,
             local_output_address: None,
         },
-        coordinator_mode: if args.engine_count > 1 {
-            CoordinatorMode::InProc
-        } else {
-            CoordinatorMode::None
-        },
+        coordinator_mode: CoordinatorMode::MaybeInProc,
         model: args.model,
         listener_mode: HttpListenerMode::Bind {
             host: "127.0.0.1".to_string(),

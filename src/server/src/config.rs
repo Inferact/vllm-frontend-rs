@@ -1,4 +1,4 @@
-use vllm_engine_core_client::{CoordinatorMode, TransportMode};
+use vllm_engine_core_client::{CoordinatorMode as EngineCoreCoordinatorMode, TransportMode};
 
 /// How the HTTP server obtains its listening socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7,6 +7,18 @@ pub enum HttpListenerMode {
     Bind { host: String, port: u16 },
     /// Adopt an already-open listening socket inherited from a supervisor process.
     InheritedFd { fd: i32 },
+}
+
+/// Which coordinator implementation should be active when one is present for a frontend client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinatorMode {
+    /// Do not run a coordinator at all.
+    None,
+    /// Run the Rust in-process coordinator for managed `serve` deployments, if there are mutliple
+    /// engines and the model is MoE.
+    MaybeInProc,
+    /// Connect to an external coordinator owned by another process.
+    External { stats_update_address: String },
 }
 
 /// Normalized runtime configuration for the minimal OpenAI-compatible server.
@@ -38,15 +50,25 @@ impl Config {
         }
     }
 
-    /// Resolve the effective coordinator mode after applying model-specific safeguards.
-    ///
-    /// Phase 1 only allows in-process coordination for MoE-managed `serve` deployments. For
-    /// non-MoE models we silently degrade `InProc` to `None` so the caller can build configs
-    /// without duplicating that check.
-    pub fn resolve_coordinator_mode(&self, model_is_moe: bool) -> CoordinatorMode {
+    /// Resolve the effective coordinator mode.
+    pub fn effective_coordinator_mode(
+        &self,
+        model_is_moe: bool,
+    ) -> Option<EngineCoreCoordinatorMode> {
         match &self.coordinator_mode {
-            CoordinatorMode::InProc if !model_is_moe => CoordinatorMode::None,
-            mode => mode.clone(),
+            CoordinatorMode::None => None,
+            CoordinatorMode::MaybeInProc => {
+                if model_is_moe && self.engine_count() > 1 {
+                    Some(EngineCoreCoordinatorMode::InProc)
+                } else {
+                    None
+                }
+            }
+            CoordinatorMode::External {
+                stats_update_address,
+            } => Some(EngineCoreCoordinatorMode::External {
+                stats_update_address: stats_update_address.clone(),
+            }),
         }
     }
 }

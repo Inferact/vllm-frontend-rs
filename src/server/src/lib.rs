@@ -16,7 +16,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-pub use config::{Config, HttpListenerMode};
+pub use config::{Config, CoordinatorMode, HttpListenerMode};
 use futures::FutureExt as _;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -37,7 +37,7 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
     let text_backend = loaded.text_backend;
     let chat_backend = loaded.chat_backend;
 
-    let coordinator_mode = config.resolve_coordinator_mode(text_backend.is_moe());
+    let coordinator_mode = config.effective_coordinator_mode(text_backend.is_moe());
     info!(
         engine_count = config.engine_count(),
         model_is_moe = text_backend.is_moe(),

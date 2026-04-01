@@ -409,7 +409,7 @@ fn serve_args_accept_data_parallel_primary_flags() {
 }
 
 #[test]
-fn serve_frontend_config_uses_dp_address_for_both_handshake_and_transport_host() {
+fn serve_frontend_config_uses_dp_address_as_advertised_host() {
     let cli = Cli::try_parse_from([
         "vllm-rs",
         "serve",

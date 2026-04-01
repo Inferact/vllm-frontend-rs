@@ -6,9 +6,7 @@ use futures::StreamExt as _;
 use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 use vllm_engine_core_client::protocol::EngineCoreSamplingParams;
-use vllm_engine_core_client::{
-    CoordinatorMode, EngineCoreClient, EngineCoreClientConfig, TransportMode,
-};
+use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig, TransportMode};
 use vllm_llm::{FinishReason, GenerateOutputStream, GenerateRequest, Llm};
 
 const PROMPT_TOKEN_IDS: &[u32] = &[20841, 448, 6896, 25, 23811];
@@ -116,7 +114,7 @@ async fn main() -> Result<()> {
             local_input_address: None,
             local_output_address: None,
         },
-        coordinator_mode: CoordinatorMode::None,
+        coordinator_mode: None,
         model_name: args.model.clone(),
         client_index: args.client_index,
     })

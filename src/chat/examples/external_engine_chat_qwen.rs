@@ -8,9 +8,7 @@ use vllm_chat::{
     AssistantBlockKind, AssistantMessageExt as _, ChatEvent, ChatLlm, ChatMessage, ChatOptions,
     ChatRequest, ChatRole, ChatToolChoice, SamplingParams, load_model_backends,
 };
-use vllm_engine_core_client::{
-    CoordinatorMode, EngineCoreClient, EngineCoreClientConfig, TransportMode,
-};
+use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig, TransportMode};
 use vllm_llm::Llm;
 use vllm_text::TextLlm;
 
@@ -66,7 +64,7 @@ async fn main() -> Result<()> {
             local_input_address: None,
             local_output_address: None,
         },
-        coordinator_mode: CoordinatorMode::None,
+        coordinator_mode: None,
         model_name: args.model.clone(),
         client_index: CLIENT_INDEX,
     })

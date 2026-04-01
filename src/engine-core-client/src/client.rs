@@ -53,12 +53,10 @@ pub enum TransportMode {
     },
 }
 
-/// Which coordinator model, if any, should be active for one frontend client.
+/// Which coordinator implementation should be active when one is present for a frontend client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoordinatorMode {
-    /// No coordinator is used; requests are sent directly to the chosen engine.
-    None,
-    /// Run the existing Rust in-process coordinator for managed `serve` deployments.
+    /// Run the Rust in-process coordinator for managed `serve` deployments.
     InProc,
     /// Connect to an external coordinator owned by another process.
     ///
@@ -73,8 +71,9 @@ pub enum CoordinatorMode {
 pub struct EngineCoreClientConfig {
     /// Frontend-to-engine transport setup.
     pub transport_mode: TransportMode,
-    /// Frontend-side coordinator behavior.
-    pub coordinator_mode: CoordinatorMode,
+    /// Frontend-side coordinator behavior, or `None` when requests should flow directly to engines
+    /// without any coordinator involvement.
+    pub coordinator_mode: Option<CoordinatorMode>,
     /// Model name used for frontend-side metrics labels.
     pub model_name: String,
     /// Frontend client index stamped onto every request.
@@ -94,7 +93,7 @@ impl EngineCoreClientConfig {
                 local_input_address: None,
                 local_output_address: None,
             },
-            coordinator_mode: CoordinatorMode::None,
+            coordinator_mode: None,
             model_name: String::new(),
             client_index: 0,
         }
@@ -112,8 +111,8 @@ impl EngineCoreClientConfig {
         self
     }
 
-    /// Override the coordinator mode for this client config.
-    pub fn with_coordinator_mode(mut self, coordinator_mode: CoordinatorMode) -> Self {
+    /// Override the optional coordinator mode for this client config.
+    pub fn with_coordinator_mode(mut self, coordinator_mode: Option<CoordinatorMode>) -> Self {
         self.coordinator_mode = coordinator_mode;
         self
     }
@@ -166,64 +165,51 @@ impl EngineCoreClient {
     /// bootstrapped mode it binds the provided frontend sockets and waits for the expected engine
     /// registration frames.
     pub async fn connect(config: EngineCoreClientConfig) -> Result<Self> {
-        let connected = match (&config.transport_mode, &config.coordinator_mode) {
-            (
-                TransportMode::HandshakeOwner {
-                    handshake_address,
-                    advertised_host,
-                    engine_count,
-                    ready_timeout,
-                    local_input_address,
-                    local_output_address,
-                },
-                CoordinatorMode::None,
-            ) => {
+        let connected = match &config.transport_mode {
+            TransportMode::HandshakeOwner {
+                handshake_address,
+                advertised_host,
+                engine_count,
+                ready_timeout,
+                local_input_address,
+                local_output_address,
+            } => {
+                let enable_inproc_coordinator = match config.coordinator_mode {
+                    None => false,
+                    Some(CoordinatorMode::InProc) => true,
+                    Some(CoordinatorMode::External { .. }) => {
+                        return Err(Error::UnsupportedExternalCoordinator);
+                    }
+                };
+
                 transport::connect_handshake(
                     handshake_address,
                     *engine_count,
                     advertised_host,
                     local_input_address.as_deref(),
                     local_output_address.as_deref(),
-                    false,
+                    enable_inproc_coordinator,
                     *ready_timeout,
                 )
                 .await?
             }
-            (
-                TransportMode::HandshakeOwner {
-                    handshake_address,
-                    advertised_host,
-                    engine_count,
-                    ready_timeout,
-                    local_input_address,
-                    local_output_address,
-                },
-                CoordinatorMode::InProc,
-            ) => {
-                transport::connect_handshake(
-                    handshake_address,
-                    *engine_count,
-                    advertised_host,
-                    local_input_address.as_deref(),
-                    local_output_address.as_deref(),
-                    true,
-                    *ready_timeout,
-                )
-                .await?
-            }
-            (TransportMode::HandshakeOwner { .. }, CoordinatorMode::External { .. })
-            | (TransportMode::Bootstrapped { .. }, CoordinatorMode::External { .. }) => {
-                return Err(Error::UnsupportedExternalCoordinator);
-            }
-            (
-                TransportMode::Bootstrapped {
-                    input_address,
-                    output_address,
-                    engine_count,
-                    ready_timeout,
-                },
-                CoordinatorMode::None,
-            ) => {
+
+            TransportMode::Bootstrapped {
+                input_address,
+                output_address,
+                engine_count,
+                ready_timeout,
+            } => {
+                match config.coordinator_mode {
+                    None => {}
+                    Some(CoordinatorMode::External { .. }) => {
+                        return Err(Error::UnsupportedExternalCoordinator);
+                    }
+                    Some(CoordinatorMode::InProc) => {
+                        panic!("cannot use in-process coordinator with bootstrapped transport mode")
+                    }
+                }
+
                 transport::connect_bootstrapped(
                     input_address,
                     output_address,
@@ -231,12 +217,6 @@ impl EngineCoreClient {
                     *ready_timeout,
                 )
                 .await?
-            }
-            (TransportMode::Bootstrapped { .. }, CoordinatorMode::InProc) => {
-                return Err(Error::UnsupportedField {
-                    context: "bootstrapped transport mode",
-                    field: "coordinator_mode=InProc",
-                });
             }
         };
 

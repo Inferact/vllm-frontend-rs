@@ -245,7 +245,7 @@ fn handshake_test_config(
     model_name: &str,
     ready_timeout: Duration,
     client_index: u32,
-    coordinator_mode: CoordinatorMode,
+    coordinator_mode: Option<CoordinatorMode>,
 ) -> EngineCoreClientConfig {
     EngineCoreClientConfig {
         transport_mode: TransportMode::HandshakeOwner {
@@ -276,7 +276,7 @@ fn bootstrapped_test_config(
             engine_count,
             ready_timeout,
         },
-        coordinator_mode: CoordinatorMode::None,
+        coordinator_mode: None,
         model_name: "test-model".to_string(),
         client_index,
     }
@@ -437,7 +437,7 @@ async fn coordinator_handshake_includes_engine_control_addresses() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::InProc,
+            Some(CoordinatorMode::InProc),
         ),
         &ipc,
     )
@@ -606,7 +606,7 @@ async fn coordinator_wave_control_tracks_pause_running_and_rebroadcasts() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::InProc,
+            Some(CoordinatorMode::InProc),
         ),
         &ipc,
     )
@@ -726,7 +726,7 @@ async fn coordinator_rebroadcasts_engine_start_wave_control() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::InProc,
+            Some(CoordinatorMode::InProc),
         ),
         &ipc,
     )
@@ -802,7 +802,7 @@ async fn coordinator_accepts_stats_only_outputs() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::InProc,
+            Some(CoordinatorMode::InProc),
         ),
         &ipc,
     )
@@ -894,7 +894,7 @@ async fn client_fail_closes_when_main_output_path_receives_dp_control() {
             "test-model",
             Duration::from_secs(2),
             7,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -979,7 +979,7 @@ async fn client_fail_closes_when_main_output_path_receives_mixed_shape_output() 
             "test-model",
             Duration::from_secs(2),
             7,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1061,7 +1061,7 @@ async fn duplicate_request_ids_are_rejected_without_sending_a_second_add() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1138,7 +1138,7 @@ async fn finished_requests_without_final_output_is_treated_as_unexpected_close()
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1206,7 +1206,7 @@ async fn dropping_a_live_stream_triggers_abort() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1253,7 +1253,7 @@ async fn dispatcher_failure_propagates_to_streams_and_future_calls() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1344,7 +1344,7 @@ async fn is_sleeping_wrapper_sends_typed_request_and_returns_typed_response() {
             "test-model",
             Duration::from_secs(2),
             5,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1401,7 +1401,7 @@ async fn call_utility_failure_message_surfaces_as_error() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1452,7 +1452,7 @@ async fn dispatcher_failure_propagates_to_waiting_utility_calls() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1505,7 +1505,7 @@ async fn connect_times_out_without_ready_message() {
             "test-model",
             Duration::from_millis(100),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         Some(ipc.input_endpoint()),
         Some(ipc.output_endpoint()),
@@ -1549,7 +1549,7 @@ async fn engine_core_dead_sentinel_marks_client_unhealthy_and_sticks() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1618,7 +1618,7 @@ async fn output_loop_failure_marks_client_unhealthy_and_records_first_error() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1675,7 +1675,7 @@ async fn client_decodes_multipart_logprob_outputs() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -1800,7 +1800,7 @@ async fn multi_engine_client_shares_transport_and_routes_by_inflight_count() {
             "test-model",
             Duration::from_secs(2),
             0,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )
@@ -2032,7 +2032,7 @@ async fn multi_engine_abort_is_grouped_and_utility_fans_out_to_all_engines() {
             "test-model",
             Duration::from_secs(2),
             5,
-            CoordinatorMode::None,
+            None,
         ),
         &ipc,
     )

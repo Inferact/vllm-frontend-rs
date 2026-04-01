@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use educe::Educe;
-use vllm_engine_core_client::{CoordinatorMode, TransportMode};
-use vllm_server::{Config, HttpListenerMode};
+use vllm_engine_core_client::TransportMode;
+use vllm_server::{Config, CoordinatorMode, HttpListenerMode};
 
 use crate::cli::unsupported::UnsupportedArgs;
 use crate::managed_engine::ManagedEngineConfig;
@@ -126,6 +126,7 @@ impl SharedRuntimeArgs {
                 engine_count: self.engine_count,
                 ready_timeout: self.ready_timeout(),
             },
+            // TODO: this might be an external Python process once we support it.
             coordinator_mode: CoordinatorMode::None,
             model: self.model,
             listener_mode: HttpListenerMode::InheritedFd { fd: listen_fd },
@@ -153,12 +154,7 @@ impl SharedRuntimeArgs {
                 local_input_address: None,
                 local_output_address: None,
             },
-            coordinator_mode: if self.engine_count > 1 {
-                // Might be resolved to `None` later if the model is not MoE.
-                CoordinatorMode::InProc
-            } else {
-                CoordinatorMode::None
-            },
+            coordinator_mode: CoordinatorMode::MaybeInProc,
             model: self.model,
             listener_mode: HttpListenerMode::Bind { host, port },
             tool_call_parser: self.tool_call_parser,
