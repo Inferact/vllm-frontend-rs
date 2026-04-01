@@ -58,7 +58,7 @@ pub fn prepare_chat_request(
         .flatten();
 
     // Auto-enable prompt logprobs for non-streaming echo, matching Python vLLM's behavior.
-    let top_logprobs = request.top_logprobs.unwrap_or(0) as i32;
+    let top_logprobs = request.top_logprobs.unwrap_or(0);
     let prompt_logprobs = request
         .prompt_logprobs
         .or((request.echo && !request.stream).then_some(top_logprobs));

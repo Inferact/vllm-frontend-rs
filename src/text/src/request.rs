@@ -41,7 +41,7 @@ pub struct SamplingParams {
     /// Cumulative probability threshold for nucleus sampling.
     pub top_p: Option<f32>,
     /// Maximum number of top tokens to consider. `Some(0)` means all tokens.
-    pub top_k: Option<i32>,
+    pub top_k: Option<u32>,
     /// Random seed used by the sampler when present.
     pub seed: Option<i64>,
     /// Maximum number of tokens to generate. `None` means no explicit user override.

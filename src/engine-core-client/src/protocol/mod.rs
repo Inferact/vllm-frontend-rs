@@ -156,7 +156,7 @@ pub struct EngineCoreSamplingParams {
     /// Cumulative probability threshold for nucleus sampling.
     pub top_p: f32,
     /// Maximum number of top tokens to consider. `0` means all tokens.
-    pub top_k: i32,
+    pub top_k: u32,
     /// Random seed used by the sampler when present.
     pub seed: Option<i64>,
     /// Maximum number of tokens to generate per output sequence.
@@ -202,7 +202,11 @@ pub struct EngineCoreSamplingParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_token_ids: Option<Vec<u32>>,
     /// Tokenized bad words to avoid during generation.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_bad_words_token_ids")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "_bad_words_token_ids"
+    )]
     pub bad_words_token_ids: Option<Vec<Vec<u32>>>,
     /// Additional request parameters for custom extensions (from `vllm_xargs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
