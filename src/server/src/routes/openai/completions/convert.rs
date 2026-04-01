@@ -72,6 +72,10 @@ pub fn prepare_completion_request(
             repetition_penalty: request.repetition_penalty,
             stop_token_ids: request.stop_token_ids.clone(),
             ignore_eos: request.ignore_eos,
+            logit_bias: request.logit_bias.clone(),
+            allowed_token_ids: request.allowed_token_ids.clone(),
+            bad_words: None,
+            vllm_xargs: request.vllm_xargs.clone(),
         },
         decode_options: TextDecodeOptions {
             skip_special_tokens: request.skip_special_tokens,

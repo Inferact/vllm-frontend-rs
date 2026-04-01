@@ -71,6 +71,10 @@ pub fn prepare_chat_request(
             repetition_penalty: request.repetition_penalty,
             stop_token_ids: request.stop_token_ids.clone(),
             ignore_eos: request.ignore_eos,
+            logit_bias: request.logit_bias.clone(),
+            allowed_token_ids: request.allowed_token_ids.clone(),
+            bad_words: request.bad_words.clone(),
+            vllm_xargs: request.vllm_xargs.clone(),
         },
         chat_options: ChatOptions {
             add_generation_prompt: request.add_generation_prompt && !request.continue_final_message,
@@ -81,7 +85,7 @@ pub fn prepare_chat_request(
         tool_choice: convert_tool_choice(request.tool_choice.as_ref())?,
         decode_options: vllm_text::output::TextDecodeOptions {
             skip_special_tokens: request.skip_special_tokens,
-            include_stop_str_in_output: false,
+            include_stop_str_in_output: request.include_stop_str_in_output,
             stop_strings: request.stop.as_ref().map(|stop| match stop {
                 StringOrArray::String(string) => vec![string.clone()],
                 StringOrArray::Array(arr) => arr.clone(),
@@ -307,6 +311,10 @@ mod tests {
                     repetition_penalty: None,
                     stop_token_ids: None,
                     ignore_eos: false,
+                    logit_bias: None,
+                    allowed_token_ids: None,
+                    bad_words: None,
+                    vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
                     add_generation_prompt: false,
@@ -361,6 +369,10 @@ mod tests {
                     repetition_penalty: None,
                     stop_token_ids: None,
                     ignore_eos: false,
+                    logit_bias: None,
+                    allowed_token_ids: None,
+                    bad_words: None,
+                    vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
                     add_generation_prompt: true,
@@ -430,6 +442,10 @@ mod tests {
                     ),
                     stop_token_ids: None,
                     ignore_eos: false,
+                    logit_bias: None,
+                    allowed_token_ids: None,
+                    bad_words: None,
+                    vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
                     add_generation_prompt: true,
@@ -527,6 +543,10 @@ mod tests {
                     repetition_penalty: None,
                     stop_token_ids: None,
                     ignore_eos: false,
+                    logit_bias: None,
+                    allowed_token_ids: None,
+                    bad_words: None,
+                    vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
                     add_generation_prompt: true,
@@ -627,6 +647,10 @@ mod tests {
                     repetition_penalty: None,
                     stop_token_ids: None,
                     ignore_eos: false,
+                    logit_bias: None,
+                    allowed_token_ids: None,
+                    bad_words: None,
+                    vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
                     add_generation_prompt: true,

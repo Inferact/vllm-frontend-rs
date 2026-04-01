@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::output::TextDecodeOptions;
@@ -65,6 +68,14 @@ pub struct SamplingParams {
     pub stop_token_ids: Option<Vec<u32>>,
     /// If true, do not stop on the model's primary EOS token.
     pub ignore_eos: bool,
+    /// Modify the likelihood of specified tokens appearing in the completion.
+    pub logit_bias: Option<HashMap<String, f32>>,
+    /// Restrict output to these token IDs only.
+    pub allowed_token_ids: Option<Vec<u32>>,
+    /// List of bad words to avoid during generation.
+    pub bad_words: Option<Vec<String>>,
+    /// Additional request parameters for custom extensions.
+    pub vllm_xargs: Option<HashMap<String, Value>>,
 }
 
 #[allow(clippy::derivable_impls)] // more explicit
@@ -85,6 +96,10 @@ impl Default for SamplingParams {
             repetition_penalty: None,
             stop_token_ids: None,
             ignore_eos: false,
+            logit_bias: None,
+            allowed_token_ids: None,
+            bad_words: None,
+            vllm_xargs: None,
         }
     }
 }

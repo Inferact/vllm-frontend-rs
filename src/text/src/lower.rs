@@ -80,6 +80,10 @@ pub fn lower_sampling_params(
         repetition_penalty,
         stop_token_ids,
         ignore_eos,
+        logit_bias,
+        allowed_token_ids,
+        bad_words,
+        vllm_xargs,
     } = sampling_params;
 
     // Mirrors the model-generation-config inheritance used by vLLM's OpenAI chat path:
@@ -123,6 +127,10 @@ pub fn lower_sampling_params(
         stop_token_ids,
         eos_token_id: (!ignore_eos).then_some(primary_eos_token_id).flatten(),
         all_stop_token_ids,
+        logit_bias,
+        allowed_token_ids,
+        bad_words,
+        extra_args: vllm_xargs,
     })
 }
 
@@ -232,6 +240,10 @@ mod tests {
                     77,
                     99,
                 },
+                logit_bias: None,
+                allowed_token_ids: None,
+                bad_words: None,
+                extra_args: None,
             }
         "#]]
         .assert_debug_eq(&params);
@@ -265,6 +277,10 @@ mod tests {
                     77,
                     99,
                 },
+                logit_bias: None,
+                allowed_token_ids: None,
+                bad_words: None,
+                extra_args: None,
             }
         "#]]
         .assert_debug_eq(&params);
@@ -394,6 +410,10 @@ mod tests {
                     88,
                     99,
                 },
+                logit_bias: None,
+                allowed_token_ids: None,
+                bad_words: None,
+                extra_args: None,
             }
         "#]]
         .assert_debug_eq(&params);
@@ -444,6 +464,10 @@ mod tests {
                 stop_token_ids: [],
                 eos_token_id: None,
                 all_stop_token_ids: {},
+                logit_bias: None,
+                allowed_token_ids: None,
+                bad_words: None,
+                extra_args: None,
             }
         "#]]
         .assert_debug_eq(&params);
@@ -514,6 +538,10 @@ mod tests {
                 stop_token_ids: [],
                 eos_token_id: None,
                 all_stop_token_ids: {},
+                logit_bias: None,
+                allowed_token_ids: None,
+                bad_words: None,
+                extra_args: None,
             }
         "#]]
         .assert_debug_eq(&params);
