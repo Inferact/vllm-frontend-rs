@@ -202,8 +202,8 @@ pub struct EngineCoreSamplingParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_token_ids: Option<Vec<u32>>,
     /// Tokenized bad words to avoid during generation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bad_words: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_bad_words_token_ids")]
+    pub bad_words_token_ids: Option<Vec<Vec<u32>>>,
     /// Additional request parameters for custom extensions (from `vllm_xargs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<HashMap<String, serde_json::Value>>,
@@ -230,7 +230,7 @@ impl EngineCoreSamplingParams {
             all_stop_token_ids: BTreeSet::new(),
             logit_bias: None,
             allowed_token_ids: None,
-            bad_words: None,
+            bad_words_token_ids: None,
             extra_args: None,
         }
     }

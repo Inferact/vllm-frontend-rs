@@ -6,6 +6,7 @@ use vllm_llm::GenerateRequest;
 use crate::backend::SamplingHints;
 use crate::error::{Error, Result};
 use crate::request::{SamplingParams, TextRequest};
+use crate::tokenizers::Tokenizer;
 
 /// One text request after it has been lowered into the raw generate boundary.
 #[derive(Debug)]
@@ -22,6 +23,7 @@ pub fn lower_text_request(
     request: TextRequest,
     prompt_token_ids: Vec<u32>,
     sampling_hints: SamplingHints,
+    tokenizer: &dyn Tokenizer,
 ) -> Result<PreparedTextRequest> {
     let prompt_len = prompt_token_ids.len() as u32;
     let generate_request = GenerateRequest {
@@ -31,6 +33,7 @@ pub fn lower_text_request(
             request.sampling_params.clone(),
             sampling_hints,
             prompt_len,
+            tokenizer,
         )?,
         // Fields below are currently placeholders.
         arrival_time: None,
@@ -64,6 +67,7 @@ pub fn lower_sampling_params(
         max_model_len,
     }: SamplingHints,
     prompt_len: u32,
+    tokenizer: &dyn Tokenizer,
 ) -> Result<EngineCoreSamplingParams> {
     let SamplingParams {
         temperature,
@@ -129,9 +133,47 @@ pub fn lower_sampling_params(
         all_stop_token_ids,
         logit_bias,
         allowed_token_ids,
-        bad_words,
+        bad_words_token_ids: tokenize_bad_words(bad_words.as_deref(), tokenizer)?,
         extra_args: vllm_xargs,
     })
+}
+
+/// Convert bad-word strings into token-ID sequences, following the Python vLLM logic in
+/// `SamplingParams.update_from_tokenizer()`.
+///
+/// Each word is encoded both with and without a leading space so that the ban applies regardless of
+/// whether the word appears at the beginning or in the middle of generated text (this accounts for
+/// tokenizers that use an `add_prefix_space` convention).
+///
+/// Reference: <https://github.com/vllm-project/vllm/blob/f22d6e026/vllm/sampling_params.py#L555-L594>
+fn tokenize_bad_words(
+    bad_words: Option<&[String]>,
+    tokenizer: &dyn Tokenizer,
+) -> Result<Option<Vec<Vec<u32>>>> {
+    let bad_words = bad_words.filter(|w| !w.is_empty());
+    let mut all_token_ids = Vec::new();
+
+    for bad_word in bad_words.into_iter().flatten() {
+        // Without a leading space we always keep the encoding.
+        // With a leading space we only keep it when the prefix-space variant produces a
+        // distinct first token but the same sequence length — this mirrors the Python
+        // dedup condition that avoids redundant entries.
+        let without_space = tokenizer.encode(bad_word)?;
+        let with_space = tokenizer.encode(&format!(" {}", bad_word.trim_start()))?;
+
+        if !without_space.is_empty() {
+            all_token_ids.push(without_space);
+        }
+        if !with_space.is_empty()
+            && all_token_ids.last().is_some_and(|prev: &Vec<u32>| {
+                with_space[0] != prev[0] && with_space.len() == prev.len()
+            })
+        {
+            all_token_ids.push(with_space);
+        }
+    }
+
+    Ok((!all_token_ids.is_empty()).then_some(all_token_ids))
 }
 
 /// Resolve the effective `max_tokens` for generation, mirroring vLLM Python's `get_max_tokens()`
@@ -186,6 +228,32 @@ mod tests {
     use crate::backends::hf::HfTextBackend;
     use crate::request::{Prompt, TextRequest};
 
+    /// Stub tokenizer that returns empty token IDs — sufficient for tests that don't exercise
+    /// bad-words tokenization.
+    struct StubTokenizer;
+
+    impl Tokenizer for StubTokenizer {
+        fn encode(&self, _text: &str) -> crate::error::Result<Vec<u32>> {
+            Ok(vec![])
+        }
+
+        fn decode(
+            &self,
+            _token_ids: &[u32],
+            _skip_special_tokens: bool,
+        ) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+
+        fn token_to_id(&self, _token: &str) -> Option<u32> {
+            None
+        }
+    }
+
+    fn stub_tokenizer() -> StubTokenizer {
+        StubTokenizer
+    }
+
     fn sample_request() -> TextRequest {
         TextRequest {
             request_id: "text-1".to_string(),
@@ -213,8 +281,13 @@ mod tests {
 
     #[test]
     fn lower_text_request_applies_python_style_eos_hints() {
-        let prepared =
-            lower_text_request(sample_request(), vec![1, 2, 3], sample_sampling_hints()).unwrap();
+        let prepared = lower_text_request(
+            sample_request(),
+            vec![1, 2, 3],
+            sample_sampling_hints(),
+            &stub_tokenizer(),
+        )
+        .unwrap();
 
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
@@ -243,7 +316,7 @@ mod tests {
                 },
                 logit_bias: None,
                 allowed_token_ids: None,
-                bad_words: None,
+                bad_words_token_ids: None,
                 extra_args: None,
             }
         "#]]
@@ -255,7 +328,13 @@ mod tests {
         let mut request = sample_request();
         request.sampling_params.ignore_eos = true;
 
-        let prepared = lower_text_request(request, vec![1, 2, 3], sample_sampling_hints()).unwrap();
+        let prepared = lower_text_request(
+            request,
+            vec![1, 2, 3],
+            sample_sampling_hints(),
+            &stub_tokenizer(),
+        )
+        .unwrap();
 
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
@@ -280,7 +359,7 @@ mod tests {
                 },
                 logit_bias: None,
                 allowed_token_ids: None,
-                bad_words: None,
+                bad_words_token_ids: None,
                 extra_args: None,
             }
         "#]]
@@ -327,7 +406,8 @@ mod tests {
         .assert_debug_eq(&hints);
 
         let prepared =
-            lower_text_request(sample_request(), vec![1, 2, 3], hints).expect("lower request");
+            lower_text_request(sample_request(), vec![1, 2, 3], hints, &stub_tokenizer())
+                .expect("lower request");
         let params = prepared.generate_request.sampling_params;
 
         expect_test::expect![[r#"
@@ -380,6 +460,7 @@ mod tests {
                 max_model_len: None,
             },
             3,
+            &stub_tokenizer(),
         )
         .unwrap();
 
@@ -413,7 +494,7 @@ mod tests {
                 },
                 logit_bias: None,
                 allowed_token_ids: None,
-                bad_words: None,
+                bad_words_token_ids: None,
                 extra_args: None,
             }
         "#]]
@@ -445,6 +526,7 @@ mod tests {
                 max_model_len: None,
             },
             3,
+            &stub_tokenizer(),
         )
         .unwrap();
 
@@ -467,7 +549,7 @@ mod tests {
                 all_stop_token_ids: {},
                 logit_bias: None,
                 allowed_token_ids: None,
-                bad_words: None,
+                bad_words_token_ids: None,
                 extra_args: None,
             }
         "#]]
@@ -496,6 +578,7 @@ mod tests {
                 max_model_len: None,
             },
             3,
+            &stub_tokenizer(),
         )
         .unwrap();
 
@@ -519,6 +602,7 @@ mod tests {
                 max_model_len: None,
             },
             3,
+            &stub_tokenizer(),
         )
         .unwrap();
 
@@ -541,7 +625,7 @@ mod tests {
                 all_stop_token_ids: {},
                 logit_bias: None,
                 allowed_token_ids: None,
-                bad_words: None,
+                bad_words_token_ids: None,
                 extra_args: None,
             }
         "#]]
@@ -559,7 +643,13 @@ mod tests {
         let mut request = sample_request();
         request.intermediate = false;
 
-        let prepared = lower_text_request(request, vec![1, 2, 3], sample_sampling_hints()).unwrap();
+        let prepared = lower_text_request(
+            request,
+            vec![1, 2, 3],
+            sample_sampling_hints(),
+            &stub_tokenizer(),
+        )
+        .unwrap();
 
         assert!(!prepared.text_request.intermediate);
         assert_eq!(prepared.generate_request.request_id, "text-1");

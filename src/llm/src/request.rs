@@ -163,7 +163,7 @@ mod tests {
                         all_stop_token_ids: {},
                         logit_bias: None,
                         allowed_token_ids: None,
-                        bad_words: None,
+                        _bad_words_token_ids: None,
                         extra_args: None,
                     },
                 ),

@@ -73,7 +73,7 @@ pub struct SamplingParams {
     pub logit_bias: Option<HashMap<u32, f32>>,
     /// Restrict output to these token IDs only.
     pub allowed_token_ids: Option<Vec<u32>>,
-    /// List of bad words to avoid during generation.
+    /// Words to avoid during generation (tokenized to IDs during lowering).
     pub bad_words: Option<Vec<String>>,
     /// Additional request parameters for custom extensions.
     pub vllm_xargs: Option<HashMap<String, Value>>,
