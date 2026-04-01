@@ -73,7 +73,7 @@ pub fn prepare_chat_request(
             ignore_eos: request.ignore_eos,
         },
         chat_options: ChatOptions {
-            add_generation_prompt: request.add_generation_prompt,
+            add_generation_prompt: request.add_generation_prompt && !request.continue_final_message,
             continue_final_message: request.continue_final_message,
             template_kwargs,
         },

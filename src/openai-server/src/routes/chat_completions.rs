@@ -670,7 +670,6 @@ mod tests {
     use vllm_text::{DecodedLogprobs, DecodedPositionLogprobs, DecodedTokenLogprob};
 
     use super::{block_delta_chunk, chat_completion_chunk_stream, final_chunk};
-    use crate::routes::utils::types::ChatLogProbs;
 
     #[test]
     fn text_chunk_uses_content_only_delta() {
