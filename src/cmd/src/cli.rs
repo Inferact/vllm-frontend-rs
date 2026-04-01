@@ -39,10 +39,8 @@ impl Cli {
         T: Into<OsString>,
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
-        let normalized_args = serve_validate::normalize_python_arg_aliases(&args);
-        <Self as Parser>::try_parse_from(normalized_args.clone())
-            .map_err(|error| serve_validate::rewrite_unknown_arg_error(&normalized_args, error))
-            .and_then(serve_validate::validate_passthrough_args)
+        let repartitioned_args = serve_validate::repartition_serve_args(&args)?;
+        <Self as Parser>::try_parse_from(repartitioned_args)
     }
 }
 
@@ -166,8 +164,9 @@ pub struct ServeArgs {
 
     /// Additional arguments forwarded to `python -m vllm.entrypoints.cli.main serve ...`.
     ///
-    /// These arguments must be placed after `--` so the Rust frontend can parse its own options
-    /// first and then pass the remaining argv through to Python unchanged.
+    /// Arguments after an explicit `--` are forwarded verbatim. Before `--`, `vllm-rs serve`
+    /// automatically keeps recognized frontend options on the Rust side and forwards everything
+    /// else to Python.
     #[arg(
         last = true,
         allow_hyphen_values = true,
