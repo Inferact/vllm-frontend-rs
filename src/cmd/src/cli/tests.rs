@@ -217,15 +217,25 @@ fn frontend_args_accept_engine_count() {
     .unwrap();
 
     expect![[r#"
-            Cli {
-                command: Frontend(
-                    FrontendArgs {
-                        advertised_host: "127.0.0.1",
-                        handshake_address: "tcp://127.0.0.1:62100",
+        Cli {
+            command: Frontend(
+                FrontendArgs {
+                    advertised_host: "127.0.0.1",
+                    handshake_address: "tcp://127.0.0.1:62100",
+                    runtime: SharedRuntimeArgs {
+                        model: "Qwen/Qwen3-0.6B",
+                        host: "127.0.0.1",
+                        port: 8000,
+                        engine_count: 2,
+                        ready_timeout_secs: 300,
+                        tool_call_parser: None,
+                        reasoning_parser: None,
+                        max_model_len: None,
                     },
-                ),
-            }
-        "#]]
+                },
+            ),
+        }
+    "#]]
     .assert_debug_eq(&cli);
 }
 
