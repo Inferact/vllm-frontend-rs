@@ -72,19 +72,7 @@ pub(super) fn validate_request_compat(
         );
     }
 
-    if request.response_format.is_some() {
-        bail_invalid_request!(
-            param = "response_format",
-            "response_format is not supported."
-        );
-    }
-
-    if request.structured_outputs.is_some() {
-        bail_invalid_request!(
-            param = "structured_outputs",
-            "structured_outputs is not supported."
-        );
-    }
+    // response_format and structured_outputs are handled during conversion
 
     Ok(())
 }
