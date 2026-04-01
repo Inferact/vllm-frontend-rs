@@ -121,7 +121,6 @@ pub struct FrontendArgs {
     pub handshake_address: String,
 
     /// Shared frontend arguments.
-    #[educe(Debug(ignore))]
     #[command(flatten)]
     pub runtime: SharedRuntimeArgs,
 }
