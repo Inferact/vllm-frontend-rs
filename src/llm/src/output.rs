@@ -132,7 +132,7 @@ impl GenerateOutput {
     }
 }
 
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 impl GenerateOutput {
     /// Build a [`GenerateOutput`] for tests.
     pub fn for_test(
