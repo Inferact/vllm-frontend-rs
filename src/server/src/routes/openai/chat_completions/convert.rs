@@ -28,6 +28,8 @@ pub struct PreparedRequest {
     pub include_prompt_logprobs: bool,
     /// Lowered text-only chat request for `vllm-chat`.
     pub chat_request: ChatRequest,
+    /// Last assistant-role message content to echo back when `echo=true`.
+    pub echo: Option<String>,
 }
 
 /// Validate and lower one OpenAI chat completion request into the internal chat format.
@@ -49,7 +51,17 @@ pub fn prepare_chat_request(
         .and_then(|options| options.include_usage)
         .unwrap_or(false);
     let requested_logprobs = request.logprobs;
-    let include_prompt_logprobs = request.prompt_logprobs.is_some();
+    let echo = request
+        .echo
+        .then(|| extract_last_assistant_content(&request.messages))
+        .flatten();
+
+    // Auto-enable prompt logprobs for non-streaming echo, matching Python vLLM's behavior.
+    let top_logprobs = request.top_logprobs.unwrap_or(0) as i32;
+    let prompt_logprobs = request
+        .prompt_logprobs
+        .or((request.echo && !request.stream).then_some(top_logprobs));
+    let include_prompt_logprobs = prompt_logprobs.is_some();
 
     let chat_request = ChatRequest {
         request_id: response_id.clone(),
@@ -61,10 +73,8 @@ pub fn prepare_chat_request(
             seed: request.seed,
             max_tokens: request.max_completion_tokens,
             min_tokens: request.min_tokens,
-            logprobs: request
-                .logprobs
-                .then_some(request.top_logprobs.unwrap_or(0) as i32),
-            prompt_logprobs: request.prompt_logprobs,
+            logprobs: request.logprobs.then_some(top_logprobs),
+            prompt_logprobs,
             min_p: request.min_p,
             frequency_penalty: request.frequency_penalty,
             presence_penalty: request.presence_penalty,
@@ -103,7 +113,27 @@ pub fn prepare_chat_request(
         requested_logprobs,
         include_prompt_logprobs,
         chat_request,
+        echo,
     })
+}
+
+/// Extract the text content of the last message if it has the assistant role.
+fn extract_last_assistant_content(messages: &[ChatMessage]) -> Option<String> {
+    let ChatMessage::Assistant { content, .. } = messages.last()? else {
+        return None;
+    };
+    let text = match content.as_ref()? {
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 /// Lower one OpenAI chat message into the `vllm-chat` message shape.
