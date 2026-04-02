@@ -379,10 +379,6 @@ pub struct EngineUnsupportedArgs {
     #[arg(long)]
     pub structured_outputs_config: Option<Unsupported>,
 
-    /// Profiling configuration.
-    #[arg(long)]
-    pub profiler_config: Option<Unsupported>,
-
     /// Disable logging statistics.
     #[arg(long, default_missing_value = "true", num_args = 0..=1)]
     pub disable_log_stats: Option<Unsupported>,
@@ -467,17 +463,6 @@ pub struct ServerUnsupportedArgs {
         num_args = 0..=1
     )]
     pub return_tokens_as_token_ids: Option<Unsupported>,
-
-    /// If specified, will run the OpenAI frontend server in the same process as
-    /// the model serving engine.
-    #[arg(
-        long,
-        visible_alias = "no-disable-frontend-multiprocessing",
-        default_missing_value = "true",
-        num_args = 0..=1,
-        hide = true
-    )]
-    pub disable_frontend_multiprocessing: Option<Noop>,
 
     /// Enable auto tool choice for supported models. Use `--tool-call-parser`
     /// to specify which parser to use.
