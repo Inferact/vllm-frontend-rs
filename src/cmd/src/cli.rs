@@ -78,18 +78,20 @@ pub struct SharedRuntimeArgs {
     #[serde(rename = "model_tag")]
     /// Hugging Face model identifier used both for backend loading and public model ID.
     pub model: String,
+
     /// Total number of data-parallel engines expected for this frontend.
-    #[arg(long, visible_alias = "data-parallel-size", default_value_t = 1)]
+    #[arg(long, visible_alias = "data-parallel-size", default_value_t = default_engine_count())]
     #[serde(default = "default_engine_count")]
     pub engine_count: usize,
     /// Maximum time to wait for the expected engines to register on the frontend transport.
     #[arg(
         long = "engine-ready-timeout-secs",
         env = "VLLM_ENGINE_READY_TIMEOUT_S",
-        default_value_t = 300
+        default_value_t = default_engine_ready_timeout_secs()
     )]
     #[serde(default = "default_engine_ready_timeout_secs")]
     pub engine_ready_timeout_secs: u64,
+
     /// Select the tool call parser depending on the model that you're using.
     /// When not specified, the parser is auto-detected from the model.
     #[arg(long)]
@@ -102,6 +104,7 @@ pub struct SharedRuntimeArgs {
     /// instead of the model's `max_position_embeddings` from `config.json`.
     #[arg(long)]
     pub max_model_len: Option<u32>,
+
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
     #[educe(Debug(ignore))]
     #[command(flatten)]
@@ -178,7 +181,7 @@ fn default_engine_ready_timeout_secs() -> u64 {
     300
 }
 
-fn parse_runtime_json(value: &str) -> anyhow::Result<SharedRuntimeArgs> {
+fn parse_runtime_args_json(value: &str) -> anyhow::Result<SharedRuntimeArgs> {
     let args: SharedRuntimeArgs = serde_json::from_str(value).context("invalid JSON arguments")?;
     args.unsupported.check()?;
     Ok(args)
@@ -199,7 +202,7 @@ pub struct FrontendArgs {
     pub output_address: String,
 
     /// Shared frontend arguments as one JSON object.
-    #[arg(long = "args-json", value_parser = parse_runtime_json, value_name = "JSON")]
+    #[arg(long = "args-json", value_parser = parse_runtime_args_json, value_name = "JSON")]
     pub runtime: SharedRuntimeArgs,
 }
 
