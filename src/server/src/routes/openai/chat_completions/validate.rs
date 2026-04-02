@@ -46,8 +46,6 @@ pub(super) fn validate_request_compat(
         }
     }
 
-    // response_format validation is handled during conversion
-
     if let Some(tools) = request.tools.as_ref() {
         for tool in tools {
             if tool.tool_type != "function" {
@@ -101,7 +99,6 @@ pub(super) fn validate_request_compat(
         );
     }
 
-    // structured_outputs is handled during conversion
     Ok(())
 }
 

@@ -72,8 +72,6 @@ pub(super) fn validate_request_compat(
         );
     }
 
-    // response_format and structured_outputs are handled during conversion
-
     Ok(())
 }
 
