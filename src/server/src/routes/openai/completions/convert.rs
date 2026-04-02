@@ -1,4 +1,3 @@
-use openai_protocol::common::StringOrArray;
 use uuid::Uuid;
 use vllm_text::{Prompt, SamplingParams, TextDecodeOptions, TextRequest};
 
@@ -89,10 +88,7 @@ pub fn prepare_completion_request(
         decode_options: TextDecodeOptions {
             skip_special_tokens: request.skip_special_tokens,
             include_stop_str_in_output: request.include_stop_str_in_output,
-            stop_strings: request.stop.as_ref().map(|stop| match stop {
-                StringOrArray::String(string) => vec![string.clone()],
-                StringOrArray::Array(arr) => arr.clone(),
-            }),
+            stop_strings: request.stop.as_ref().map(|stop| stop.as_slice().to_vec()),
             min_tokens: request.min_tokens.unwrap_or(0),
         },
         intermediate: request.stream,

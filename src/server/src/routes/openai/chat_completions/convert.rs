@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use openai_protocol::chat::{ChatMessage, MessageContent};
-use openai_protocol::common::{ContentPart, StringOrArray, ToolChoice, ToolChoiceValue};
 use uuid::Uuid;
 use vllm_chat::{
     AssistantContentBlock, AssistantToolCall, ChatContent, ChatContentPart,
@@ -13,6 +11,9 @@ use super::types::ChatCompletionRequest;
 use super::validate;
 use crate::error::{ApiError, bail_invalid_request};
 use crate::routes::openai::utils::structured_outputs::convert_from_response_format;
+use crate::routes::openai::utils::types::{
+    ChatMessage, ContentPart, MessageContent, ToolChoice, ToolChoiceValue,
+};
 use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
 
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
@@ -108,10 +109,7 @@ pub fn prepare_chat_request(
         decode_options: vllm_text::output::TextDecodeOptions {
             skip_special_tokens: request.skip_special_tokens,
             include_stop_str_in_output: request.include_stop_str_in_output,
-            stop_strings: request.stop.as_ref().map(|stop| match stop {
-                StringOrArray::String(string) => vec![string.clone()],
-                StringOrArray::Array(arr) => arr.clone(),
-            }),
+            stop_strings: request.stop.as_ref().map(|stop| stop.as_slice().to_vec()),
             min_tokens: request.min_tokens.unwrap_or(0),
         },
         intermediate: request.stream,
@@ -236,7 +234,7 @@ fn convert_assistant_text_blocks(
 }
 
 fn convert_assistant_tool_calls(
-    tool_calls: &[openai_protocol::common::ToolCall],
+    tool_calls: &[crate::routes::openai::utils::types::ToolCall],
 ) -> Result<Vec<AssistantContentBlock>, ApiError> {
     tool_calls
         .iter()
@@ -259,7 +257,7 @@ fn convert_assistant_tool_calls(
 }
 
 fn convert_tools(
-    tools: Option<&[openai_protocol::common::Tool]>,
+    tools: Option<&[crate::routes::openai::utils::types::Tool]>,
 ) -> Result<Vec<ChatTool>, ApiError> {
     tools
         .unwrap_or(&[])
@@ -290,12 +288,14 @@ fn convert_tool_choice(tool_choice: Option<&ToolChoice>) -> Result<ChatToolChoic
 mod tests {
     use std::collections::HashMap;
 
-    use openai_protocol::chat::{ChatMessage, MessageContent};
-    use openai_protocol::common::{ContentPart, Tool, ToolChoice};
     use serde_json::json;
 
     use super::prepare_chat_request;
     use crate::routes::openai::chat_completions::types::ChatCompletionRequest;
+    use crate::routes::openai::utils::types::{
+        ChatMessage, ContentPart, Function, FunctionCallResponse, ImageUrl, MessageContent, Tool,
+        ToolCall, ToolChoice, ToolChoiceValue,
+    };
 
     fn base_request() -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -549,7 +549,7 @@ mod tests {
         let request = ChatCompletionRequest {
             messages: vec![ChatMessage::User {
                 content: MessageContent::Parts(vec![ContentPart::ImageUrl {
-                    image_url: openai_protocol::common::ImageUrl {
+                    image_url: ImageUrl {
                         url: "https://example.com/image.png".to_string(),
                         detail: None,
                     },
@@ -644,10 +644,10 @@ mod tests {
                 ChatMessage::Assistant {
                     content: None,
                     name: None,
-                    tool_calls: Some(vec![openai_protocol::common::ToolCall {
+                    tool_calls: Some(vec![ToolCall {
                         id: "call_1".to_string(),
                         tool_type: "function".to_string(),
-                        function: openai_protocol::common::FunctionCallResponse {
+                        function: FunctionCallResponse {
                             name: "get_weather".to_string(),
                             arguments: Some(r#"{"city":"Paris"}"#.to_string()),
                         },
@@ -661,7 +661,7 @@ mod tests {
             ],
             tools: Some(vec![Tool {
                 tool_type: "function".to_string(),
-                function: openai_protocol::common::Function {
+                function: Function {
                     name: "get_weather".to_string(),
                     description: Some("Get weather".to_string()),
                     parameters: json!({
@@ -671,9 +671,7 @@ mod tests {
                     strict: None,
                 },
             }]),
-            tool_choice: Some(ToolChoice::Value(
-                openai_protocol::common::ToolChoiceValue::None,
-            )),
+            tool_choice: Some(ToolChoice::Value(ToolChoiceValue::None)),
             ..base_request()
         };
 

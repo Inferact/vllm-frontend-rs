@@ -2315,7 +2315,6 @@ version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c6a0b3c6a9d2ef232690234e72b207532395ec52a1d4823141814b65b7696d"
 dependencies = [
- "axum",
  "bitflags",
  "chrono",
  "rand 0.9.2",
@@ -4623,7 +4622,6 @@ dependencies = [
  "futures-async-stream",
  "http-body",
  "libc",
- "openai-protocol",
  "rmp-serde",
  "rmpv",
  "serde",

@@ -1,8 +1,9 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use openai_protocol::common::{ErrorDetail, ErrorResponse};
 use thiserror_ext::{Construct, Macro};
+
+use crate::routes::openai::utils::types::{ErrorDetail, ErrorResponse};
 
 /// Small OpenAI-style error family used by the minimal HTTP layer.
 #[derive(Debug, Construct, Macro)]

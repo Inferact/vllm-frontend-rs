@@ -2,7 +2,7 @@ mod cache;
 mod health;
 mod load;
 mod metrics;
-mod openai;
+pub(crate) mod openai;
 mod sleep;
 
 use std::sync::Arc;
