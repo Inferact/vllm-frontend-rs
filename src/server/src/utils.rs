@@ -29,7 +29,8 @@ pub fn merge_kv_transfer_params(
         let map = xargs.get_or_insert_with(HashMap::new);
         map.insert(
             "kv_transfer_params".to_string(),
-            serde_json::to_value(kv_params).expect("HashMap<String, Value> must serialize to JSON"),
+            // This is safe because we know that `kv_params` is already valid JSON.
+            serde_json::to_value(kv_params).unwrap(),
         );
     }
     xargs

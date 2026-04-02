@@ -145,9 +145,7 @@ pub async fn decoded_text_event_stream(
             started = true;
         }
 
-        let kv_transfer_params = output
-            .take_kv_transfer_params()
-            .and_then(|v| serde_json::to_value(&v).ok());
+        let kv_transfer_params = output.take_kv_transfer_params();
         let mut finish_reason = output.finish_reason();
         let suppress_terminal_stop_token = finish_reason.as_ref().is_some_and(|r| r.is_stop())
             && !decode_options.include_stop_str_in_output;
