@@ -227,7 +227,6 @@ fn frontend_args_json_applies_defaults() {
         panic!("expected frontend args");
     };
     assert_eq!(args.runtime.model, "Qwen/Qwen3-0.6B");
-    assert_eq!(args.runtime.engine_count, 1);
     assert_eq!(args.runtime.engine_ready_timeout_secs, 300);
     assert_eq!(args.runtime.tool_call_parser, None);
     assert_eq!(args.runtime.reasoning_parser, None);
@@ -246,14 +245,13 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","engine_count":4,"engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","max_model_len":8192}"#,
+        r#"{"model":"Qwen/Qwen3-0.6B","engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","max_model_len":8192}"#,
     ])
     .unwrap();
 
     let Command::Frontend(args) = cli.command else {
         panic!("expected frontend args");
     };
-    assert_eq!(args.runtime.engine_count, 4);
     assert_eq!(args.runtime.engine_ready_timeout_secs, 42);
     assert_eq!(args.runtime.tool_call_parser.as_deref(), Some("hermes"));
     assert_eq!(
@@ -283,7 +281,6 @@ fn frontend_args_json_ignores_unknown_fields() {
         panic!("expected frontend args");
     };
     assert_eq!(args.runtime.model, "Qwen/Qwen3-0.6B");
-    assert_eq!(args.runtime.engine_count, 1);
 }
 
 #[test]
@@ -574,7 +571,7 @@ fn serve_args_accept_data_parallel_primary_flags() {
     assert!(!args.headless);
     assert_eq!(args.handshake_host, "10.99.48.128");
     assert_eq!(args.handshake_port, Some(13345));
-    assert_eq!(args.runtime.engine_count, 4);
+    assert_eq!(args.engine_count, 4);
 }
 
 #[test]
