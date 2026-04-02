@@ -178,6 +178,7 @@ async fn collect_completion(
             collected.token_ids.len() as u32,
         )),
         system_fingerprint: None,
+        kv_transfer_params: collected.kv_transfer_params,
     })
 }
 
@@ -470,6 +471,7 @@ mod tests {
                     prompt_token_count: 5,
                     output_token_count: 2,
                     finish_reason: FinishReason::stop_eos(),
+                    kv_transfer_params: None,
                 }),
             }),
         ]);

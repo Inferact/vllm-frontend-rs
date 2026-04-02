@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use openai_protocol::chat::{ChatMessage, MessageContent};
 use openai_protocol::common::{
-    ResponseFormat, StringOrArray, Tool, ToolCall, ToolCallDelta, ToolChoice, ToolChoiceValue,
-    ToolReference, default_true, validate_stop,
+    StringOrArray, Tool, ToolCall, ToolCallDelta, ToolChoice, ToolChoiceValue, ToolReference,
+    default_true, validate_stop,
 };
 use openai_protocol::sampling_params::validate_top_p_value;
 use openai_protocol::validated::Normalizable;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use validator::Validate;
 
+use crate::routes::openai::utils::structured_outputs::ResponseFormat;
 use crate::routes::openai::utils::types::{ChatLogProbs, StreamOptions, Usage};
 
 /// vLLM-compatible request type for the Chat Completions API.
@@ -327,6 +328,7 @@ pub(super) struct ChatCompletionResponse {
     pub system_fingerprint: Option<String>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
     pub prompt_token_ids: Option<Vec<u32>>,
+    pub kv_transfer_params: Option<Value>,
 }
 
 /// Mirrors the Python vLLM `ChatCompletionResponseChoice` class.

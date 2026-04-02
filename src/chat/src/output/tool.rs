@@ -244,6 +244,7 @@ async fn final_only_tool_event_stream(
                 prompt_token_count,
                 output_token_count,
                 finish_reason,
+                kv_transfer_params,
             } => {
                 match parser.parse_complete(&final_text).await {
                     Ok((normal_text, tool_calls)) => {
@@ -282,6 +283,7 @@ async fn final_only_tool_event_stream(
                     prompt_token_count,
                     output_token_count,
                     finish_reason,
+                    kv_transfer_params,
                 };
                 return Ok(());
             }
@@ -350,6 +352,7 @@ pub(crate) async fn tool_event_stream(
                 prompt_token_count,
                 output_token_count,
                 finish_reason,
+                kv_transfer_params,
             } => {
                 let mut flush_events = Vec::new();
                 // Some parsers buffer a trailing arguments fragment and only
@@ -368,6 +371,7 @@ pub(crate) async fn tool_event_stream(
                     prompt_token_count,
                     output_token_count,
                     finish_reason,
+                    kv_transfer_params,
                 };
             }
         }
@@ -470,6 +474,7 @@ mod tests {
                 prompt_token_count: 3,
                 output_token_count: 0,
                 finish_reason: FinishReason::stop_eos(),
+                kv_transfer_params: None,
             }),
         ]);
 
@@ -506,6 +511,7 @@ mod tests {
                     prompt_token_count: 3,
                     output_token_count: 0,
                     finish_reason: FinishReason::stop_eos(),
+                    kv_transfer_params: None,
                 },
             ]
         );
@@ -548,6 +554,7 @@ mod tests {
                 prompt_token_count: 1,
                 output_token_count: 0,
                 finish_reason: FinishReason::stop_eos(),
+                kv_transfer_params: None,
             }),
         ]);
         let mut request = tool_request("req_final_only_logprobs");
@@ -589,6 +596,7 @@ mod tests {
                     prompt_token_count: 1,
                     output_token_count: 0,
                     finish_reason: FinishReason::stop_eos(),
+                    kv_transfer_params: None,
                 },
             ]
         );

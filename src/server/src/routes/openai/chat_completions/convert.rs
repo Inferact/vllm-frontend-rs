@@ -12,7 +12,8 @@ use vllm_chat::{
 use super::types::ChatCompletionRequest;
 use super::validate;
 use crate::error::{ApiError, bail_invalid_request};
-use crate::utils::convert_logit_bias;
+use crate::routes::openai::utils::structured_outputs::convert_from_response_format;
+use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
 
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +69,11 @@ pub fn prepare_chat_request(
         .or((request.echo && !request.stream).then_some(top_logprobs));
     let include_prompt_logprobs = prompt_logprobs.is_some();
 
+    let structured_outputs = convert_from_response_format(
+        request.response_format.as_ref(),
+        &request.structured_outputs,
+    )?;
+
     let chat_request = ChatRequest {
         request_id: response_id.clone(),
         messages,
@@ -89,7 +95,11 @@ pub fn prepare_chat_request(
             logit_bias: convert_logit_bias(request.logit_bias.clone())?,
             allowed_token_ids: request.allowed_token_ids.clone(),
             bad_words: request.bad_words.clone(),
-            vllm_xargs: request.vllm_xargs.clone(),
+            structured_outputs,
+            vllm_xargs: merge_kv_transfer_params(
+                request.vllm_xargs.clone(),
+                request.kv_transfer_params.as_ref(),
+            ),
         },
         chat_options: ChatOptions {
             add_generation_prompt: request.add_generation_prompt && !request.continue_final_message,
@@ -352,6 +362,7 @@ mod tests {
                     logit_bias: None,
                     allowed_token_ids: None,
                     bad_words: None,
+                    structured_outputs: None,
                     vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
@@ -411,6 +422,7 @@ mod tests {
                     logit_bias: None,
                     allowed_token_ids: None,
                     bad_words: None,
+                    structured_outputs: None,
                     vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
@@ -485,6 +497,7 @@ mod tests {
                     logit_bias: None,
                     allowed_token_ids: None,
                     bad_words: None,
+                    structured_outputs: None,
                     vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
@@ -587,6 +600,7 @@ mod tests {
                     logit_bias: None,
                     allowed_token_ids: None,
                     bad_words: None,
+                    structured_outputs: None,
                     vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
@@ -692,6 +706,7 @@ mod tests {
                     logit_bias: None,
                     allowed_token_ids: None,
                     bad_words: None,
+                    structured_outputs: None,
                     vllm_xargs: None,
                 },
                 chat_options: ChatOptions {
