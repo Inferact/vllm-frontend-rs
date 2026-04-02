@@ -10,8 +10,10 @@ mod unsupported;
 use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
+use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use educe::Educe;
+use serde::Deserialize;
 use vllm_engine_core_client::TransportMode;
 use vllm_server::{Config, CoordinatorMode, HttpListenerMode};
 
@@ -70,13 +72,15 @@ pub enum Command {
 }
 
 /// Runtime arguments shared by the external-engine and managed-engine paths.
-#[derive(Educe, Clone, Args, PartialEq, Eq)]
+#[derive(Educe, Clone, Args, PartialEq, Eq, Deserialize)]
 #[educe(Debug)]
 pub struct SharedRuntimeArgs {
+    #[serde(rename = "model_tag")]
     /// Hugging Face model identifier used both for backend loading and public model ID.
     pub model: String,
     /// Total number of data-parallel engines expected for this frontend.
     #[arg(long, visible_alias = "data-parallel-size", default_value_t = 1)]
+    #[serde(default = "default_engine_count")]
     pub engine_count: usize,
     /// Maximum time to wait for the expected engines to register on the frontend transport.
     #[arg(
@@ -84,6 +88,7 @@ pub struct SharedRuntimeArgs {
         env = "VLLM_ENGINE_READY_TIMEOUT_S",
         default_value_t = 300
     )]
+    #[serde(default = "default_engine_ready_timeout_secs")]
     pub engine_ready_timeout_secs: u64,
     /// Select the tool call parser depending on the model that you're using.
     /// When not specified, the parser is auto-detected from the model.
@@ -100,6 +105,7 @@ pub struct SharedRuntimeArgs {
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
     #[educe(Debug(ignore))]
     #[command(flatten)]
+    #[serde(default, flatten)]
     pub unsupported: UnsupportedArgs,
 }
 
@@ -164,6 +170,20 @@ impl SharedRuntimeArgs {
     }
 }
 
+fn default_engine_count() -> usize {
+    1
+}
+
+fn default_engine_ready_timeout_secs() -> u64 {
+    300
+}
+
+fn parse_runtime_json(value: &str) -> anyhow::Result<SharedRuntimeArgs> {
+    let args: SharedRuntimeArgs = serde_json::from_str(value).context("invalid JSON arguments")?;
+    args.unsupported.check()?;
+    Ok(args)
+}
+
 /// Arguments for running the Rust frontend as a Python-bootstrapped worker.
 #[derive(Educe, Clone, Args, PartialEq, Eq)]
 #[educe(Debug)]
@@ -178,8 +198,8 @@ pub struct FrontendArgs {
     #[arg(long)]
     pub output_address: String,
 
-    /// Shared frontend arguments.
-    #[command(flatten)]
+    /// Shared frontend arguments as one JSON object.
+    #[arg(long = "args-json", value_parser = parse_runtime_json, value_name = "JSON")]
     pub runtime: SharedRuntimeArgs,
 }
 

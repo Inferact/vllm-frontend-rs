@@ -1,14 +1,22 @@
 #![allow(clippy::doc_lazy_continuation)]
 
+use std::fmt::Display;
 use std::str::FromStr;
 
+use anyhow::bail;
 use clap::Args;
 use clap::builder::{TypedValueParser, ValueParserFactory};
+use itertools::Itertools;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Marker type for frontend-owned `serve` arguments that `vllm-rs` recognizes but does not
 /// support yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Unsupported {}
+///
+/// When passed as JSON args, it can be deserialized from any value, and serializes back to the
+/// original value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Unsupported(pub serde_json::Value);
 
 impl FromStr for Unsupported {
     type Err = String;
@@ -25,8 +33,20 @@ This may lead to unexpected behavior as the Rust frontend will completely ignore
 }
 
 /// Marker type for no-op arguments that are accepted by the Rust frontend but have no effect.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+///
+/// When passed as JSON args, it can be deserialized from any value, but always serializes back to
+/// `null`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Noop;
+
+impl<'de> Deserialize<'de> for Noop {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Noop)
+    }
+}
 
 impl ValueParserFactory for Noop {
     type Parser = NoopValueParser;
@@ -39,6 +59,11 @@ impl ValueParserFactory for Noop {
 #[derive(Copy, Clone, Debug)]
 pub struct NoopValueParser;
 
+#[track_caller]
+fn noop_warn(arg: impl Display) {
+    tracing::warn!("argument '{arg}' has no effect in Rust frontend, ignoring");
+}
+
 impl TypedValueParser for NoopValueParser {
     type Value = Noop;
 
@@ -49,22 +74,61 @@ impl TypedValueParser for NoopValueParser {
         _value: &std::ffi::OsStr,
     ) -> Result<Self::Value, clap::Error> {
         if let Some(arg) = arg {
-            tracing::warn!("argument '{arg}' has no effect in Rust frontend, ignoring");
+            noop_warn(arg);
         }
         Ok(Noop)
     }
 }
 
 /// Frontend-owned Python `serve` arguments that `vllm-rs` recognizes but does not support yet.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Args, Serialize, Deserialize)]
 #[command(next_help_heading = "Options not implemented in Rust frontend yet")]
 pub struct UnsupportedArgs {
     #[command(flatten)]
+    #[serde(default, flatten)]
     top_level: TopLevelUnsupportedArgs,
     #[command(flatten)]
+    #[serde(default, flatten)]
     engine: EngineUnsupportedArgs,
     #[command(flatten)]
+    #[serde(default, flatten)]
     server: ServerUnsupportedArgs,
+}
+
+impl UnsupportedArgs {
+    /// Check whether any unsupported arguments are set, and if so, return an error listing them.
+    /// Also warn about any no-op arguments that are set but will be ignored.
+    pub(crate) fn check(&self) -> anyhow::Result<()> {
+        let value = serde_json::to_value(self).unwrap();
+        let map = value.as_object().unwrap();
+        let mut unsupported = Vec::new();
+
+        for (key, value) in map {
+            if value.is_null() {
+                noop_warn(key);
+            } else {
+                unsupported.push(key.as_str());
+            }
+        }
+
+        if !unsupported.is_empty() {
+            unsupported.sort_unstable();
+            let bullets = unsupported
+                .into_iter()
+                .map(|key| format!("- {key}"))
+                .join("\n");
+            bail!(
+                "
+The following arguments are not implemented in Rust frontend yet:
+{bullets}
+
+Remove these arguments to continue."
+            );
+        }
+
+        Ok(())
+    }
 }
 
 /// Frontend-owned Python `vllm serve` top-level arguments that `vllm-rs` recognizes but does not
@@ -77,7 +141,8 @@ pub struct UnsupportedArgs {
 /// These are not part of `EngineArgs`, `AsyncEngineArgs`, `BaseFrontendArgs`, or `FrontendArgs`.
 /// They live on the `serve` command itself and control managed-engine / multi-process orchestration
 /// rather than the shared frontend runtime config.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Args, Serialize, Deserialize)]
 pub struct TopLevelUnsupportedArgs {
     /// How many API server processes to run. Defaults to data_parallel_size if not specified.
     #[arg(long, hide = true)]
@@ -104,7 +169,8 @@ pub struct TopLevelUnsupportedArgs {
 /// frontend-owned: the API server / AsyncLLM layer reads them for tokenizer setup, request
 /// validation, routing, logging, and other frontend behavior, so Rust must recognize them rather
 /// than treating them as pure engine passthrough.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Args, Serialize, Deserialize)]
 pub struct EngineUnsupportedArgs {
     /// Name or path of the Hugging Face tokenizer to use. If unspecified, model
     /// name or path will be used.
@@ -345,7 +411,8 @@ pub struct EngineUnsupportedArgs {
 /// These are not engine args. They belong to the Python OpenAI-compatible frontend / API-server
 /// layer itself, for example chat-template configuration, tool/frontend behavior, UDS / TLS /
 /// CORS / HTTP server settings, and other northbound server knobs.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Args, Serialize, Deserialize)]
 pub struct ServerUnsupportedArgs {
     /// LoRA modules configurations in either 'name=path' format or JSON format
     /// or JSON list format. Example (old format): `'name=path'` Example (new
