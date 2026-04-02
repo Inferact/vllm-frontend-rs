@@ -377,7 +377,7 @@ fn frontend_args_json_rejects_malformed_json() {
     .unwrap_err();
 
     expect![[r#"
-        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B"' for '--args-json <JSON>': invalid JSON arguments
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B"' for '--args-json <JSON>': invalid JSON arguments: EOF while parsing an object at line 1 column 30
 
         For more information, try '--help'.
     "#]].assert_eq(&error.to_string());
