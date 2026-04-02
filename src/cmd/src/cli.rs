@@ -10,10 +10,10 @@ mod unsupported;
 use std::ffi::{OsStr, OsString};
 use std::time::Duration;
 
-use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use educe::Educe;
 use serde::Deserialize;
+use thiserror_ext::AsReport as _;
 use vllm_engine_core_client::TransportMode;
 use vllm_server::{Config, CoordinatorMode, HttpListenerMode};
 
@@ -175,8 +175,9 @@ fn default_engine_ready_timeout_secs() -> u64 {
     300
 }
 
-fn parse_runtime_args_json(value: &str) -> anyhow::Result<SharedRuntimeArgs> {
-    let args: SharedRuntimeArgs = serde_json::from_str(value).context("invalid JSON arguments")?;
+fn parse_runtime_args_json(value: &str) -> Result<SharedRuntimeArgs, String> {
+    let args: SharedRuntimeArgs = serde_json::from_str(value)
+        .map_err(|e| format!("invalid JSON arguments: {}", e.as_report()))?;
     args.unsupported.check()?;
     Ok(args)
 }

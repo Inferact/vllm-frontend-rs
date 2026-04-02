@@ -3,7 +3,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use anyhow::bail;
 use clap::Args;
 use clap::builder::{TypedValueParser, ValueParserFactory};
 use itertools::Itertools;
@@ -99,7 +98,7 @@ pub struct UnsupportedArgs {
 impl UnsupportedArgs {
     /// Check whether any unsupported arguments are set, and if so, return an error listing them.
     /// Also warn about any no-op arguments that are set but will be ignored.
-    pub(crate) fn check(&self) -> anyhow::Result<()> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let value = serde_json::to_value(self).unwrap();
         let map = value.as_object().unwrap();
         let mut unsupported = Vec::new();
@@ -118,13 +117,13 @@ impl UnsupportedArgs {
                 .into_iter()
                 .map(|key| format!("- {key}"))
                 .join("\n");
-            bail!(
+            return Err(format!(
                 "
 The following arguments are not implemented in Rust frontend yet:
 {bullets}
 
 Remove these arguments to continue."
-            );
+            ));
         }
 
         Ok(())
