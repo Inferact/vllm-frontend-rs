@@ -19,33 +19,33 @@ fn serve_args_forward_python_flags_with_separator() {
     .unwrap();
 
     expect![[r#"
-            Cli {
-                command: Serve(
-                    ServeArgs {
-                        headless: false,
-                        python: "../vllm/.venv/bin/python",
-                        host: "127.0.0.1",
-                        port: 8000,
-                        handshake_host: "127.0.0.1",
-                        handshake_port: None,
-                        runtime: SharedRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            engine_count: 1,
-                            engine_ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: Some(
-                                512,
-                            ),
-                        },
-                        python_args: [
-                            "--dtype",
-                            "float16",
-                        ],
+        Cli {
+            command: Serve(
+                ServeArgs {
+                    headless: false,
+                    python: "../vllm/.venv/bin/python",
+                    host: "127.0.0.1",
+                    port: 8000,
+                    handshake_host: "127.0.0.1",
+                    handshake_port: None,
+                    engine_count: 1,
+                    runtime: SharedRuntimeArgs {
+                        model: "Qwen/Qwen3-0.6B",
+                        engine_ready_timeout_secs: 300,
+                        tool_call_parser: None,
+                        reasoning_parser: None,
+                        max_model_len: Some(
+                            512,
+                        ),
                     },
-                ),
-            }
-        "#]]
+                    python_args: [
+                        "--dtype",
+                        "float16",
+                    ],
+                },
+            ),
+        }
+    "#]]
     .assert_debug_eq(&cli);
 }
 
@@ -192,9 +192,9 @@ fn frontend_args_accept_json() {
                     listen_fd: 3,
                     input_address: "ipc:///tmp/input.sock",
                     output_address: "ipc:///tmp/output.sock",
+                    engine_count: 1,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
-                        engine_count: 2,
                         engine_ready_timeout_secs: 300,
                         tool_call_parser: None,
                         reasoning_parser: None,
@@ -219,7 +219,7 @@ fn frontend_args_json_applies_defaults() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B"}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B"}"#,
     ])
     .unwrap();
 
@@ -245,7 +245,7 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","max_model_len":8192}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","max_model_len":8192}"#,
     ])
     .unwrap();
 
@@ -273,7 +273,7 @@ fn frontend_args_json_ignores_unknown_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","unknown_field":"ignored","nested_unknown":{"x":1}}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","unknown_field":"ignored","nested_unknown":{"x":1}}"#,
     ])
     .unwrap();
 
@@ -295,7 +295,7 @@ fn frontend_args_json_accepts_noop_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","api_server_count":2}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","api_server_count":2}"#,
     ])
     .unwrap();
 
@@ -317,12 +317,16 @@ fn frontend_args_json_rejects_unsupported_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","allow_credentials":true}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true}"#,
     ])
     .unwrap_err();
 
     expect![[r#"
-        error: invalid value '{"model":"Qwen/Qwen3-0.6B","allow_credentials":true}' for '--args-json <JSON>': invalid JSON arguments
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true}' for '--args-json <JSON>': 
+        The following arguments are not implemented in Rust frontend yet:
+        - allow_credentials
+
+        Remove these arguments to continue.
 
         For more information, try '--help'.
     "#]].assert_eq(&error.to_string());
@@ -340,12 +344,17 @@ fn frontend_args_json_aggregates_multiple_unsupported_fields() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}"#,
     ])
     .unwrap_err();
 
     expect![[r#"
-        error: invalid value '{"model":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}' for '--args-json <JSON>': invalid JSON arguments
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}' for '--args-json <JSON>': 
+        The following arguments are not implemented in Rust frontend yet:
+        - allow_credentials
+        - api_key
+
+        Remove these arguments to continue.
 
         For more information, try '--help'.
     "#]].assert_eq(&error.to_string());
@@ -363,12 +372,12 @@ fn frontend_args_json_rejects_malformed_json() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B""#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B""#,
     ])
     .unwrap_err();
 
     expect![[r#"
-        error: invalid value '{"model":"Qwen/Qwen3-0.6B"' for '--args-json <JSON>': invalid JSON arguments
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B"' for '--args-json <JSON>': invalid JSON arguments
 
         For more information, try '--help'.
     "#]].assert_eq(&error.to_string());
@@ -523,30 +532,30 @@ fn serve_args_accept_handshake_aliases() {
     .unwrap();
 
     expect![[r#"
-            Cli {
-                command: Serve(
-                    ServeArgs {
-                        headless: false,
-                        python: "python3",
-                        host: "127.0.0.1",
-                        port: 8000,
-                        handshake_host: "10.99.48.128",
-                        handshake_port: Some(
-                            13345,
-                        ),
-                        runtime: SharedRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            engine_count: 4,
-                            engine_ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: None,
-                        },
-                        python_args: [],
+        Cli {
+            command: Serve(
+                ServeArgs {
+                    headless: false,
+                    python: "python3",
+                    host: "127.0.0.1",
+                    port: 8000,
+                    handshake_host: "10.99.48.128",
+                    handshake_port: Some(
+                        13345,
+                    ),
+                    engine_count: 4,
+                    runtime: SharedRuntimeArgs {
+                        model: "Qwen/Qwen3-0.6B",
+                        engine_ready_timeout_secs: 300,
+                        tool_call_parser: None,
+                        reasoning_parser: None,
+                        max_model_len: None,
                     },
-                ),
-            }
-        "#]]
+                    python_args: [],
+                },
+            ),
+        }
+    "#]]
     .assert_debug_eq(&cli);
 }
 
@@ -628,7 +637,7 @@ fn frontend_args_reject_legacy_handshake_flags() {
         "--output-address",
         "ipc:///tmp/output.sock",
         "--args-json",
-        r#"{"model":"Qwen/Qwen3-0.6B"}"#,
+        r#"{"model_tag":"Qwen/Qwen3-0.6B"}"#,
         "--handshake-address",
         "tcp://127.0.0.1:62100",
     ])
