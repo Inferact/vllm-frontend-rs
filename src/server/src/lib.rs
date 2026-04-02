@@ -11,11 +11,14 @@ mod state;
 mod utils;
 
 use std::future::Future;
+use std::net::TcpListener as StdTcpListener;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-pub use config::Config;
+pub use config::{Config, CoordinatorMode, HttpListenerMode};
 use futures::FutureExt as _;
+use socket2::Socket;
 use tokio::net::TcpListener;
 use tracing::info;
 use vllm_chat::{ChatLlm, load_model_backends};
@@ -35,22 +38,19 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
     let text_backend = loaded.text_backend;
     let chat_backend = loaded.chat_backend;
 
-    let enable_inproc_coordinator = config.engine_count > 1 && text_backend.is_moe();
+    let coordinator_mode = config.effective_coordinator_mode(text_backend.is_moe());
     info!(
-        engine_count = config.engine_count,
+        engine_count = config.engine_count(),
         model_is_moe = text_backend.is_moe(),
-        enable_inproc_coordinator,
-        "resolved in-process coordinator mode"
+        ?coordinator_mode,
+        "resolved coordinator mode"
     );
 
     let client = EngineCoreClient::connect(EngineCoreClientConfig {
-        handshake_address: config.handshake_address.clone(),
-        engine_count: config.engine_count,
+        transport_mode: config.transport_mode.clone(),
+        coordinator_mode,
         model_name: config.model.clone(),
-        local_host: config.advertised_host.clone(),
-        ready_timeout: config.ready_timeout,
         client_index: 0,
-        enable_inproc_coordinator,
     })
     .await
     .context("failed to connect to engine core")?;
@@ -88,7 +88,7 @@ where
         result = build_state(&config) => result?,
         _ = shutdown.clone() => return Ok(()),
     };
-    let listener = TcpListener::bind(config.bind_address()).await?;
+    let listener = bind_listener(&config.listener_mode).await?;
     let bind_address = listener.local_addr()?;
     let model = state.model_id.clone();
     let app = build_router(state.clone());
@@ -100,4 +100,26 @@ where
         .await?;
 
     state.shutdown().await
+}
+
+/// Construct the Tokio listener that matches the configured listener acquisition strategy.
+async fn bind_listener(mode: &HttpListenerMode) -> Result<TcpListener> {
+    match mode {
+        HttpListenerMode::Bind { host, port } => {
+            Ok(TcpListener::bind((host.as_str(), *port)).await?)
+        }
+        HttpListenerMode::InheritedFd { fd } => {
+            // SAFETY: We trust the caller to only pass valid listener fds, and we only use this fd
+            // once to create a single `TcpListener`.
+            let owned_fd = unsafe { OwnedFd::from_raw_fd(*fd) };
+            let socket = Socket::from(owned_fd);
+            // The Python supervisor pre-binds the socket to reserve the port early, but Rust is
+            // responsible for transitioning inherited TCP sockets into the listening state before
+            // accepting connections.
+            socket.listen(libc::SOMAXCONN)?;
+            socket.set_nonblocking(true)?;
+            let std_listener = StdTcpListener::from(socket);
+            Ok(TcpListener::from_std(std_listener)?)
+        }
+    }
 }

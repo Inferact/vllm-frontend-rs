@@ -19,33 +19,33 @@ fn serve_args_forward_python_flags_with_separator() {
     .unwrap();
 
     expect![[r#"
-            Cli {
-                command: Serve(
-                    ServeArgs {
-                        headless: false,
-                        python: "../vllm/.venv/bin/python",
-                        handshake_host: "127.0.0.1",
-                        handshake_port: None,
-                        runtime: SharedRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            host: "127.0.0.1",
-                            port: 8000,
-                            engine_count: 1,
-                            ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: Some(
-                                512,
-                            ),
-                        },
-                        python_args: [
-                            "--dtype",
-                            "float16",
-                        ],
+        Cli {
+            command: Serve(
+                ServeArgs {
+                    headless: false,
+                    python: "../vllm/.venv/bin/python",
+                    host: "127.0.0.1",
+                    port: 8000,
+                    handshake_host: "127.0.0.1",
+                    handshake_port: None,
+                    engine_count: 1,
+                    runtime: SharedRuntimeArgs {
+                        model: "Qwen/Qwen3-0.6B",
+                        engine_ready_timeout_secs: 300,
+                        tool_call_parser: None,
+                        reasoning_parser: None,
+                        max_model_len: Some(
+                            512,
+                        ),
                     },
-                ),
-            }
-        "#]]
+                    python_args: [
+                        "--dtype",
+                        "float16",
+                    ],
+                },
+            ),
+        }
+    "#]]
     .assert_debug_eq(&cli);
 }
 
@@ -170,15 +170,18 @@ fn serve_args_reject_unsupported_no_flag_alias() {
 }
 
 #[test]
-fn frontend_args_accept_engine_count() {
+fn frontend_args_accept_json() {
     let cli = Cli::try_parse_from([
         "vllm-rs",
         "frontend",
-        "Qwen/Qwen3-0.6B",
-        "--handshake-address",
-        "tcp://127.0.0.1:62100",
-        "--engine-count",
-        "2",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","engine_count":2}"#,
     ])
     .unwrap();
 
@@ -186,14 +189,13 @@ fn frontend_args_accept_engine_count() {
         Cli {
             command: Frontend(
                 FrontendArgs {
-                    advertised_host: "127.0.0.1",
-                    handshake_address: "tcp://127.0.0.1:62100",
+                    listen_fd: 3,
+                    input_address: "ipc:///tmp/input.sock",
+                    output_address: "ipc:///tmp/output.sock",
+                    engine_count: 1,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
-                        host: "127.0.0.1",
-                        port: 8000,
-                        engine_count: 2,
-                        ready_timeout_secs: 300,
+                        engine_ready_timeout_secs: 300,
                         tool_call_parser: None,
                         reasoning_parser: None,
                         max_model_len: None,
@@ -203,6 +205,182 @@ fn frontend_args_accept_engine_count() {
         }
     "#]]
     .assert_debug_eq(&cli);
+}
+
+#[test]
+fn frontend_args_json_applies_defaults() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B"}"#,
+    ])
+    .unwrap();
+
+    let Command::Frontend(args) = cli.command else {
+        panic!("expected frontend args");
+    };
+    assert_eq!(args.runtime.model, "Qwen/Qwen3-0.6B");
+    assert_eq!(args.runtime.engine_ready_timeout_secs, 300);
+    assert_eq!(args.runtime.tool_call_parser, None);
+    assert_eq!(args.runtime.reasoning_parser, None);
+    assert_eq!(args.runtime.max_model_len, None);
+}
+
+#[test]
+fn frontend_args_json_accepts_supported_non_default_fields() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","max_model_len":8192}"#,
+    ])
+    .unwrap();
+
+    let Command::Frontend(args) = cli.command else {
+        panic!("expected frontend args");
+    };
+    assert_eq!(args.runtime.engine_ready_timeout_secs, 42);
+    assert_eq!(args.runtime.tool_call_parser.as_deref(), Some("hermes"));
+    assert_eq!(
+        args.runtime.reasoning_parser.as_deref(),
+        Some("qwen3_thinking")
+    );
+    assert_eq!(args.runtime.max_model_len, Some(8192));
+}
+
+#[test]
+fn frontend_args_json_ignores_unknown_fields() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","unknown_field":"ignored","nested_unknown":{"x":1}}"#,
+    ])
+    .unwrap();
+
+    let Command::Frontend(args) = cli.command else {
+        panic!("expected frontend args");
+    };
+    assert_eq!(args.runtime.model, "Qwen/Qwen3-0.6B");
+}
+
+#[test]
+fn frontend_args_json_accepts_noop_fields() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","api_server_count":2}"#,
+    ])
+    .unwrap();
+
+    let Command::Frontend(args) = cli.command else {
+        panic!("expected frontend args");
+    };
+    assert_eq!(args.runtime.model, "Qwen/Qwen3-0.6B");
+}
+
+#[test]
+fn frontend_args_json_rejects_unsupported_fields() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true}"#,
+    ])
+    .unwrap_err();
+
+    expect![[r#"
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true}' for '--args-json <JSON>': 
+        The following arguments are not implemented in Rust frontend yet:
+        - allow_credentials
+
+        Remove these arguments to continue.
+
+        For more information, try '--help'.
+    "#]].assert_eq(&error.to_string());
+}
+
+#[test]
+fn frontend_args_json_aggregates_multiple_unsupported_fields() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}"#,
+    ])
+    .unwrap_err();
+
+    expect![[r#"
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B","allow_credentials":true,"api_key":"secret"}' for '--args-json <JSON>': 
+        The following arguments are not implemented in Rust frontend yet:
+        - allow_credentials
+        - api_key
+
+        Remove these arguments to continue.
+
+        For more information, try '--help'.
+    "#]].assert_eq(&error.to_string());
+}
+
+#[test]
+fn frontend_args_json_rejects_malformed_json() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B""#,
+    ])
+    .unwrap_err();
+
+    expect![[r#"
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B"' for '--args-json <JSON>': invalid JSON arguments: EOF while parsing an object at line 1 column 30
+
+        For more information, try '--help'.
+    "#]].assert_eq(&error.to_string());
 }
 
 #[test]
@@ -354,30 +532,30 @@ fn serve_args_accept_handshake_aliases() {
     .unwrap();
 
     expect![[r#"
-            Cli {
-                command: Serve(
-                    ServeArgs {
-                        headless: false,
-                        python: "python3",
-                        handshake_host: "10.99.48.128",
-                        handshake_port: Some(
-                            13345,
-                        ),
-                        runtime: SharedRuntimeArgs {
-                            model: "Qwen/Qwen3-0.6B",
-                            host: "127.0.0.1",
-                            port: 8000,
-                            engine_count: 4,
-                            ready_timeout_secs: 300,
-                            tool_call_parser: None,
-                            reasoning_parser: None,
-                            max_model_len: None,
-                        },
-                        python_args: [],
+        Cli {
+            command: Serve(
+                ServeArgs {
+                    headless: false,
+                    python: "python3",
+                    host: "127.0.0.1",
+                    port: 8000,
+                    handshake_host: "10.99.48.128",
+                    handshake_port: Some(
+                        13345,
+                    ),
+                    engine_count: 4,
+                    runtime: SharedRuntimeArgs {
+                        model: "Qwen/Qwen3-0.6B",
+                        engine_ready_timeout_secs: 300,
+                        tool_call_parser: None,
+                        reasoning_parser: None,
+                        max_model_len: None,
                     },
-                ),
-            }
-        "#]]
+                    python_args: [],
+                },
+            ),
+        }
+    "#]]
     .assert_debug_eq(&cli);
 }
 
@@ -402,11 +580,11 @@ fn serve_args_accept_data_parallel_primary_flags() {
     assert!(!args.headless);
     assert_eq!(args.handshake_host, "10.99.48.128");
     assert_eq!(args.handshake_port, Some(13345));
-    assert_eq!(args.runtime.engine_count, 4);
+    assert_eq!(args.engine_count, 4);
 }
 
 #[test]
-fn serve_frontend_config_uses_dp_address_for_both_handshake_and_transport_host() {
+fn serve_frontend_config_uses_dp_address_as_advertised_host() {
     let cli = Cli::try_parse_from([
         "vllm-rs",
         "serve",
@@ -424,18 +602,46 @@ fn serve_frontend_config_uses_dp_address_for_both_handshake_and_transport_host()
     let config = args.to_frontend_config("tcp://10.99.48.128:29550".to_string());
 
     expect![[r#"
-            Config {
+        Config {
+            transport_mode: HandshakeOwner {
                 handshake_address: "tcp://10.99.48.128:29550",
+                advertised_host: "10.99.48.128",
                 engine_count: 4,
-                model: "Qwen/Qwen3-0.6B",
+                ready_timeout: 300s,
+                local_input_address: None,
+                local_output_address: None,
+            },
+            coordinator_mode: MaybeInProc,
+            model: "Qwen/Qwen3-0.6B",
+            listener_mode: Bind {
                 host: "127.0.0.1",
                 port: 8000,
-                advertised_host: "10.99.48.128",
-                ready_timeout: 300s,
-                tool_call_parser: None,
-                reasoning_parser: None,
-                max_model_len: None,
-            }
-        "#]]
+            },
+            tool_call_parser: None,
+            reasoning_parser: None,
+            max_model_len: None,
+        }
+    "#]]
     .assert_debug_eq(&config);
+}
+
+#[test]
+fn frontend_args_reject_legacy_handshake_flags() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B"}"#,
+        "--handshake-address",
+        "tcp://127.0.0.1:62100",
+    ])
+    .unwrap_err();
+
+    assert!(error.to_string().contains("--handshake-address"));
 }
