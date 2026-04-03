@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use smg_tokenizer::SpecialTokens;
 use tracing::info;
 use vllm_text::DynTextBackend;
-use vllm_text::backends::hf::{HfTextBackend, ResolvedModelFiles};
+use vllm_text::backends::hf::{
+    HfSpecialTokens, HfTextBackend, ResolvedModelFiles, load_tokenizer_config,
+};
 
 use crate::backend::{ChatBackend, DynChatBackend};
 use crate::backends::LoadedModelBackends;
@@ -24,9 +27,13 @@ impl HfChatBackend {
 
     /// Load the chat backend from resolved Hugging Face model files.
     pub fn from_resolved_model_files(files: ResolvedModelFiles, model_id: String) -> Result<Self> {
+        let special_tokens = to_chat_template_special_tokens(
+            load_tokenizer_config(files.tokenizer_config_path.as_deref())?.special_tokens,
+        );
         let chat_template = ChatTemplate::load(
             files.tokenizer_config_path.as_deref(),
             files.chat_template_path.as_deref(),
+            special_tokens,
         )?;
 
         info!(
@@ -58,5 +65,19 @@ pub(super) async fn load_model_backends(model_id: &str) -> Result<LoadedModelBac
     Ok(LoadedModelBackends {
         text_backend,
         chat_backend,
+    })
+}
+
+fn to_chat_template_special_tokens(tokens: HfSpecialTokens) -> Option<SpecialTokens> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    Some(SpecialTokens {
+        bos_token: tokens.bos_token.map(Into::into),
+        eos_token: tokens.eos_token.map(Into::into),
+        unk_token: tokens.unk_token.map(Into::into),
+        pad_token: tokens.pad_token.map(Into::into),
+        ..Default::default()
     })
 }
