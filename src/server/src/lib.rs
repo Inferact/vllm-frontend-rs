@@ -55,7 +55,9 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
     .await
     .context("failed to connect to engine core")?;
 
-    let mut text = TextLlm::new(Llm::new(client), text_backend);
+    let llm = Llm::new(client).with_stream_interval(config.stream_interval);
+
+    let mut text = TextLlm::new(llm, text_backend);
     if let Some(max_model_len) = config.max_model_len {
         text = text.with_max_model_len(max_model_len);
     }

@@ -167,17 +167,20 @@ impl GenerateOutput {
     }
 }
 
+/// Public stream type returned by [`crate::Llm::generate()`].
+pub trait GenerateOutputStream = Stream<Item = Result<GenerateOutput>> + Send + 'static;
+
 /// Stream of per-request generate outputs for one request.
 ///
 /// - A normal termination of the stream represents a clean completion of the request.
 /// - For errors, unexpected closes, or explicit aborts, the stream terminates with an error.
-pub struct GenerateOutputStream {
+pub(crate) struct GenerateOutputStreamImpl {
     pending_prompt_info: Option<GeneratePromptInfo>,
     raw_stream: EngineCoreOutputStream,
     request_metrics: RequestMetricsTracker,
 }
 
-impl GenerateOutputStream {
+impl GenerateOutputStreamImpl {
     /// Create a new generate output stream by adapting one raw engine-core output stream.
     pub(crate) fn new(
         prompt_token_ids: Arc<[u32]>,
@@ -195,7 +198,7 @@ impl GenerateOutputStream {
     }
 }
 
-impl Stream for GenerateOutputStream {
+impl Stream for GenerateOutputStreamImpl {
     type Item = Result<GenerateOutput>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -245,13 +248,13 @@ impl Stream for GenerateOutputStream {
     }
 }
 
-impl FusedStream for GenerateOutputStream {
+impl FusedStream for GenerateOutputStreamImpl {
     fn is_terminated(&self) -> bool {
         self.raw_stream.is_terminated()
     }
 }
 
-impl Drop for GenerateOutputStream {
+impl Drop for GenerateOutputStreamImpl {
     fn drop(&mut self) {
         if self.raw_stream.is_terminated() {
             // Already terminated cleanly, no need to record abort metrics.
@@ -269,7 +272,7 @@ impl Drop for GenerateOutputStream {
 
 #[allow(clippy::manual_async_fn, reason = "specify `Send` bound")]
 #[easy_ext::ext(GenerateOutputStreamExt)]
-impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
+impl<T: GenerateOutputStream> T {
     /// Collect the raw generate stream to completion and return the final token output.
     pub fn collect_output(self) -> impl Future<Output = Result<CollectedGenerateOutput>> + Send {
         async move {

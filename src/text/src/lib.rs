@@ -77,7 +77,7 @@ impl TextLlm {
     }
 
     /// Tokenize if needed, lower to a generate request, and return the raw token stream.
-    pub async fn generate_raw(&self, request: TextRequest) -> Result<GenerateOutputStream> {
+    pub async fn generate_raw(&self, request: TextRequest) -> Result<impl GenerateOutputStream> {
         let (_, raw_stream) = self.generate_inner(request).await?;
         Ok(raw_stream)
     }
@@ -100,7 +100,7 @@ impl TextLlm {
     async fn generate_inner(
         &self,
         mut request: TextRequest,
-    ) -> Result<(TextRequest, GenerateOutputStream)> {
+    ) -> Result<(TextRequest, impl GenerateOutputStream)> {
         request.validate()?;
 
         let tokenizer = self.backend.tokenizer();

@@ -39,6 +39,8 @@ pub struct Config {
     /// Override for the maximum model context length. Takes priority over the model's
     /// `max_position_embeddings` from `config.json`.
     pub max_model_len: Option<u32>,
+    /// Interval for batching raw generate outputs in units of generated tokens.
+    pub stream_interval: usize,
 }
 
 impl Config {

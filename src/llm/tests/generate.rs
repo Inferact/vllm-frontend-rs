@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Once;
 use std::time::Duration;
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, pin_mut};
 use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -130,6 +130,29 @@ fn logprobs_for_position(
     }
 }
 
+fn logprobs_for_tokens(token_ids: &[u32]) -> Logprobs {
+    Logprobs {
+        positions: token_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, token_id)| PositionLogprobs {
+                entries: vec![
+                    TokenLogprob {
+                        token_id: *token_id,
+                        logprob: -0.1 - idx as f32,
+                        rank: (idx + 2) as u32,
+                    },
+                    TokenLogprob {
+                        token_id: token_id + 1000,
+                        logprob: -0.01 - idx as f32,
+                        rank: 1,
+                    },
+                ],
+            })
+            .collect(),
+    }
+}
+
 fn prompt_logprobs() -> Logprobs {
     Logprobs {
         positions: vec![
@@ -211,6 +234,18 @@ async fn connect_async_llm_with_ipc(
     Llm::new(client)
 }
 
+async fn connect_async_llm_with_stream_interval(
+    handshake_address: String,
+    client_index: u32,
+    model_name: &str,
+    ipc: &IpcNamespace,
+    stream_interval: usize,
+) -> Llm {
+    connect_async_llm_with_ipc(handshake_address, client_index, model_name, ipc)
+        .await
+        .with_stream_interval(stream_interval)
+}
+
 fn request_metrics_model_name(prefix: &str) -> String {
     format!("{prefix}-{}", Uuid::new_v4().simple())
 }
@@ -274,10 +309,11 @@ async fn generate_streams_outputs() {
     );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 7, "test-model", &ipc).await;
-    let mut stream = llm
+    let stream = llm
         .generate(sample_generate_request("req-delta", 3))
         .await
         .unwrap();
+    pin_mut!(stream);
 
     let first = stream.next().await.unwrap().unwrap();
     assert_eq!(first.request_id, "req-delta");
@@ -386,6 +422,182 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generate_batches_outputs_by_stream_interval() {
+    init_tracing();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
+    let engine_id = b"engine-batch-interval".to_vec();
+
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.request_id, "req-batch-interval");
+
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![1],
+                                None,
+                                Some(logprobs_for_tokens(&[1])),
+                                Some(prompt_logprobs()),
+                            ),
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![2, 3],
+                                None,
+                                Some(logprobs_for_tokens(&[2, 3])),
+                                None,
+                            ),
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![4, 5],
+                                None,
+                                Some(logprobs_for_tokens(&[4, 5])),
+                                None,
+                            ),
+                            request_output_with_logprobs_and_kv(
+                                &request.request_id,
+                                vec![6],
+                                Some(EngineCoreFinishReason::Length),
+                                Some(logprobs_for_tokens(&[6])),
+                                None,
+                                Some(serde_json::json!({"connector": "batched"})),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from([request.request_id])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
+
+    let llm =
+        connect_async_llm_with_stream_interval(handshake_address, 0, "test-model", &ipc, 3).await;
+    let stream = llm
+        .generate(sample_generate_request("req-batch-interval", 8))
+        .await
+        .unwrap();
+    pin_mut!(stream);
+
+    let first = stream.next().await.unwrap().unwrap();
+    assert_eq!(first.token_ids, vec![1]);
+    assert_eq!(
+        first.prompt_info,
+        Some(GeneratePromptInfo {
+            prompt_token_ids: vec![11, 22].into(),
+            prompt_logprobs: Some(prompt_logprobs()),
+        })
+    );
+    assert_eq!(first.logprobs, Some(logprobs_for_tokens(&[1])));
+    assert_eq!(first.finish_reason, None);
+
+    let second = stream.next().await.unwrap().unwrap();
+    assert_eq!(second.prompt_info, None);
+    assert_eq!(second.token_ids, vec![2, 3, 4, 5]);
+    assert_eq!(
+        second.logprobs.as_ref().map(|lp| lp.positions.len()),
+        Some(4)
+    );
+    assert_eq!(second.finish_reason, None);
+
+    let third = stream.next().await.unwrap().unwrap();
+    assert_eq!(third.prompt_info, None);
+    assert_eq!(third.token_ids, vec![6]);
+    assert_eq!(third.logprobs, Some(logprobs_for_tokens(&[6])));
+    assert_eq!(third.finish_reason, Some(FinishReason::Length));
+    assert_eq!(
+        third.kv_transfer_params,
+        Some(serde_json::json!({"connector": "batched"}))
+    );
+    assert!(stream.next().await.is_none());
+
+    let _ = shutdown_tx.send(());
+    engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generate_flushes_terminal_output_without_tokens() {
+    init_tracing();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
+    let engine_id = b"engine-batch-empty-final".to_vec();
+
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.request_id, "req-batch-empty-final");
+
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![9],
+                                None,
+                                Some(logprobs_for_tokens(&[9])),
+                                Some(prompt_logprobs()),
+                            ),
+                            request_output_with_logprobs_and_kv(
+                                &request.request_id,
+                                vec![],
+                                Some(EngineCoreFinishReason::Abort),
+                                None,
+                                None,
+                                Some(serde_json::json!({"connector": "empty-final"})),
+                            ),
+                        ],
+                        finished_requests: Some(BTreeSet::from([request.request_id])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            })
+        },
+    );
+
+    let llm =
+        connect_async_llm_with_stream_interval(handshake_address, 0, "test-model", &ipc, 8).await;
+    let stream = llm
+        .generate(sample_generate_request("req-batch-empty-final", 4))
+        .await
+        .unwrap();
+    pin_mut!(stream);
+
+    let first = stream.next().await.unwrap().unwrap();
+    assert_eq!(first.token_ids, vec![9]);
+    assert_eq!(first.finish_reason, None);
+
+    let second = stream.next().await.unwrap().unwrap();
+    assert!(second.token_ids.is_empty());
+    assert_eq!(second.finish_reason, Some(FinishReason::Abort));
+    assert_eq!(
+        second.kv_transfer_params,
+        Some(serde_json::json!({"connector": "empty-final"}))
+    );
+    assert_eq!(second.logprobs, None);
+    assert!(stream.next().await.is_none());
+
+    let _ = shutdown_tx.send(());
+    engine_task.await.unwrap();
+    llm.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generate_propagates_unexpected_close_errors() {
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
@@ -412,10 +624,11 @@ async fn generate_propagates_unexpected_close_errors() {
     );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
-    let mut stream = llm
+    let stream = llm
         .generate(sample_generate_request("req-close", 1))
         .await
         .unwrap();
+    pin_mut!(stream);
 
     let error = stream.next().await.unwrap().unwrap_err();
     assert!(matches!(
@@ -503,14 +716,16 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
     );
 
     let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
-    let mut stream = llm
-        .generate(sample_generate_request("req-drop", 4))
-        .await
-        .unwrap();
+    {
+        let stream = llm
+            .generate(sample_generate_request("req-drop", 4))
+            .await
+            .unwrap();
+        pin_mut!(stream);
 
-    let output = stream.next().await.unwrap().unwrap();
-    assert_eq!(output.token_ids, vec![99]);
-    drop(stream);
+        let output = stream.next().await.unwrap().unwrap();
+        assert_eq!(output.token_ids, vec![99]);
+    }
 
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
@@ -641,7 +856,8 @@ async fn generate_records_request_metrics_in_prometheus_output() {
     let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics", 8);
     request.arrival_time = None;
-    let mut stream = llm.generate(request).await.unwrap();
+    let stream = llm.generate(request).await.unwrap();
+    pin_mut!(stream);
 
     assert_eq!(stream.next().await.unwrap().unwrap().token_ids, vec![1]);
     let final_output = stream.next().await.unwrap().unwrap();
@@ -752,9 +968,11 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
     let llm = connect_async_llm_with_ipc(handshake_address, 0, &model_name, &ipc).await;
     let mut request = sample_generate_request("req-metrics-drop", 8);
     request.arrival_time = None;
-    let mut stream = llm.generate(request).await.unwrap();
-    assert_eq!(stream.next().await.unwrap().unwrap().token_ids, vec![99]);
-    drop(stream);
+    {
+        let stream = llm.generate(request).await.unwrap();
+        pin_mut!(stream);
+        assert_eq!(stream.next().await.unwrap().unwrap().token_ids, vec![99]);
+    }
 
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();

@@ -10,6 +10,7 @@ test-util = []
 easy-ext.workspace = true
 enum-as-inner.workspace = true
 futures.workspace = true
+futures-async-stream.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
