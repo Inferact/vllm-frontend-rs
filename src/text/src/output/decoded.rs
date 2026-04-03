@@ -92,9 +92,7 @@ pub async fn decoded_text_event_stream(
     intermediate: bool,
 ) {
     let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
-    let mut started = false;
     let mut prompt_token_count: Option<usize> = None;
-    let mut prompt_token_ids_arc: Option<Arc<[u32]>> = None;
     let mut token_ids = Vec::new();
     let mut output_token_count: usize = 0;
     let mut logprobs: Option<DecodedLogprobs> = None;
@@ -103,17 +101,13 @@ pub async fn decoded_text_event_stream(
     for next in raw_stream {
         let mut output = next?;
 
-        let decoder = decoder.get_or_insert_with(|| {
-            let ids = Arc::clone(
-                &output
-                    .prompt_info
-                    .as_ref()
-                    .expect("first llm output must carry prompt info")
-                    .prompt_token_ids,
-            );
-            prompt_token_count = Some(ids.len());
+        // If it's the first output, init states and yield `Start` event.
+        if decoder.is_none() {
+            let prompt_token_ids = output
+                .prompt_token_ids()
+                .expect("first llm output must carry prompt token ids");
             let dec = tokenizer.create_decode_stream(
-                &ids,
+                &prompt_token_ids,
                 decode_options.skip_special_tokens,
                 // If we are excluding stop strings from output, we need to buffer
                 // the output so that we don't return the beginning of a stop string
@@ -130,33 +124,28 @@ pub async fn decoded_text_event_stream(
                     }
                 },
             );
-            prompt_token_ids_arc = Some(ids);
-            dec
-        });
-        let prompt_token_count =
-            prompt_token_count.expect("first llm output must carry prompt token ids");
 
-        if !started {
-            let ids = prompt_token_ids_arc
-                .as_ref()
-                .expect("prompt_token_ids must be set after decoder init");
+            let _ = decoder.insert(dec);
+            let prompt_token_count = *prompt_token_count.insert(prompt_token_ids.len());
+
             yield DecodedTextEvent::Start {
                 prompt_token_count,
-                prompt_token_ids: Arc::clone(ids),
+                prompt_token_ids: prompt_token_ids.clone(),
                 prompt_logprobs: output
                     .prompt_logprobs()
                     .map(|logprobs| {
                         decode_prompt_logprobs(
                             tokenizer.as_ref(),
-                            ids,
+                            prompt_token_ids,
                             logprobs,
                             decode_options.skip_special_tokens,
                         )
                     })
                     .transpose()?,
             };
-            started = true;
-        }
+        };
+        let decoder = decoder.as_mut().unwrap();
+        let prompt_token_count = prompt_token_count.unwrap();
 
         let kv_transfer_params = output.take_kv_transfer_params();
         let mut finish_reason = output.finish_reason();
