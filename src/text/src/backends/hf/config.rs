@@ -12,6 +12,8 @@ use crate::error::{Error, Result};
 pub struct HfTokenizerConfig {
     #[serde(flatten)]
     pub special_tokens: HfSpecialTokens,
+    #[serde(default)]
+    pub chat_template: Option<String>,
     /// The `tokenizer_class` field from HuggingFace tokenizer configs. Some tiktoken-based models
     /// (e.g. DeepSeek, Kimi K2) set this to a value containing "Tiktoken" which can be used as a
     /// hint for backend selection.

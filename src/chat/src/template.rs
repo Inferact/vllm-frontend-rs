@@ -1,11 +1,6 @@
-use std::path::Path;
-
 use serde::Serialize;
 use serde_json::Value;
-use smg_tokenizer::chat_template::{
-    ChatTemplateContentFormat, ChatTemplateParams, load_chat_template_from_config,
-    load_chat_template_from_file,
-};
+use smg_tokenizer::chat_template::{ChatTemplateContentFormat, ChatTemplateParams};
 use smg_tokenizer::{ChatTemplateState, SpecialTokens};
 use thiserror_ext::AsReport as _;
 use tracing::trace;
@@ -23,33 +18,6 @@ pub struct ChatTemplate {
 }
 
 impl ChatTemplate {
-    /// Load a chat template from the given tokenizer config and/or adjacent template file.
-    pub fn load(
-        tokenizer_config_path: Option<&Path>,
-        chat_template_path: Option<&Path>,
-        special_tokens: Option<SpecialTokens>,
-    ) -> Result<Self> {
-        // Match the usual HF precedence: tokenizer_config first, then any
-        // adjacent dedicated chat template file.
-        let mut chat_template = tokenizer_config_path
-            .and_then(|path| path.to_str())
-            .map(load_chat_template_from_config)
-            .transpose()
-            .map_err(|error| Error::ChatTemplate(error.to_report_string()))?
-            .flatten();
-
-        if let Some(chat_template_path) = chat_template_path {
-            chat_template = load_chat_template_from_file(
-                chat_template_path
-                    .to_str()
-                    .expect("chat template path should be valid UTF-8"),
-            )
-            .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
-        }
-
-        Self::new(chat_template, special_tokens)
-    }
-
     /// Create a chat template from the given template string.
     pub fn new(template: Option<String>, special_tokens: Option<SpecialTokens>) -> Result<Self> {
         Ok(Self {

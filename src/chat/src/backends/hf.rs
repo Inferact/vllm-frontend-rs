@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use smg_tokenizer::SpecialTokens;
+use smg_tokenizer::chat_template::load_chat_template_from_file;
+use thiserror_ext::AsReport as _;
 use tracing::info;
 use vllm_text::DynTextBackend;
 use vllm_text::backends::hf::{
@@ -9,7 +11,7 @@ use vllm_text::backends::hf::{
 
 use crate::backend::{ChatBackend, DynChatBackend};
 use crate::backends::LoadedModelBackends;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::request::ChatRequest;
 use crate::template::ChatTemplate;
 
@@ -27,14 +29,21 @@ impl HfChatBackend {
 
     /// Load the chat backend from resolved Hugging Face model files.
     pub fn from_resolved_model_files(files: ResolvedModelFiles, model_id: String) -> Result<Self> {
-        let special_tokens = to_chat_template_special_tokens(
-            load_tokenizer_config(files.tokenizer_config_path.as_deref())?.special_tokens,
-        );
-        let chat_template = ChatTemplate::load(
-            files.tokenizer_config_path.as_deref(),
-            files.chat_template_path.as_deref(),
-            special_tokens,
-        )?;
+        let tokenizer_config = load_tokenizer_config(files.tokenizer_config_path.as_deref())?;
+        let special_tokens = to_chat_template_special_tokens(tokenizer_config.special_tokens);
+
+        // Match the usual HF precedence: tokenizer_config first, then any
+        // adjacent dedicated chat template file.
+        let mut template = tokenizer_config.chat_template;
+        if let Some(chat_template_path) = files.chat_template_path.as_deref() {
+            template = load_chat_template_from_file(
+                chat_template_path
+                    .to_str()
+                    .expect("chat template path should be valid UTF-8"),
+            )
+            .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
+        }
+        let chat_template = ChatTemplate::new(template, special_tokens)?;
 
         info!(
             model_id,
