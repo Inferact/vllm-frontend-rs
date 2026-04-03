@@ -55,12 +55,6 @@ impl Llm {
         ))
     }
 
-    /// Abort one in-flight request by request ID.
-    pub async fn abort(&self, request_id: &str) -> Result<()> {
-        self.client.abort(&[request_id.to_string()]).await?;
-        Ok(())
-    }
-
     /// Shut down the underlying engine-core client and its background tasks.
     pub async fn shutdown(self) -> Result<()> {
         self.client.shutdown().await?;
