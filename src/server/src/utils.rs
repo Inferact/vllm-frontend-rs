@@ -28,7 +28,7 @@ pub fn get_data_parallel_rank(headers: &HeaderMap) -> Option<u32> {
     headers
         .get("x-data-parallel-rank")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.trim().parse().ok())
 }
 
 /// Merge `kv_transfer_params` into the `vllm_xargs` map, mirroring the Python vLLM behavior

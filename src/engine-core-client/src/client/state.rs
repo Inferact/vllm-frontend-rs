@@ -60,15 +60,14 @@ impl RequestRegistry {
 
         let engine_id = if let Some(rank) = data_parallel_rank {
             // Route to the engine at the specified rank index.
-            let rank = rank as usize;
+            let engine_id = EngineId::from(rank as usize);
             self.in_flight_per_engine
-                .keys()
-                .nth(rank)
+                .contains_key(&engine_id)
+                .then_some(engine_id)
                 .ok_or_else(|| Error::InvalidDataParallelRank {
-                    rank: rank as u32,
+                    rank,
                     num_engines: self.in_flight_per_engine.len() as u32,
                 })?
-                .clone()
         } else {
             // Simple routing strategy: assign to the engine with the least in-flight requests.
             self.in_flight_per_engine
@@ -312,9 +311,9 @@ mod tests {
 
     #[test]
     fn register_with_data_parallel_rank_routes_to_specified_engine() {
-        let engine_0 = EngineId::from(b"engine-0");
-        let engine_1 = EngineId::from(b"engine-1");
-        let engine_2 = EngineId::from(b"engine-2");
+        let engine_0 = EngineId::from(0usize);
+        let engine_1 = EngineId::from(1usize);
+        let engine_2 = EngineId::from(2usize);
         let mut registry = RequestRegistry::new(&[
             ConnectedEngine {
                 engine_id: engine_0.clone(),
@@ -345,8 +344,8 @@ mod tests {
 
     #[test]
     fn register_with_data_parallel_rank_bypasses_load_balancing() {
-        let engine_0 = EngineId::from(b"engine-0");
-        let engine_1 = EngineId::from(b"engine-1");
+        let engine_0 = EngineId::from(0usize);
+        let engine_1 = EngineId::from(1usize);
         let mut registry = RequestRegistry::new(&[
             ConnectedEngine {
                 engine_id: engine_0.clone(),
@@ -371,11 +370,11 @@ mod tests {
     fn register_with_out_of_range_rank_returns_error() {
         let mut registry = RequestRegistry::new(&[
             ConnectedEngine {
-                engine_id: EngineId::from(b"engine-0"),
+                engine_id: EngineId::from(0usize),
                 ready_message: Default::default(),
             },
             ConnectedEngine {
-                engine_id: EngineId::from(b"engine-1"),
+                engine_id: EngineId::from(1usize),
                 ready_message: Default::default(),
             },
         ]);
@@ -392,7 +391,7 @@ mod tests {
 
     #[test]
     fn register_with_rank_on_single_engine_only_accepts_zero() {
-        let engine_0 = EngineId::from(b"engine-0");
+        let engine_0 = EngineId::from(0usize);
         let mut registry = RequestRegistry::new(&[ConnectedEngine {
             engine_id: engine_0.clone(),
             ready_message: Default::default(),
