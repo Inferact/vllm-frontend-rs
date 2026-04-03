@@ -107,7 +107,7 @@ pub async fn decoded_text_event_stream(
                 .prompt_token_ids()
                 .expect("first llm output must carry prompt token ids");
             let dec = tokenizer.create_decode_stream(
-                &prompt_token_ids,
+                prompt_token_ids,
                 decode_options.skip_special_tokens,
                 // If we are excluding stop strings from output, we need to buffer
                 // the output so that we don't return the beginning of a stop string
