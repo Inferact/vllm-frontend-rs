@@ -126,7 +126,6 @@ pub struct TextRequest {
     /// receive zero or more incremental decoded updates before the final terminal event.
     pub intermediate: bool,
     /// Request scheduling priority (lower means earlier handling; default 0).
-    #[serde(default)]
     pub priority: i32,
     /// Salt for prefix cache isolation in multi-user environments.
     pub cache_salt: Option<String>,
