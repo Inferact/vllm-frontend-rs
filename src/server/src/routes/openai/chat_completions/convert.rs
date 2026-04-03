@@ -1,6 +1,6 @@
+use axum::http::HeaderMap;
 use openai_protocol::chat::{ChatMessage, MessageContent};
 use openai_protocol::common::{ContentPart, StringOrArray, ToolChoice, ToolChoiceValue};
-use uuid::Uuid;
 use vllm_chat::{
     AssistantContentBlock, AssistantToolCall, ChatContent, ChatContentPart,
     ChatMessage as VllmChatMessage, ChatOptions, ChatRequest, ChatTool, ChatToolChoice,
@@ -11,13 +11,13 @@ use super::types::ChatCompletionRequest;
 use super::validate;
 use crate::error::{ApiError, bail_invalid_request};
 use crate::routes::openai::utils::structured_outputs::convert_from_response_format;
-use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
+use crate::utils::{convert_logit_bias, merge_kv_transfer_params, process_common_headers};
 
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
-    /// Stable OpenAI-style response ID, also reused as the internal chat request ID.
-    pub response_id: String,
+    /// Stable OpenAI-style request ID, reused as the external chat request ID.
+    pub request_id: String,
     /// Public model ID echoed back to the client.
     pub response_model: String,
     /// Whether the caller asked for the final streamed usage chunk.
@@ -30,17 +30,23 @@ pub struct PreparedRequest {
     pub chat_request: ChatRequest,
     /// Last assistant-role message content to echo back when `echo=true`.
     pub echo: Option<String>,
+    /// Whether to include token IDs alongside generated text.
+    pub return_token_ids: bool,
+    /// Whether to format logprob tokens as `token_id:{id}`.
+    pub return_tokens_as_token_ids: bool,
 }
 
 /// Validate and lower one OpenAI chat completion request into the internal chat format.
-pub fn prepare_chat_request(
+pub(crate) fn prepare_chat_request(
     request: ChatCompletionRequest,
     configured_model: &str,
-    data_parallel_rank: Option<u32>,
+    headers: HeaderMap,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
-    let response_id = format!("chatcmpl-{}", Uuid::new_v4());
+    let (request_id, data_parallel_rank) =
+        process_common_headers(headers, request.request_id.as_deref());
+    let request_id = format!("chatcmpl-{}", request_id);
     let echo = request
         .echo
         .then(|| extract_last_assistant_content(&request.messages))
@@ -76,7 +82,7 @@ pub fn prepare_chat_request(
     });
 
     let chat_request = ChatRequest {
-        request_id: response_id.clone(),
+        request_id: request_id.clone(),
         messages,
         sampling_params: SamplingParams {
             temperature: request.temperature,
@@ -125,13 +131,15 @@ pub fn prepare_chat_request(
     };
 
     Ok(PreparedRequest {
-        response_id,
+        request_id,
         response_model: configured_model.to_string(),
         include_usage,
         requested_logprobs,
         include_prompt_logprobs,
         chat_request,
         echo,
+        return_token_ids: request.return_token_ids.unwrap_or(false),
+        return_tokens_as_token_ids: request.return_tokens_as_token_ids.unwrap_or(false),
     })
 }
 
@@ -290,6 +298,7 @@ fn convert_tool_choice(tool_choice: Option<&ToolChoice>) -> Result<ChatToolChoic
 mod tests {
     use std::collections::HashMap;
 
+    use axum::http::HeaderMap;
     use openai_protocol::chat::{ChatMessage, MessageContent};
     use openai_protocol::common::{ContentPart, Tool, ToolChoice};
     use serde_json::json;
@@ -329,10 +338,10 @@ mod tests {
         request.skip_special_tokens = false;
         request.chat_template_kwargs = Some(HashMap::from([("foo".to_string(), json!("bar"))]));
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
 
-        assert!(prepared.response_id.starts_with("chatcmpl-"));
+        assert!(prepared.request_id.starts_with("chatcmpl-"));
         assert_eq!(
             prepared.chat_request.messages,
             vec![VllmChatMessage::user(vec![VllmChatContentPart::text(
@@ -364,10 +373,11 @@ mod tests {
 
     #[test]
     fn prepare_chat_request_keeps_optional_sampling_fields_unset() {
-        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", None)
-            .expect("request is valid");
+        let prepared =
+            prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("request is valid");
 
-        assert!(prepared.response_id.starts_with("chatcmpl-"));
+        assert!(prepared.request_id.starts_with("chatcmpl-"));
         assert_eq!(
             prepared.chat_request.messages,
             vec![VllmChatMessage::user("hello")]
@@ -402,7 +412,7 @@ mod tests {
             ..base_request()
         };
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
         let expected = VllmSamplingParams {
             seed: Some(42),
@@ -426,7 +436,7 @@ mod tests {
             ..base_request()
         };
 
-        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
+        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new()).is_err());
     }
 
     #[test]
@@ -444,7 +454,7 @@ mod tests {
             ..base_request()
         };
 
-        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
+        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new()).is_err());
     }
 
     #[test]
@@ -459,7 +469,7 @@ mod tests {
             ..base_request()
         };
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
         assert_eq!(
             prepared.chat_request.messages,
@@ -516,7 +526,7 @@ mod tests {
             ..base_request()
         };
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
         assert_eq!(
             prepared.chat_request.messages,
@@ -555,7 +565,7 @@ mod tests {
             ..base_request()
         };
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
 
         assert!(prepared.requested_logprobs);
@@ -576,7 +586,7 @@ mod tests {
             ..base_request()
         };
 
-        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
             .expect("request is valid");
 
         assert_eq!(prepared.chat_request.sampling_params.logprobs, Some(3));
@@ -586,15 +596,18 @@ mod tests {
 
     #[test]
     fn prepare_chat_request_threads_data_parallel_rank() {
-        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", Some(7))
+        let mut headers = HeaderMap::new();
+        headers.insert("X-data-parallel-rank", "7".parse().unwrap());
+        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", headers)
             .expect("request is valid");
         assert_eq!(prepared.chat_request.data_parallel_rank, Some(7));
     }
 
     #[test]
     fn prepare_chat_request_leaves_data_parallel_rank_none_when_absent() {
-        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", None)
-            .expect("request is valid");
+        let prepared =
+            prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("request is valid");
         assert_eq!(prepared.chat_request.data_parallel_rank, None);
     }
 }

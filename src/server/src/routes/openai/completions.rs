@@ -30,7 +30,7 @@ use crate::routes::openai::completions::types::{
     CompletionStreamChoice, CompletionStreamResponse,
 };
 use crate::state::AppState;
-use crate::utils::{get_data_parallel_rank, unix_timestamp};
+use crate::utils::unix_timestamp;
 
 /// Validate one completions request and proxy it into the shared `vllm-text` stack.
 pub async fn completions(
@@ -40,8 +40,8 @@ pub async fn completions(
 ) -> Response {
     let stream = body.stream;
     let logprobs = body.logprobs;
-    let data_parallel_rank = get_data_parallel_rank(&headers);
-    let prepared = match prepare_completion_request(body, &state.model_id, data_parallel_rank) {
+
+    let prepared = match prepare_completion_request(body, &state.model_id, headers) {
         Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };
@@ -53,7 +53,7 @@ pub async fn completions(
         .prompt_logprobs
         .is_some();
     info!(
-        request_id = %prepared.response_id,
+        request_id = %prepared.request_id,
         model = %prepared.response_model,
         stream,
         "completion"
@@ -73,12 +73,14 @@ pub async fn completions(
     if stream {
         let chunk_stream = completion_chunk_stream(
             text_stream,
-            prepared.response_id,
+            prepared.request_id,
             prepared.response_model,
             created,
             prepared.include_usage,
             prepared.echo,
             logprobs,
+            prepared.return_token_ids,
+            prepared.return_tokens_as_token_ids,
         );
         let sse_stream = completion_sse_stream(chunk_stream);
 
@@ -88,12 +90,14 @@ pub async fn completions(
     } else {
         let response = match collect_completion(
             text_stream,
-            prepared.response_id,
+            prepared.request_id,
             prepared.response_model,
             created,
             prepared.echo,
             logprobs,
             include_prompt_logprobs,
+            prepared.return_token_ids,
+            prepared.return_tokens_as_token_ids,
         )
         .await
         {
@@ -107,12 +111,14 @@ pub async fn completions(
 
 async fn collect_completion(
     stream: impl TextOutputStream,
-    response_id: String,
+    request_id: String,
     response_model: String,
     created: u64,
     echo: Option<String>,
     requested_logprobs: Option<u32>,
     include_prompt_logprobs: bool,
+    return_token_ids: bool,
+    return_tokens_as_token_ids: bool,
 ) -> Result<CompletionResponse, ApiError> {
     let collected = stream
         .collect_output()
@@ -142,18 +148,20 @@ async fn collect_completion(
             &collected,
             echo.is_some(),
             prompt_char_count,
+            return_tokens_as_token_ids,
         )?)
     } else {
         None
     };
-    let prompt_logprobs = prompt_logprobs.map(decoded_prompt_logprobs_to_maps);
+    let prompt_logprobs =
+        prompt_logprobs.map(|lp| decoded_prompt_logprobs_to_maps(lp, return_tokens_as_token_ids));
     let text = match &echo {
         None => collected.text,
         Some(prompt) => format!("{prompt}{}", collected.text),
     };
 
     Ok(CompletionResponse {
-        id: response_id,
+        id: request_id,
         object: "text_completion".to_string(),
         created,
         model: response_model,
@@ -164,9 +172,11 @@ async fn collect_completion(
             finish_reason: Some(completion_finish_reason_to_openai(finish_reason)?.into()),
             stop_reason,
             prompt_logprobs,
+            token_ids: return_token_ids.then(|| collected.token_ids.clone()),
+            prompt_token_ids: return_token_ids.then(|| collected.prompt_token_ids.to_vec()),
         }],
         usage: Some(Usage::from_counts(
-            collected.prompt_token_count as u32,
+            collected.prompt_token_ids.len() as u32,
             collected.token_ids.len() as u32,
         )),
         system_fingerprint: None,
@@ -178,36 +188,52 @@ async fn collect_completion(
 #[try_stream(ok = CompletionSseChunk, error = ApiError)]
 async fn completion_chunk_stream(
     stream: impl TextOutputStream,
-    response_id: String,
+    request_id: String,
     response_model: String,
     created: u64,
     include_usage: bool,
     echo: Option<String>,
     requested_logprobs: Option<u32>,
+    return_token_ids: bool,
+    return_tokens_as_token_ids: bool,
 ) {
     pin_mut!(stream);
     let mut visible_text_len = 0_u32;
+    let mut first_chunk = true;
 
     while let Some(next) = stream.next().await {
         match next {
-            Ok(DecodedTextEvent::Start { .. }) => {
-                debug!(request_id = %response_id, "completion stream started");
+            Ok(DecodedTextEvent::Start {
+                prompt_token_ids, ..
+            }) => {
+                debug!(%request_id, "completion stream started");
                 if let Some(prompt) = echo.as_ref() {
                     visible_text_len = text_len(prompt);
-                    yield CompletionSseChunk::Chunk(delta_chunk(
-                        &response_id,
-                        &response_model,
-                        created,
-                        prompt.clone(),
-                        None,
-                    ));
+                    let mut chunk =
+                        delta_chunk(&request_id, &response_model, created, prompt.clone(), None);
+                    if return_token_ids && first_chunk {
+                        if let Some(choice) = chunk.choices.first_mut() {
+                            choice.prompt_token_ids = Some(prompt_token_ids.to_vec());
+                        }
+                        first_chunk = false;
+                    }
+                    yield CompletionSseChunk::Chunk(chunk);
+                } else if return_token_ids {
+                    // Emit a chunk with prompt_token_ids in the first streaming response
+                    let mut chunk =
+                        delta_chunk(&request_id, &response_model, created, String::new(), None);
+                    if let Some(choice) = chunk.choices.first_mut() {
+                        choice.prompt_token_ids = Some(prompt_token_ids.to_vec());
+                    }
+                    first_chunk = false;
+                    yield CompletionSseChunk::Chunk(chunk);
                 }
             }
             Ok(DecodedTextEvent::TextDelta {
                 delta,
+                token_ids,
                 logprobs,
                 finished,
-                ..
             }) => {
                 let delta_text_len = text_len(&delta);
                 let logprobs = if requested_logprobs.is_some() {
@@ -219,22 +245,21 @@ async fn completion_chunk_stream(
                     Some(decoded_logprobs_to_openai(
                         decoded_logprobs,
                         visible_text_len,
+                        return_tokens_as_token_ids,
                     )?)
                 } else {
                     None
                 };
-                yield CompletionSseChunk::Chunk(delta_chunk(
-                    &response_id,
-                    &response_model,
-                    created,
-                    delta,
-                    logprobs,
-                ));
+                let mut chunk = delta_chunk(&request_id, &response_model, created, delta, logprobs);
+                if return_token_ids && let Some(choice) = chunk.choices.first_mut() {
+                    choice.token_ids = Some(token_ids);
+                }
+                yield CompletionSseChunk::Chunk(chunk);
                 visible_text_len = visible_text_len.saturating_add(delta_text_len);
 
                 if let Some(finished) = finished {
                     yield CompletionSseChunk::Chunk(final_chunk(
-                        &response_id,
+                        &request_id,
                         &response_model,
                         created,
                         finished.finish_reason,
@@ -242,7 +267,7 @@ async fn completion_chunk_stream(
 
                     if include_usage {
                         yield CompletionSseChunk::Usage(usage_chunk(
-                            &response_id,
+                            &request_id,
                             &response_model,
                             created,
                             Usage::from_counts(
@@ -255,7 +280,7 @@ async fn completion_chunk_stream(
             }
             Err(error) => {
                 error!(
-                    request_id = %response_id,
+                    %request_id,
                     error = %error.as_report(),
                     "completion stream failed"
                 );
@@ -266,13 +291,13 @@ async fn completion_chunk_stream(
 }
 
 fn delta_chunk(
-    response_id: &str,
+    request_id: &str,
     response_model: &str,
     created: u64,
     text: String,
     logprobs: Option<LogProbs>,
 ) -> CompletionStreamResponse {
-    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    let mut chunk = CompletionStreamResponse::new(request_id, response_model, created);
     chunk.choices.push(CompletionStreamChoice {
         text,
         logprobs,
@@ -282,14 +307,14 @@ fn delta_chunk(
 }
 
 fn final_chunk(
-    response_id: &str,
+    request_id: &str,
     response_model: &str,
     created: u64,
     finish_reason: FinishReason,
 ) -> Result<CompletionStreamResponse, ApiError> {
     let finish_reason = completion_finish_reason_to_openai(finish_reason)?;
 
-    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    let mut chunk = CompletionStreamResponse::new(request_id, response_model, created);
     chunk.choices.push(CompletionStreamChoice {
         finish_reason: Some(finish_reason.to_string()),
         ..Default::default()
@@ -310,12 +335,12 @@ fn completion_finish_reason_to_openai(
 }
 
 fn usage_chunk(
-    response_id: &str,
+    request_id: &str,
     response_model: &str,
     created: u64,
     usage: Usage,
 ) -> CompletionStreamResponse {
-    let mut chunk = CompletionStreamResponse::new(response_id, response_model, created);
+    let mut chunk = CompletionStreamResponse::new(request_id, response_model, created);
     chunk.usage = Some(usage);
     chunk
 }
@@ -395,7 +420,7 @@ mod tests {
     async fn completion_chunk_stream_maps_streaming_logprobs() {
         let stream = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 5,
+                prompt_token_ids: vec![1, 2, 3, 4, 5].into(),
                 prompt_logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
@@ -405,11 +430,13 @@ mod tests {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![
                             DecodedTokenLogprob {
+                                token_id: 0,
                                 token: "h".to_string(),
                                 logprob: -0.1,
                                 rank: 1,
                             },
                             DecodedTokenLogprob {
+                                token_id: 0,
                                 token: "H".to_string(),
                                 logprob: -0.2,
                                 rank: 1,
@@ -426,11 +453,13 @@ mod tests {
                     positions: vec![DecodedPositionLogprobs {
                         entries: vec![
                             DecodedTokenLogprob {
+                                token_id: 0,
                                 token: "!".to_string(),
                                 logprob: -0.3,
                                 rank: 1,
                             },
                             DecodedTokenLogprob {
+                                token_id: 0,
                                 token: "?".to_string(),
                                 logprob: -0.4,
                                 rank: 1,
@@ -455,6 +484,8 @@ mod tests {
             false,
             None,
             Some(1),
+            false,
+            false,
         )
         .collect::<Vec<_>>()
         .await;

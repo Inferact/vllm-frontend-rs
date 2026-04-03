@@ -1,18 +1,18 @@
+use axum::http::HeaderMap;
 use openai_protocol::common::StringOrArray;
-use uuid::Uuid;
 use vllm_text::{Prompt, SamplingParams, TextDecodeOptions, TextRequest};
 
 use super::types::CompletionRequest;
 use crate::error::ApiError;
 use crate::routes::openai::completions::validate;
 use crate::routes::openai::utils::structured_outputs::convert_from_response_format_value;
-use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
+use crate::utils::{convert_logit_bias, merge_kv_transfer_params, process_common_headers};
 
 /// Lowered completion request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
-    /// Stable OpenAI-style response ID, also reused as the internal text request ID.
-    pub response_id: String,
+    /// Stable OpenAI-style request ID, reused as the external text request ID.
+    pub request_id: String,
     /// Public model ID echoed back to the client.
     pub response_model: String,
     /// Whether the caller asked for the final streamed usage chunk.
@@ -21,15 +21,23 @@ pub struct PreparedRequest {
     pub text_request: TextRequest,
     /// Original text prompt that should be echoed back northbound when `echo=true`.
     pub echo: Option<String>,
+    /// Whether to include token IDs alongside generated text.
+    pub return_token_ids: bool,
+    /// Whether to format logprob tokens as `token_id:{id}`.
+    pub return_tokens_as_token_ids: bool,
 }
 
 /// Validate and lower one OpenAI completions request into the internal text-generation format.
-pub fn prepare_completion_request(
+pub(crate) fn prepare_completion_request(
     request: CompletionRequest,
     configured_model: &str,
-    data_parallel_rank: Option<u32>,
+    headers: HeaderMap,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
+
+    let (request_id, data_parallel_rank) =
+        process_common_headers(headers, request.request_id.as_deref());
+    let request_id = format!("cmpl-{}", request_id);
 
     let logprobs = match request.logprobs {
         Some(logprobs) => Some(i32::try_from(logprobs).map_err(|_| {
@@ -47,8 +55,6 @@ pub fn prepare_completion_request(
         } else {
             None
         });
-
-    let response_id = format!("cmpl-{}", Uuid::new_v4());
     let include_usage = (request.stream_options.as_ref())
         .and_then(|options| options.include_usage)
         .unwrap_or(false);
@@ -66,7 +72,7 @@ pub fn prepare_completion_request(
     });
 
     let text_request = TextRequest {
-        request_id: response_id.clone(),
+        request_id: request_id.clone(),
         prompt: request.prompt,
         sampling_params: SamplingParams {
             temperature: request.temperature,
@@ -106,16 +112,19 @@ pub fn prepare_completion_request(
     };
 
     Ok(PreparedRequest {
-        response_id,
+        request_id,
         response_model: configured_model.to_string(),
         include_usage,
         text_request,
         echo,
+        return_token_ids: request.return_token_ids.unwrap_or(false),
+        return_tokens_as_token_ids: request.return_tokens_as_token_ids.unwrap_or(false),
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::HeaderMap;
     use serde_json::json;
     use vllm_text::Prompt;
 
@@ -176,7 +185,8 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("prepare");
 
         assert!(prepared.include_usage);
         assert_eq!(
@@ -216,7 +226,8 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("prepare");
 
         assert_eq!(prepared.echo, Some("hello".to_string()));
         assert_eq!(prepared.text_request.sampling_params.max_tokens, Some(7));
@@ -234,7 +245,8 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("prepare");
 
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(3));
         assert_eq!(
@@ -253,7 +265,10 @@ mod tests {
         }))
         .expect("parse request");
 
-        assert!(prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
+        assert!(
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .is_err()
+        );
     }
 
     #[test]
@@ -268,7 +283,8 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("prepare");
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(1));
         assert_eq!(
             prepared.text_request.sampling_params.prompt_logprobs,
@@ -285,7 +301,9 @@ mod tests {
         }))
         .expect("parse request");
 
-        let prepared = prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", Some(3))
+        let mut headers = HeaderMap::new();
+        headers.insert("X-data-parallel-rank", "3".parse().unwrap());
+        let prepared = prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", headers)
             .expect("prepare");
         assert_eq!(prepared.text_request.data_parallel_rank, Some(3));
     }
@@ -300,7 +318,8 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", HeaderMap::new())
+                .expect("prepare");
         assert_eq!(prepared.text_request.data_parallel_rank, None);
     }
 }

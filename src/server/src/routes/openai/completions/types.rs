@@ -138,6 +138,9 @@ pub struct CompletionRequest {
     /// Request scheduling priority (lower means earlier; default 0)
     pub priority: Option<i32>,
 
+    /// External request ID used for response correlation.
+    pub request_id: Option<String>,
+
     /// Tokens represented as strings of the form 'token_id:{token_id}' in logprobs
     pub return_tokens_as_token_ids: Option<bool>,
 
@@ -184,6 +187,8 @@ pub(super) struct CompletionChoice {
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
+    pub token_ids: Option<Vec<u32>>,
+    pub prompt_token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM `CompletionStreamResponse` class.
@@ -222,6 +227,8 @@ pub(super) struct CompletionStreamChoice {
     pub logprobs: Option<LogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
+    pub token_ids: Option<Vec<u32>>,
+    pub prompt_token_ids: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

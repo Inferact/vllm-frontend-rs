@@ -521,7 +521,7 @@ impl EngineCoreClient {
         } = self;
 
         info!("shutting down engine-core client");
-        inner.shutdown().await;
+        inner.shutdown();
         drop(abort_tx);
 
         // Abort all client tasks first, then await them.
