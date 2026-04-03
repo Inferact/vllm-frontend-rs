@@ -40,7 +40,7 @@ pub(crate) struct PreparedGenerateRequest {
 
 impl GenerateRequest {
     /// Validate and lower this request into the raw engine-core request format.
-    pub(crate) fn prepare(self) -> Result<PreparedGenerateRequest> {
+    pub(crate) fn prepare(self, randomize_request_id: bool) -> Result<PreparedGenerateRequest> {
         if self.prompt_token_ids.is_empty() {
             return Err(Error::EmptyPromptTokenIds {
                 request_id: self.request_id,
@@ -60,12 +60,16 @@ impl GenerateRequest {
         } = self;
 
         let external_request_id = request_id;
-        let random_suffix = Uuid::new_v4().simple().to_string();
-        let internal_request_id = format!("{external_request_id}-{}", &random_suffix[..8]);
+        let engine_request_id = if randomize_request_id {
+            let random_suffix = Uuid::new_v4().simple().to_string();
+            format!("{external_request_id}-{}", &random_suffix[..8])
+        } else {
+            external_request_id.clone()
+        };
 
         Ok(PreparedGenerateRequest {
             engine_request: EngineCoreRequest {
-                request_id: internal_request_id,
+                request_id: engine_request_id,
                 prompt_token_ids: Some(prompt_token_ids),
                 mm_features: None,
                 sampling_params: Some(sampling_params),
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn prepare_builds_engine_core_request() {
-        let prepared = sample_request().prepare().unwrap();
+        let prepared = sample_request().prepare(true).unwrap();
 
         assert_eq!(prepared.prompt_token_ids(), &[11, 22, 33]);
 
@@ -160,10 +164,19 @@ mod tests {
         let mut request = sample_request();
         request.prompt_token_ids.clear();
 
-        let error = request.prepare().unwrap_err();
+        let error = request.prepare(true).unwrap_err();
         assert!(matches!(
             error,
             Error::EmptyPromptTokenIds { request_id } if request_id == "req-1"
         ));
+    }
+
+    #[test]
+    fn prepare_can_preserve_external_request_id() {
+        let prepared = sample_request().prepare(false).unwrap();
+
+        let request = prepared.engine_request;
+        assert_eq!(request.external_req_id.as_deref(), Some("req-1"));
+        assert_eq!(request.request_id, "req-1");
     }
 }
