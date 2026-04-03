@@ -204,6 +204,9 @@ pub struct ChatCompletionRequest {
     /// Request scheduling priority (lower means earlier; default 0)
     pub priority: Option<i32>,
 
+    /// External request ID used for response correlation.
+    pub request_id: Option<String>,
+
     /// Tokens represented as strings of the form 'token_id:{token_id}' in logprobs
     pub return_tokens_as_token_ids: Option<bool>,
 
@@ -277,6 +280,7 @@ impl Default for ChatCompletionRequest {
             mm_processor_kwargs: None,
             structured_outputs: None,
             priority: None,
+            request_id: None,
             return_tokens_as_token_ids: None,
             return_token_ids: None,
             cache_salt: None,
@@ -324,6 +328,7 @@ pub(super) struct ChatCompletionResponse {
     pub usage: Option<Usage>,
     pub system_fingerprint: Option<String>,
     pub prompt_logprobs: Option<Vec<Option<HashMap<String, f32>>>>,
+    pub prompt_token_ids: Option<Vec<u32>>,
     pub kv_transfer_params: Option<Value>,
 }
 
@@ -336,6 +341,7 @@ pub(super) struct ChatCompletionChoice {
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
+    pub token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM response `ChatMessage` class.
@@ -358,6 +364,7 @@ pub(super) struct ChatCompletionStreamResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionStreamChoice>,
     pub usage: Option<Usage>,
+    pub prompt_token_ids: Option<Vec<u32>>,
 }
 
 impl ChatCompletionStreamResponse {
@@ -370,6 +377,7 @@ impl ChatCompletionStreamResponse {
             model: model.to_string(),
             choices: Vec::new(),
             usage: None,
+            prompt_token_ids: None,
         }
     }
 }
@@ -384,6 +392,7 @@ pub(super) struct ChatCompletionStreamChoice {
     pub logprobs: Option<ChatLogProbs>,
     pub finish_reason: Option<String>,
     pub stop_reason: Option<Value>,
+    pub token_ids: Option<Vec<u32>>,
 }
 
 /// Mirrors the Python vLLM `DeltaMessage` class.

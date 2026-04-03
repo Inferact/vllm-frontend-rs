@@ -117,6 +117,7 @@ impl ChatLlm {
             priority: request.priority,
             cache_salt: request.cache_salt,
             add_special_tokens: request.add_special_tokens,
+            data_parallel_rank: request.data_parallel_rank,
         };
         let decoded_stream = self.text.generate(text_request).await?.map_err(Error::from);
         let structured_stream = output::output_stream(
@@ -135,12 +136,6 @@ impl ChatLlm {
             request.request_id,
             structured_stream.boxed(),
         ))
-    }
-
-    /// Abort one in-flight chat request by request ID.
-    pub async fn abort(&self, request_id: &str) -> Result<()> {
-        self.text.abort(request_id).await?;
-        Ok(())
     }
 
     /// Shut down the underlying LLM client and its background tasks.

@@ -13,7 +13,9 @@ use vllm_engine_core_client::protocol::{
 };
 use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig};
-use vllm_llm::{Error, FinishReason, GeneratePromptInfo, GenerateRequest, Llm};
+use vllm_llm::{
+    Error, FinishReason, GenerateOutputStreamExt as _, GeneratePromptInfo, GenerateRequest, Llm,
+};
 use vllm_metrics::METRICS;
 use zeromq::prelude::{SocketRecv, SocketSend};
 use zeromq::{DealerSocket, PushSocket, ZmqMessage};
@@ -69,6 +71,32 @@ fn request_output_with_logprobs(
         stop_reason: None,
         events: None,
         kv_transfer_params: None,
+        trace_headers: None,
+        num_cached_tokens: 0,
+        num_external_computed_tokens: 0,
+        routed_experts: None,
+        num_nans_in_logits: 0,
+    }
+}
+
+fn request_output_with_logprobs_and_kv(
+    request_id: &str,
+    new_token_ids: Vec<u32>,
+    finish_reason: Option<EngineCoreFinishReason>,
+    new_logprobs: Option<Logprobs>,
+    prompt_logprobs: Option<Logprobs>,
+    kv_transfer_params: Option<serde_json::Value>,
+) -> EngineCoreOutput {
+    EngineCoreOutput {
+        request_id: request_id.to_string(),
+        new_token_ids,
+        new_logprobs: new_logprobs.map(MaybeWireLogprobs::Direct),
+        new_prompt_logprobs_tensors: prompt_logprobs.map(MaybeWireLogprobs::Direct),
+        pooling_output: None,
+        finish_reason,
+        stop_reason: None,
+        events: None,
+        kv_transfer_params,
         trace_headers: None,
         num_cached_tokens: 0,
         num_external_computed_tokens: 0,
@@ -213,7 +241,9 @@ async fn generate_streams_outputs() {
                 let add = recv_engine_message(dealer).await;
                 assert_eq!(add[0].as_ref(), &[0x00]);
                 let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
-                assert_eq!(request.request_id, "req-delta");
+                assert_eq!(request.external_req_id.as_deref(), Some("req-delta"));
+                assert!(request.request_id.starts_with("req-delta-"));
+                assert_ne!(request.request_id, "req-delta");
                 assert_eq!(request.client_index, 7);
                 assert_eq!(request.prompt_token_ids, Some(vec![11, 22]));
 
@@ -222,21 +252,21 @@ async fn generate_streams_outputs() {
                     EngineCoreOutputs {
                         outputs: vec![
                             request_output_with_logprobs(
-                                "req-delta",
+                                &request.request_id,
                                 vec![1, 2],
                                 None,
                                 Some(logprobs_for_position(1, -0.3, 4, 9, -0.1)),
                                 Some(prompt_logprobs()),
                             ),
                             request_output_with_logprobs(
-                                "req-delta",
+                                &request.request_id,
                                 vec![3],
                                 Some(EngineCoreFinishReason::Length),
                                 Some(logprobs_for_position(3, -0.4, 5, 10, -0.2)),
                                 None,
                             ),
                         ],
-                        finished_requests: Some(BTreeSet::from(["req-delta".to_string()])),
+                        finished_requests: Some(BTreeSet::from([request.request_id.clone()])),
                         ..Default::default()
                     },
                 )
@@ -250,9 +280,10 @@ async fn generate_streams_outputs() {
         .generate(sample_generate_request("req-delta", 3))
         .await
         .unwrap();
+    let internal_id = stream.request_id().to_string();
 
     let first = stream.next().await.unwrap().unwrap();
-    assert_eq!(first.request_id, "req-delta");
+    assert_eq!(first.request_id, internal_id);
     assert_eq!(
         first.prompt_info,
         Some(GeneratePromptInfo {
@@ -265,7 +296,7 @@ async fn generate_streams_outputs() {
         first.logprobs,
         Some(logprobs_for_position(1, -0.3, 4, 9, -0.1))
     );
-    assert_eq!(first.finish_reason(), None);
+    assert_eq!(first.finish_reason, None);
 
     let second = stream.next().await.unwrap().unwrap();
     assert_eq!(second.prompt_info, None);
@@ -274,12 +305,89 @@ async fn generate_streams_outputs() {
         second.logprobs,
         Some(logprobs_for_position(3, -0.4, 5, 10, -0.2))
     );
-    assert_eq!(second.finish_reason(), Some(FinishReason::Length));
+    assert_eq!(second.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
+    init_tracing();
+    let ipc = IpcNamespace::new().unwrap();
+    let handshake_address = ipc.handshake_endpoint();
+    let engine_id = b"engine-collect-output".to_vec();
+
+    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            Box::pin(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.external_req_id.as_deref(), Some("req-collect"));
+                assert!(request.request_id.starts_with("req-collect-"));
+
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![33],
+                                None,
+                                Some(logprobs_for_position(33, -0.1, 1, 99, -0.2)),
+                                Some(prompt_logprobs()),
+                            ),
+                            request_output_with_logprobs_and_kv(
+                                &request.request_id,
+                                vec![44],
+                                Some(EngineCoreFinishReason::Stop),
+                                Some(logprobs_for_position(44, -0.3, 1, 88, -0.4)),
+                                None,
+                                Some(serde_json::json!({"connector": "x"})),
+                            ),
+                        ],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: None,
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    );
+
+    let llm = connect_async_llm_with_ipc(handshake_address, 7, "test-model", &ipc).await;
+    let stream = llm
+        .generate(sample_generate_request("req-collect", 4))
+        .await
+        .unwrap();
+    let internal_id = stream.request_id().to_string();
+    let collected = stream.collect_output().await.unwrap();
+
+    let _ = shutdown_tx.send(());
+    engine_task.await.unwrap();
+
+    assert_eq!(collected.request_id, internal_id);
+    assert_eq!(collected.prompt_token_ids, vec![11, 22]);
+    assert_eq!(collected.token_ids, vec![33, 44]);
+    assert_eq!(collected.finish_reason, FinishReason::stop_eos());
+    assert_eq!(collected.prompt_logprobs, Some(prompt_logprobs()));
+    assert_eq!(
+        collected.logprobs.as_ref().map(|lp| lp.positions.len()),
+        Some(2)
+    );
+    assert_eq!(
+        collected.kv_transfer_params,
+        Some(serde_json::json!({"connector": "x"}))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -295,11 +403,12 @@ async fn generate_propagates_unexpected_close_errors() {
             Box::pin(async move {
                 let add = recv_engine_message(dealer).await;
                 assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
 
                 send_outputs(
                     push,
                     EngineCoreOutputs {
-                        finished_requests: Some(BTreeSet::from(["req-close".to_string()])),
+                        finished_requests: Some(BTreeSet::from([request.request_id])),
                         ..Default::default()
                     },
                 )
@@ -313,54 +422,17 @@ async fn generate_propagates_unexpected_close_errors() {
         .generate(sample_generate_request("req-close", 1))
         .await
         .unwrap();
+    let internal_id = stream.request_id().to_string();
 
     let error = stream.next().await.unwrap().unwrap_err();
     assert!(matches!(
         error,
         Error::EngineCoreClient(vllm_engine_core_client::Error::RequestStreamClosed {
             request_id
-        }) if request_id == "req-close"
+        }) if request_id == internal_id
     ));
     assert!(stream.next().await.is_none());
 
-    let _ = shutdown_tx.send(());
-    engine_task.await.unwrap();
-    llm.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn abort_forwards_to_engine_core_client() {
-    let ipc = IpcNamespace::new().unwrap();
-    let handshake_address = ipc.handshake_endpoint();
-    let engine_id = b"engine-abort".to_vec();
-
-    let (shutdown_tx, engine_task) = spawn_mock_engine_task(
-        handshake_address.clone(),
-        engine_id.clone(),
-        |dealer, push| {
-            Box::pin(async move {
-                let add = recv_engine_message(dealer).await;
-                assert_eq!(add[0].as_ref(), &[0x00]);
-
-                let abort = timeout(Duration::from_secs(1), recv_engine_message(dealer))
-                    .await
-                    .unwrap();
-                assert_eq!(abort[0].as_ref(), &[0x01]);
-                let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
-                assert_eq!(aborted_ids, vec!["req-abort".to_string()]);
-                let _ = push;
-            })
-        },
-    );
-
-    let llm = connect_async_llm_with_ipc(handshake_address, 0, "test-model", &ipc).await;
-    let stream = llm
-        .generate(sample_generate_request("req-abort", 4))
-        .await
-        .unwrap();
-    drop(stream);
-
-    llm.abort("req-abort").await.unwrap();
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
     llm.shutdown().await.unwrap();
@@ -379,11 +451,14 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
             Box::pin(async move {
                 let add = recv_engine_message(dealer).await;
                 assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.external_req_id.as_deref(), Some("req-drop"));
+                assert!(request.request_id.starts_with("req-drop-"));
 
                 send_outputs(
                     push,
                     EngineCoreOutputs {
-                        outputs: vec![request_output("req-drop", vec![99], None)],
+                        outputs: vec![request_output(&request.request_id, vec![99], None)],
                         ..Default::default()
                     },
                 )
@@ -394,7 +469,7 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
                     .unwrap();
                 assert_eq!(abort[0].as_ref(), &[0x01]);
                 let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
-                assert_eq!(aborted_ids, vec!["req-drop".to_string()]);
+                assert_eq!(aborted_ids, vec![request.request_id]);
             })
         },
     );
@@ -415,7 +490,7 @@ async fn dropping_a_live_generate_stream_triggers_abort() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
+async fn duplicate_external_request_ids_are_randomized_before_reaching_engine_core_client() {
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-dup".to_vec();
@@ -425,24 +500,42 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
         engine_id.clone(),
         |dealer, push| {
             Box::pin(async move {
-                let add = recv_engine_message(dealer).await;
-                assert_eq!(add[0].as_ref(), &[0x00]);
+                let add_1 = recv_engine_message(dealer).await;
+                assert_eq!(add_1[0].as_ref(), &[0x00]);
+                let request_1: EngineCoreRequest = rmp_serde::from_slice(&add_1[1]).unwrap();
+                assert_eq!(request_1.external_req_id.as_deref(), Some("req-dup"));
+                assert!(request_1.request_id.starts_with("req-dup-"));
 
-                assert!(
-                    timeout(Duration::from_millis(200), dealer.recv())
-                        .await
-                        .is_err()
-                );
+                let add_2 = recv_engine_message(dealer).await;
+                assert_eq!(add_2[0].as_ref(), &[0x00]);
+                let request_2: EngineCoreRequest = rmp_serde::from_slice(&add_2[1]).unwrap();
+                assert_eq!(request_2.external_req_id.as_deref(), Some("req-dup"));
+                assert!(request_2.request_id.starts_with("req-dup-"));
+                assert_ne!(request_1.request_id, request_2.request_id);
 
                 send_outputs(
                     push,
                     EngineCoreOutputs {
                         outputs: vec![request_output(
-                            "req-dup",
+                            &request_1.request_id,
                             vec![],
                             Some(EngineCoreFinishReason::Length),
                         )],
-                        finished_requests: Some(BTreeSet::from(["req-dup".to_string()])),
+                        finished_requests: Some(BTreeSet::from([request_1.request_id.clone()])),
+                        ..Default::default()
+                    },
+                )
+                .await;
+
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        outputs: vec![request_output(
+                            &request_2.request_id,
+                            vec![],
+                            Some(EngineCoreFinishReason::Length),
+                        )],
+                        finished_requests: Some(BTreeSet::from([request_2.request_id])),
                         ..Default::default()
                     },
                 )
@@ -456,19 +549,18 @@ async fn duplicate_request_ids_bubble_up_from_engine_core_client() {
         .generate(sample_generate_request("req-dup", 1))
         .await
         .unwrap();
-    let error = match llm.generate(sample_generate_request("req-dup", 1)).await {
-        Ok(_) => panic!("expected duplicate request id error"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        Error::EngineCoreClient(vllm_engine_core_client::Error::DuplicateRequestId {
-            request_id
-        }) if request_id == "req-dup"
-    ));
+    let stream_2 = llm
+        .generate(sample_generate_request("req-dup", 1))
+        .await
+        .unwrap();
+    let internal_id_1 = stream_1.request_id().to_string();
+    let internal_id_2 = stream_2.request_id().to_string();
+    let collected_1 = stream_1.collect_output().await.unwrap();
+    let collected_2 = stream_2.collect_output().await.unwrap();
+    assert_eq!(collected_1.request_id, internal_id_1);
+    assert_eq!(collected_2.request_id, internal_id_2);
     let _ = shutdown_tx.send(());
     engine_task.await.unwrap();
-    drop(stream_1);
     llm.shutdown().await.unwrap();
 }
 
@@ -486,6 +578,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
             Box::pin(async move {
                 let add = recv_engine_message(dealer).await;
                 assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
 
                 send_outputs(
                     push,
@@ -493,7 +586,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
                         engine_index: 4,
                         timestamp: 10.0,
                         outputs: vec![request_output_with_events(
-                            "req-metrics",
+                            &request.request_id,
                             vec![1],
                             None,
                             Some(vec![
@@ -518,7 +611,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
                         engine_index: 4,
                         timestamp: 11.5,
                         outputs: vec![request_output_with_events(
-                            "req-metrics",
+                            &request.request_id,
                             vec![2, 3],
                             Some(EngineCoreFinishReason::Length),
                             Some(vec![EngineCoreEvent {
@@ -526,7 +619,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
                                 timestamp: 10.5,
                             }]),
                         )],
-                        finished_requests: Some(BTreeSet::from(["req-metrics".to_string()])),
+                        finished_requests: Some(BTreeSet::from([request.request_id])),
                         ..Default::default()
                     },
                 )
@@ -543,7 +636,7 @@ async fn generate_records_request_metrics_in_prometheus_output() {
     assert_eq!(stream.next().await.unwrap().unwrap().token_ids, vec![1]);
     let final_output = stream.next().await.unwrap().unwrap();
     assert_eq!(final_output.token_ids, vec![2, 3]);
-    assert_eq!(final_output.finish_reason(), Some(FinishReason::Length));
+    assert_eq!(final_output.finish_reason, Some(FinishReason::Length));
     assert!(stream.next().await.is_none());
 
     let rendered = METRICS.render().unwrap();
@@ -612,6 +705,9 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
             Box::pin(async move {
                 let add = recv_engine_message(dealer).await;
                 assert_eq!(add[0].as_ref(), &[0x00]);
+                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
+                assert_eq!(request.external_req_id.as_deref(), Some("req-metrics-drop"));
+                assert!(request.request_id.starts_with("req-metrics-drop-"));
 
                 send_outputs(
                     push,
@@ -619,7 +715,7 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
                         engine_index: 5,
                         timestamp: 10.0,
                         outputs: vec![request_output_with_events(
-                            "req-metrics-drop",
+                            &request.request_id,
                             vec![99],
                             None,
                             Some(vec![
@@ -642,6 +738,8 @@ async fn dropping_stream_records_abort_terminal_request_metrics() {
                     .await
                     .unwrap();
                 assert_eq!(abort[0].as_ref(), &[0x01]);
+                let aborted_ids: Vec<String> = rmp_serde::from_slice(&abort[1]).unwrap();
+                assert_eq!(aborted_ids, vec![request.request_id]);
             })
         },
     );

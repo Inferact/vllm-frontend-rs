@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use bytes::Bytes;
 use futures::StreamExt as _;
 use rmpv::Value;
@@ -92,6 +92,33 @@ fn request_output_with_logprobs(
         stop_reason,
         events: None,
         kv_transfer_params: None,
+        trace_headers: None,
+        num_cached_tokens: 0,
+        num_external_computed_tokens: 0,
+        routed_experts: None,
+        num_nans_in_logits: 0,
+    }
+}
+
+fn request_output_with_logprobs_and_kv(
+    request_id: &str,
+    new_token_ids: Vec<u32>,
+    finish_reason: Option<EngineCoreFinishReason>,
+    stop_reason: Option<StopReason>,
+    new_logprobs: Option<Logprobs>,
+    new_prompt_logprobs_tensors: Option<Logprobs>,
+    kv_transfer_params: Option<serde_json::Value>,
+) -> EngineCoreOutput {
+    EngineCoreOutput {
+        request_id: request_id.to_string(),
+        new_token_ids,
+        new_logprobs: new_logprobs.map(MaybeWireLogprobs::Direct),
+        new_prompt_logprobs_tensors: new_prompt_logprobs_tensors.map(MaybeWireLogprobs::Direct),
+        pooling_output: None,
+        finish_reason,
+        stop_reason,
+        events: None,
+        kv_transfer_params,
         trace_headers: None,
         num_cached_tokens: 0,
         num_external_computed_tokens: 0,
@@ -199,6 +226,10 @@ fn engine_outputs_for_request(
         wave_complete: None,
         start_wave: None,
     }
+}
+
+fn test_llm(client: EngineCoreClient) -> Llm {
+    Llm::new(client).with_request_id_randomization(false)
 }
 
 fn sample_logprobs_for_token(token_id: u32, alternate_token_id: u32) -> Logprobs {
@@ -505,7 +536,7 @@ async fn test_models_with_engine_outputs_and_backend_inner(
     .expect("connect client");
 
     (
-        ChatLlm::from_shared_backend(Llm::new(client), backend),
+        ChatLlm::from_shared_backend(test_llm(client), backend),
         engine_task,
     )
 }
@@ -564,7 +595,7 @@ where
     .await
     .expect("connect client");
 
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let state = Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat));
     (build_router(state.clone()), state, engine_task)
 }
@@ -591,7 +622,7 @@ where
     .await
     .expect("connect client");
 
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     (
         build_router_with_dev_mode(
             Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)),
@@ -940,7 +971,7 @@ async fn non_stream_chat_includes_logprobs_and_prompt_logprobs() {
     )
     .await
     .expect("connect client");
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
@@ -1618,7 +1649,7 @@ async fn non_stream_completions_include_logprobs() {
     )
     .await
     .expect("connect client");
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
@@ -1719,7 +1750,7 @@ async fn non_stream_completions_include_prompt_logprobs() {
     )
     .await
     .expect("connect client");
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
@@ -1804,7 +1835,7 @@ async fn non_stream_chat_completions_still_succeed() {
     )
     .await
     .expect("connect client");
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
@@ -1861,7 +1892,7 @@ async fn non_stream_completions_still_succeed() {
     )
     .await
     .expect("connect client");
-    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let chat = ChatLlm::from_shared_backend(test_llm(client), Arc::new(FakeChatBackend::new()));
     let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
 
     let response = app
@@ -1885,6 +1916,287 @@ async fn non_stream_completions_still_succeed() {
 
     assert_eq!(response.status(), StatusCode::OK);
     engine_task.await.expect("mock engine task");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn chat_completions_header_request_id_takes_precedence() {
+    let ipc = IpcNamespace::new().expect("create ipc namespace");
+    let handshake_address = ipc.handshake_endpoint();
+    let engine_id = b"engine-chat-request-id-precedence".to_vec();
+
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                assert_eq!(
+                    request.external_req_id.as_deref(),
+                    Some("chatcmpl-header-req")
+                );
+                assert!(request.request_id.starts_with("chatcmpl-header-req-"));
+                assert_ne!(request.request_id, "chatcmpl-header-req");
+
+                send_outputs(
+                    push,
+                    engine_outputs_for_request(&request.request_id, default_stream_output_specs()),
+                )
+                .await;
+            })
+        },
+    ));
+
+    let client = EngineCoreClient::connect_with_input_output_addresses(
+        EngineCoreClientConfig::new_single(handshake_address).with_model_name("test-model"),
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
+    .await
+    .expect("connect client");
+    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .header("X-Request-Id", "header-req")
+                .body(Body::from(
+                    json!({
+                        "request_id": "body-req",
+                        "model": "Qwen/Qwen1.5-0.5B-Chat",
+                        "messages": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    engine_task.await.expect("mock engine task");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("decode json");
+
+    assert_eq!(json["id"], "chatcmpl-header-req");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn non_stream_raw_generate_returns_token_output_envelope() {
+    let ipc = IpcNamespace::new().expect("create ipc namespace");
+    let handshake_address = ipc.handshake_endpoint();
+    let engine_id = b"engine-raw-generate-non-stream".to_vec();
+
+    let engine_task = MockEngineTask::new(spawn_mock_engine_task(
+        handshake_address.clone(),
+        engine_id.clone(),
+        |dealer, push| {
+            boxed_test_future(async move {
+                let add = recv_engine_message(dealer).await;
+                let request: EngineCoreRequest =
+                    rmp_serde::from_slice(&add[1]).expect("decode request");
+                assert_eq!(request.prompt_token_ids.as_deref(), Some(&[11, 22][..]));
+                assert_eq!(request.external_req_id.as_deref(), Some("raw-req"));
+                assert!(request.request_id.starts_with("raw-req-"));
+                assert_ne!(request.request_id, "raw-req");
+
+                send_outputs(
+                    push,
+                    EngineCoreOutputs {
+                        engine_index: 0,
+                        outputs: vec![
+                            request_output_with_logprobs(
+                                &request.request_id,
+                                vec![33],
+                                None,
+                                None,
+                                Some(sample_logprobs_for_token(33, 34)),
+                                Some(prompt_logprobs_for_tokens(&[11, 22])),
+                            ),
+                            request_output_with_logprobs_and_kv(
+                                &request.request_id,
+                                vec![44],
+                                Some(EngineCoreFinishReason::Stop),
+                                None,
+                                Some(sample_logprobs_for_token(44, 45)),
+                                None,
+                                Some(json!({"connector": "x"})),
+                            ),
+                        ],
+                        scheduler_stats: None,
+                        timestamp: 0.0,
+                        utility_output: None,
+                        finished_requests: None,
+                        wave_complete: None,
+                        start_wave: None,
+                    },
+                )
+                .await;
+            })
+        },
+    ));
+
+    let client = EngineCoreClient::connect_with_input_output_addresses(
+        EngineCoreClientConfig::new_single(handshake_address).with_model_name("test-model"),
+        Some(ipc.input_endpoint()),
+        Some(ipc.output_endpoint()),
+    )
+    .await
+    .expect("connect client");
+    let chat = ChatLlm::from_shared_backend(Llm::new(client), Arc::new(FakeChatBackend::new()));
+    let mut app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
+
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri("/inference/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "request_id": "raw-req",
+                        "model": "Qwen/Qwen1.5-0.5B-Chat",
+                        "token_ids": [11, 22],
+                        "stream": false,
+                        "sampling_params": {
+                            "max_tokens": 2,
+                            "logprobs": 1,
+                            "prompt_logprobs": 1
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    engine_task.await.expect("mock engine task");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("decode json");
+
+    assert_eq!(json["request_id"], "raw-req");
+    assert_eq!(json["choices"][0]["index"], 0);
+    assert_eq!(json["choices"][0]["token_ids"], json!([33, 44]));
+    assert_eq!(json["choices"][0]["finish_reason"], "stop");
+    assert_eq!(
+        json["choices"][0]["logprobs"]["content"][0]["token"],
+        "token_id:33"
+    );
+    assert_eq!(
+        json["choices"][0]["logprobs"]["content"][1]["top_logprobs"][0]["token"],
+        "token_id:44"
+    );
+    assert_eq!(json["prompt_logprobs"][0], serde_json::Value::Null);
+    assert_eq!(
+        json["prompt_logprobs"][1]["22"]["decoded_token"],
+        "token_id:22"
+    );
+    assert_eq!(json["kv_transfer_params"], json!({"connector": "x"}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn raw_generate_rejects_streaming() {
+    let mut app = test_app().await;
+
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri("/inference/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "Qwen/Qwen1.5-0.5B-Chat",
+                        "token_ids": [11, 22],
+                        "stream": true,
+                        "sampling_params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("decode json");
+    assert_eq!(json["error"]["param"], "stream");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn raw_generate_rejects_empty_token_ids() {
+    let mut app = test_app().await;
+
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri("/inference/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "Qwen/Qwen1.5-0.5B-Chat",
+                        "token_ids": [],
+                        "sampling_params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("decode json");
+    assert_eq!(json["error"]["param"], "token_ids");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn raw_generate_rejects_wrong_model() {
+    let mut app = test_app().await;
+
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri("/inference/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "wrong-model",
+                        "token_ids": [11, 22],
+                        "sampling_params": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2071,6 +2383,7 @@ async fn prepared_openai_request_streams_text_events() {
         }))
         .expect("decode request"),
         "Qwen/Qwen1.5-0.5B-Chat",
+        HeaderMap::new(),
     )
     .expect("prepare request");
 
@@ -2293,7 +2606,7 @@ async fn tool_call_sse_chunks_can_carry_logprobs() {
     .await
     .expect("connect client");
     let chat = ChatLlm::from_shared_backend(
-        Llm::new(client),
+        test_llm(client),
         Arc::new(FakeChatBackend::with_model_id("Qwen/Qwen3-0.6B")),
     );
     let app = build_router(Arc::new(AppState::new("Qwen/Qwen1.5-0.5B-Chat", chat)));
