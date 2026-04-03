@@ -52,8 +52,6 @@ pub struct Finished {
 pub enum DecodedTextEvent {
     /// The request has reached the point where prompt-scoped decoding metadata is ready.
     Start {
-        /// Number of prompt tokens for this request.
-        prompt_token_count: usize,
         /// The actual prompt token IDs for this request.
         prompt_token_ids: Arc<[u32]>,
         /// Once-only prompt logprobs metadata, when requested.
@@ -92,7 +90,7 @@ pub async fn decoded_text_event_stream(
     intermediate: bool,
 ) {
     let mut decoder: Option<Box<dyn IncrementalDecoder>> = None;
-    let mut prompt_token_count: Option<usize> = None;
+    let mut prompt_token_count = 0_usize;
     let mut token_ids = Vec::new();
     let mut output_token_count: usize = 0;
     let mut logprobs: Option<DecodedLogprobs> = None;
@@ -106,6 +104,8 @@ pub async fn decoded_text_event_stream(
             let prompt_token_ids = output
                 .prompt_token_ids()
                 .expect("first llm output must carry prompt token ids");
+            prompt_token_count = prompt_token_ids.len();
+
             let dec = tokenizer.create_decode_stream(
                 prompt_token_ids,
                 decode_options.skip_special_tokens,
@@ -124,12 +124,9 @@ pub async fn decoded_text_event_stream(
                     }
                 },
             );
-
-            let _ = decoder.insert(dec);
-            let prompt_token_count = *prompt_token_count.insert(prompt_token_ids.len());
+            decoder = Some(dec);
 
             yield DecodedTextEvent::Start {
-                prompt_token_count,
                 prompt_token_ids: prompt_token_ids.clone(),
                 prompt_logprobs: output
                     .prompt_logprobs()
@@ -145,7 +142,6 @@ pub async fn decoded_text_event_stream(
             };
         };
         let decoder = decoder.as_mut().unwrap();
-        let prompt_token_count = prompt_token_count.unwrap();
 
         let kv_transfer_params = output.take_kv_transfer_params();
         let mut finish_reason = output.finish_reason();

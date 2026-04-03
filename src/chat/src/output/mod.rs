@@ -29,7 +29,6 @@ use crate::request::{ChatTool, ChatToolChoice};
 pub(crate) enum AssistantEvent {
     #[subenum(ContentEvent)]
     Start {
-        prompt_token_count: usize,
         prompt_token_ids: Arc<[u32]>,
         prompt_logprobs: Option<DecodedPromptLogprobs>,
     },
@@ -71,11 +70,9 @@ impl ContentEvent {
     fn from_decoded_plain_text(event: DecodedTextEvent) -> Vec<Self> {
         match event {
             DecodedTextEvent::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             } => vec![Self::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             }],

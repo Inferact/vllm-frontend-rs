@@ -18,7 +18,6 @@ use crate::{Error, FinishReason, Result, TextOutputStream};
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollectedTextOutput {
     pub text: String,
-    pub prompt_token_count: usize,
     pub prompt_token_ids: Arc<[u32]>,
     pub prompt_logprobs: Option<DecodedPromptLogprobs>,
     pub logprobs: Option<DecodedLogprobs>,
@@ -73,8 +72,6 @@ impl<T: TextOutputStream> T {
                                 prompt_logprobs: prompt_logprobs.take(),
                                 logprobs: delta_logprobs,
                                 token_ids: delta_token_ids,
-                                // These are updated below when finished.
-                                prompt_token_count: 0,
                                 finish_reason: FinishReason::Error,
                                 kv_transfer_params: None,
                             })
@@ -82,7 +79,6 @@ impl<T: TextOutputStream> T {
 
                         if let Some(finished) = finished {
                             let mut collected = collected.unwrap();
-                            collected.prompt_token_count = finished.prompt_token_count;
                             collected.finish_reason = finished.finish_reason;
                             collected.kv_transfer_params = finished.kv_transfer_params;
                             return Ok(collected);
@@ -111,8 +107,7 @@ mod tests {
     async fn collect_output_retains_prompt_and_sample_logprobs() {
         let stream = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 2,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![10, 11].into(),
                 prompt_logprobs: Some(DecodedPromptLogprobs {
                     first_token_id: 0,
                     first_token: "o".to_string(),
@@ -160,7 +155,6 @@ mod tests {
 
         let collected = stream.collect_output().await.unwrap();
         assert_eq!(collected.text, "bc");
-        assert_eq!(collected.prompt_token_count, 2);
         assert_eq!(
             collected.prompt_logprobs,
             Some(DecodedPromptLogprobs {
@@ -205,8 +199,7 @@ mod tests {
     async fn collect_output_accumulates_intermediate_deltas() {
         let stream = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 2,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![10, 11].into(),
                 prompt_logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
@@ -276,7 +269,6 @@ mod tests {
 
         let collected = stream.collect_output().await.unwrap();
         assert_eq!(collected.text, "hello");
-        assert_eq!(collected.prompt_token_count, 2);
         assert_eq!(collected.prompt_logprobs, None);
         assert_eq!(collected.token_ids, vec![1, 2, 3, 4, 5]);
         assert_eq!(

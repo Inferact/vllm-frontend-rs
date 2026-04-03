@@ -213,12 +213,10 @@ async fn final_only_tool_event_stream(
     while let Some(event) = stream.next().await.transpose()? {
         match event {
             ContentEvent::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             } => {
                 yield AssistantEvent::Start {
-                    prompt_token_count,
                     prompt_token_ids,
                     prompt_logprobs,
                 }
@@ -324,12 +322,10 @@ pub(crate) async fn tool_event_stream(
     while let Some(event) = stream.next().await.transpose()? {
         match event {
             ContentEvent::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             } => {
                 yield AssistantEvent::Start {
-                    prompt_token_count,
                     prompt_token_ids,
                     prompt_logprobs,
                 }
@@ -447,8 +443,7 @@ mod tests {
     async fn tool_parser_failure_falls_back_to_plain_text() {
         let events = stream::iter(vec![
             Ok(ContentEvent::Start {
-                prompt_token_count: 3,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![1, 2, 3].into(),
                 prompt_logprobs: None,
             }),
             Ok(ContentEvent::TextDelta {
@@ -485,8 +480,7 @@ mod tests {
             events,
             vec![
                 AssistantEvent::Start {
-                    prompt_token_count: 3,
-                    prompt_token_ids: vec![].into(),
+                    prompt_token_ids: vec![1, 2, 3].into(),
                     prompt_logprobs: None,
                 },
                 AssistantEvent::TextDelta {
@@ -523,8 +517,7 @@ mod tests {
     async fn tool_stream_preserves_logprobs_delta_in_final_only_mode() {
         let events = stream::iter(vec![
             Ok(ContentEvent::Start {
-                prompt_token_count: 1,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![1].into(),
                 prompt_logprobs: None,
             }),
             Ok(ContentEvent::LogprobsDelta {
@@ -563,8 +556,7 @@ mod tests {
             events,
             vec![
                 AssistantEvent::Start {
-                    prompt_token_count: 1,
-                    prompt_token_ids: vec![].into(),
+                    prompt_token_ids: vec![1].into(),
                     prompt_logprobs: None,
                 },
                 AssistantEvent::LogprobsDelta {

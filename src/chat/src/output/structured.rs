@@ -240,12 +240,10 @@ pub(super) async fn structured_chat_event_stream(stream: impl AssistantEventStre
     while let Some(event) = stream.next().await.transpose()? {
         match event {
             AssistantEvent::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             } => {
                 yield ChatEvent::Start {
-                    prompt_token_count,
                     prompt_token_ids,
                     prompt_logprobs,
                 }

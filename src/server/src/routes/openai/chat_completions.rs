@@ -800,7 +800,6 @@ mod tests {
     async fn chunk_stream_coalesces_text_delta_with_logprobs() {
         let stream = stream::iter(vec![
             Ok(ChatEvent::Start {
-                prompt_token_count: 1,
                 prompt_token_ids: vec![].into(),
                 prompt_logprobs: None,
             }),
@@ -863,7 +862,6 @@ mod tests {
     async fn chunk_stream_coalesces_reasoning_delta_with_logprobs() {
         let stream = stream::iter(vec![
             Ok(ChatEvent::Start {
-                prompt_token_count: 1,
                 prompt_token_ids: vec![].into(),
                 prompt_logprobs: None,
             }),

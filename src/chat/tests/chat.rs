@@ -387,12 +387,11 @@ async fn chat_streams_text_events() {
 
     match next_semantic(&mut stream).await.unwrap().unwrap() {
         ChatEvent::Start {
-            prompt_token_count,
             prompt_token_ids,
             prompt_logprobs: None,
         } => {
             assert_eq!(
-                prompt_token_count,
+                prompt_token_ids.len(),
                 "system: You are terse.\nuser: Say hi\nassistant:".len()
             );
             assert!(!prompt_token_ids.is_empty());
@@ -1252,12 +1251,11 @@ async fn chat_stream_and_collect_preserve_prompt_and_sample_logprobs() {
     let mut stream = chat.chat(request.clone()).await.unwrap();
     match next_semantic(&mut stream).await.unwrap().unwrap() {
         ChatEvent::Start {
-            prompt_token_count,
             prompt_token_ids,
             prompt_logprobs,
         } => {
             assert_eq!(
-                prompt_token_count,
+                prompt_token_ids.len(),
                 "system: You are terse.\nuser: Say hi\nassistant:".len()
             );
             assert!(!prompt_token_ids.is_empty());

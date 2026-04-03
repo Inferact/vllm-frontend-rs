@@ -103,12 +103,10 @@ pub(crate) async fn reasoning_event_stream(
     while let Some(event) = decoded_stream.next().await.transpose()? {
         match event {
             DecodedTextEvent::Start {
-                prompt_token_count,
                 prompt_token_ids,
                 prompt_logprobs,
             } => {
                 yield ContentEvent::Start {
-                    prompt_token_count,
                     prompt_token_ids,
                     prompt_logprobs,
                 }
@@ -193,8 +191,7 @@ mod tests {
     async fn reasoning_parser_failure_falls_back_to_plain_text() {
         let events = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 3,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![1, 2, 3].into(),
                 prompt_logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
@@ -232,8 +229,7 @@ mod tests {
             events,
             vec![
                 ContentEvent::Start {
-                    prompt_token_count: 3,
-                    prompt_token_ids: vec![].into(),
+                    prompt_token_ids: vec![1, 2, 3].into(),
                     prompt_logprobs: None,
                 },
                 ContentEvent::TextDelta {
@@ -258,8 +254,7 @@ mod tests {
     async fn reasoning_stream_preserves_logprobs_delta() {
         let events = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 1,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![1].into(),
                 prompt_logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {
@@ -290,8 +285,7 @@ mod tests {
             collected,
             vec![
                 ContentEvent::Start {
-                    prompt_token_count: 1,
-                    prompt_token_ids: vec![].into(),
+                    prompt_token_ids: vec![1].into(),
                     prompt_logprobs: None,
                 },
                 ContentEvent::TextDelta {

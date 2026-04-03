@@ -174,7 +174,7 @@ async fn collect_completion(
             prompt_token_ids: return_token_ids.then(|| collected.prompt_token_ids.to_vec()),
         }],
         usage: Some(Usage::from_counts(
-            collected.prompt_token_count as u32,
+            collected.prompt_token_ids.len() as u32,
             collected.token_ids.len() as u32,
         )),
         system_fingerprint: None,
@@ -419,8 +419,7 @@ mod tests {
     async fn completion_chunk_stream_maps_streaming_logprobs() {
         let stream = stream::iter(vec![
             Ok(DecodedTextEvent::Start {
-                prompt_token_count: 5,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![1, 2, 3, 4, 5].into(),
                 prompt_logprobs: None,
             }),
             Ok(DecodedTextEvent::TextDelta {

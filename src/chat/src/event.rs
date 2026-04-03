@@ -112,9 +112,6 @@ impl AssistantMessage {
 pub enum ChatEvent {
     /// The request was accepted, streaming has started, and prompt metadata is ready.
     Start {
-        /// Number of prompt tokens actually sent to the engine after chat
-        /// template rendering and tokenization.
-        prompt_token_count: usize,
         /// The actual prompt token IDs for this request.
         prompt_token_ids: Arc<[u32]>,
         /// Once-only prompt logprobs metadata, when requested.

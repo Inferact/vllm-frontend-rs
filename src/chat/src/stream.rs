@@ -57,7 +57,6 @@ impl ChatEventStream {
                 ChatEvent::Start {
                     prompt_logprobs: start_prompt_logprobs,
                     prompt_token_ids: start_prompt_token_ids,
-                    prompt_token_count: _,
                 } => {
                     prompt_logprobs = start_prompt_logprobs;
                     prompt_token_ids = start_prompt_token_ids;
@@ -139,7 +138,6 @@ mod tests {
         let stream = ChatEventStream::new(
             "chat-missing-done".to_string(),
             stream::iter([Ok(ChatEvent::Start {
-                prompt_token_count: 1,
                 prompt_token_ids: vec![].into(),
                 prompt_logprobs: None,
             })]),
@@ -159,8 +157,7 @@ mod tests {
             "chat-logprobs".to_string(),
             stream::iter(vec![
                 Ok(ChatEvent::Start {
-                    prompt_token_count: 2,
-                    prompt_token_ids: vec![].into(),
+                    prompt_token_ids: vec![10, 11].into(),
                     prompt_logprobs: Some(DecodedPromptLogprobs {
                         first_token_id: 0,
                         first_token: "o".to_string(),
@@ -203,7 +200,7 @@ mod tests {
             CollectedAssistantMessage {
                 message: Default::default(),
                 prompt_token_count: 2,
-                prompt_token_ids: vec![].into(),
+                prompt_token_ids: vec![10, 11].into(),
                 prompt_logprobs: Some(DecodedPromptLogprobs {
                     first_token_id: 0,
                     first_token: "o".to_string(),
