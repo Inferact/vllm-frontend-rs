@@ -58,25 +58,7 @@ impl RequestRegistry {
             return Err(Error::DuplicateRequestId { request_id });
         }
 
-        let engine_id = if let Some(rank) = data_parallel_rank {
-            // Route to the engine at the specified rank index.
-            let engine_id = EngineId::from(rank as usize);
-            self.in_flight_per_engine
-                .contains_key(&engine_id)
-                .then_some(engine_id)
-                .ok_or_else(|| Error::InvalidDataParallelRank {
-                    rank,
-                    num_engines: self.in_flight_per_engine.len() as u32,
-                })?
-        } else {
-            // Simple routing strategy: assign to the engine with the least in-flight requests.
-            self.in_flight_per_engine
-                .iter()
-                .min_by_key(|(_, in_flight)| *in_flight)
-                .map(|(engine_id, _)| engine_id.clone())
-                .expect("request registry must contain at least one engine")
-        };
-
+        let engine_id = self.choose_engine_for_request(data_parallel_rank)?;
         let (tx, rx) = mpsc::unbounded_channel();
         self.requests.insert(
             request_id,
@@ -91,6 +73,29 @@ impl RequestRegistry {
             .expect("request registry must track all known engines") += 1;
 
         Ok((engine_id, rx))
+    }
+
+    fn choose_engine_for_request(&mut self, data_parallel_rank: Option<u32>) -> Result<EngineId> {
+        if let Some(rank) = data_parallel_rank {
+            // Route to the engine at the specified rank index.
+            let engine_id = EngineId::from(rank as usize);
+            return self
+                .in_flight_per_engine
+                .contains_key(&engine_id)
+                .then_some(engine_id)
+                .ok_or_else(|| Error::InvalidDataParallelRank {
+                    rank,
+                    num_engines: self.in_flight_per_engine.len() as u32,
+                });
+        }
+
+        // Simple routing strategy: assign to the engine with the least in-flight requests.
+        Ok(self
+            .in_flight_per_engine
+            .iter()
+            .min_by_key(|(_, in_flight)| *in_flight)
+            .map(|(engine_id, _)| engine_id.clone())
+            .expect("request registry must contain at least one engine"))
     }
 
     /// Filter the given request IDs to the subset that are still tracked as active and can be
