@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
@@ -24,7 +25,7 @@ use vllm_chat::{
 use vllm_engine_core_client::protocol::StopReason;
 
 use crate::error::{ApiError, bail_server_error, server_error};
-use crate::routes::openai::chat_completions::convert::prepare_chat_request;
+use crate::routes::openai::chat_completions::convert::prepare_chat_request_with_request_id_header;
 use crate::routes::openai::chat_completions::types::{
     ChatCompletionChoice, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionStreamChoice, ChatCompletionStreamResponse, ChatMessageDelta,
@@ -39,14 +40,20 @@ use crate::utils::unix_timestamp;
 /// Validate one chat completion request and proxy it into the shared `vllm-chat` stack.
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     ValidatedJson(body): ValidatedJson<ChatCompletionRequest>,
 ) -> Response {
     let stream = body.stream;
+    let request_id_header = headers
+        .get("X-Request-Id")
+        .and_then(|value| value.to_str().ok());
 
-    let prepared = match prepare_chat_request(body, &state.model_id) {
-        Ok(prepared) => prepared,
-        Err(error) => return error.into_response(),
-    };
+    let prepared =
+        match prepare_chat_request_with_request_id_header(body, &state.model_id, request_id_header)
+        {
+            Ok(prepared) => prepared,
+            Err(error) => return error.into_response(),
+        };
 
     let created = unix_timestamp();
     info!(

@@ -1,17 +1,17 @@
 use openai_protocol::common::StringOrArray;
-use uuid::Uuid;
 use vllm_text::{Prompt, SamplingParams, TextDecodeOptions, TextRequest};
 
 use super::types::CompletionRequest;
 use crate::error::ApiError;
 use crate::routes::openai::completions::validate;
+use crate::routes::openai::utils::request_id::resolve_base_request_id;
 use crate::routes::openai::utils::structured_outputs::convert_from_response_format_value;
 use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
 
 /// Lowered completion request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
-    /// Stable OpenAI-style response ID, also reused as the internal text request ID.
+    /// Stable OpenAI-style response ID, reused as the external text request ID.
     pub response_id: String,
     /// Public model ID echoed back to the client.
     pub response_model: String,
@@ -28,9 +28,18 @@ pub struct PreparedRequest {
 }
 
 /// Validate and lower one OpenAI completions request into the internal text-generation format.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn prepare_completion_request(
     request: CompletionRequest,
     configured_model: &str,
+) -> Result<PreparedRequest, ApiError> {
+    prepare_completion_request_with_request_id_header(request, configured_model, None)
+}
+
+pub(crate) fn prepare_completion_request_with_request_id_header(
+    request: CompletionRequest,
+    configured_model: &str,
+    request_id_header: Option<&str>,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
@@ -51,7 +60,10 @@ pub fn prepare_completion_request(
             None
         });
 
-    let response_id = format!("cmpl-{}", Uuid::new_v4());
+    let response_id = format!(
+        "cmpl-{}",
+        resolve_base_request_id(request_id_header, request.request_id.as_deref())
+    );
     let include_usage = (request.stream_options.as_ref())
         .and_then(|options| options.include_usage)
         .unwrap_or(false);

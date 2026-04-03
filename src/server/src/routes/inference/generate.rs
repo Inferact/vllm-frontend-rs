@@ -49,6 +49,7 @@ pub async fn generate(
 
     let response = match collect_generate(
         raw_stream.collect_output().await,
+        prepared.response_id,
         include_logprobs,
         include_prompt_logprobs,
     ) {
@@ -61,6 +62,7 @@ pub async fn generate(
 
 fn collect_generate(
     collected: vllm_llm::Result<CollectedGenerateOutput>,
+    response_id: String,
     include_logprobs: bool,
     include_prompt_logprobs: bool,
 ) -> Result<GenerateResponse, ApiError> {
@@ -94,7 +96,7 @@ fn collect_generate(
     };
 
     Ok(GenerateResponse {
-        request_id: collected.request_id,
+        request_id: response_id,
         choices: vec![GenerateResponseChoice {
             index: 0,
             logprobs,
