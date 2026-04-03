@@ -370,10 +370,6 @@ pub struct EngineUnsupportedArgs {
     #[arg(long)]
     pub collect_detailed_traces: Option<Unsupported>,
 
-    /// The interval (or buffer size) for streaming in terms of token length.
-    #[arg(long)]
-    pub stream_interval: Option<Unsupported>,
-
     /// Structured outputs configuration.
     #[arg(long)]
     pub structured_outputs_config: Option<Unsupported>,

@@ -37,6 +37,7 @@ fn serve_args_forward_python_flags_with_separator() {
                         max_model_len: Some(
                             512,
                         ),
+                        stream_interval: 1,
                     },
                     python_args: [
                         "--dtype",
@@ -199,6 +200,7 @@ fn frontend_args_accept_json() {
                         tool_call_parser: None,
                         reasoning_parser: None,
                         max_model_len: None,
+                        stream_interval: 1,
                     },
                 },
             ),
@@ -231,6 +233,7 @@ fn frontend_args_json_applies_defaults() {
     assert_eq!(args.runtime.tool_call_parser, None);
     assert_eq!(args.runtime.reasoning_parser, None);
     assert_eq!(args.runtime.max_model_len, None);
+    assert_eq!(args.runtime.stream_interval, 1);
 }
 
 #[test]
@@ -259,6 +262,53 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
         Some("qwen3_thinking")
     );
     assert_eq!(args.runtime.max_model_len, Some(8192));
+    assert_eq!(args.runtime.stream_interval, 1);
+}
+
+#[test]
+fn frontend_args_json_accepts_stream_interval() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","stream_interval":8}"#,
+    ])
+    .unwrap();
+
+    let Command::Frontend(args) = cli.command else {
+        panic!("expected frontend args");
+    };
+    assert_eq!(args.runtime.stream_interval, 8);
+}
+
+#[test]
+fn frontend_args_json_rejects_zero_stream_interval() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "frontend",
+        "--listen-fd",
+        "3",
+        "--input-address",
+        "ipc:///tmp/input.sock",
+        "--output-address",
+        "ipc:///tmp/output.sock",
+        "--args-json",
+        r#"{"model_tag":"Qwen/Qwen3-0.6B","stream_interval":0}"#,
+    ])
+    .unwrap_err();
+
+    expect![[r#"
+        error: invalid value '{"model_tag":"Qwen/Qwen3-0.6B","stream_interval":0}' for '--args-json <JSON>': stream_interval must be >= 1
+
+        For more information, try '--help'.
+    "#]]
+    .assert_eq(&error.to_string());
 }
 
 #[test]
@@ -550,6 +600,7 @@ fn serve_args_accept_handshake_aliases() {
                         tool_call_parser: None,
                         reasoning_parser: None,
                         max_model_len: None,
+                        stream_interval: 1,
                     },
                     python_args: [],
                 },
@@ -620,9 +671,41 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
             tool_call_parser: None,
             reasoning_parser: None,
             max_model_len: None,
+            stream_interval: 1,
         }
     "#]]
     .assert_debug_eq(&config);
+}
+
+#[test]
+fn serve_args_accept_stream_interval() {
+    let cli = Cli::try_parse_from([
+        "vllm-rs",
+        "serve",
+        "Qwen/Qwen3-0.6B",
+        "--stream-interval",
+        "8",
+    ])
+    .unwrap();
+
+    let Command::Serve(args) = cli.command else {
+        panic!("expected serve args");
+    };
+    assert_eq!(args.runtime.stream_interval, 8);
+}
+
+#[test]
+fn serve_args_reject_zero_stream_interval() {
+    let error = Cli::try_parse_from([
+        "vllm-rs",
+        "serve",
+        "Qwen/Qwen3-0.6B",
+        "--stream-interval",
+        "0",
+    ])
+    .unwrap_err();
+
+    assert!(error.to_string().contains("--stream-interval"));
 }
 
 #[test]

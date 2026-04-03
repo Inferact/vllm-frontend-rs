@@ -100,6 +100,14 @@ pub struct SharedRuntimeArgs {
     /// instead of the model's `max_position_embeddings` from `config.json`.
     #[arg(long)]
     pub max_model_len: Option<u32>,
+    /// The interval for batching generated output updates in units of generated tokens.
+    #[arg(
+        long,
+        default_value_t = default_stream_interval(),
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    #[serde(default = "default_stream_interval")]
+    pub stream_interval: u32,
 
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
     #[educe(Debug(ignore))]
@@ -139,6 +147,7 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            stream_interval: self.stream_interval as usize,
         }
     }
 
@@ -167,7 +176,15 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            stream_interval: self.stream_interval as usize,
         }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.stream_interval == 0 {
+            return Err("stream_interval must be >= 1".to_string());
+        }
+        self.unsupported.check()
     }
 }
 
@@ -175,10 +192,14 @@ fn default_engine_ready_timeout_secs() -> u64 {
     300
 }
 
+fn default_stream_interval() -> u32 {
+    1
+}
+
 fn parse_runtime_args_json(value: &str) -> Result<SharedRuntimeArgs, String> {
     let args: SharedRuntimeArgs = serde_json::from_str(value)
         .map_err(|e| format!("invalid JSON arguments: {}", e.as_report()))?;
-    args.unsupported.check()?;
+    args.validate()?;
     Ok(args)
 }
 

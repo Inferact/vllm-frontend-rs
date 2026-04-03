@@ -4591,6 +4591,7 @@ dependencies = [
  "enum-as-inner",
  "expect-test",
  "futures",
+ "futures-async-stream",
  "rmp-serde",
  "serde",
  "serde_json",

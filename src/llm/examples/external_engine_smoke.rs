@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, pin_mut};
 use tokio::time::timeout;
 use tracing_subscriber::EnvFilter;
 use vllm_engine_core_client::protocol::EngineCoreSamplingParams;
@@ -66,7 +66,10 @@ struct CompletedRequest {
     finish_reason: FinishReason,
 }
 
-async fn wait_for_request_completion(mut stream: GenerateOutputStream) -> Result<CompletedRequest> {
+async fn wait_for_request_completion(
+    stream: impl GenerateOutputStream,
+) -> Result<CompletedRequest> {
+    pin_mut!(stream);
     let output = match stream.next().await {
         Some(output) => output.context("failed to receive request output")?,
         None => bail!("request stream ended without a final output"),
@@ -90,7 +93,7 @@ async fn wait_for_request_completion(mut stream: GenerateOutputStream) -> Result
 }
 
 async fn wait_for_timeout(
-    stream: GenerateOutputStream,
+    stream: impl GenerateOutputStream,
     output_timeout: Duration,
 ) -> Result<CompletedRequest> {
     timeout(output_timeout, wait_for_request_completion(stream))

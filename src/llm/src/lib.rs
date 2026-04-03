@@ -1,5 +1,9 @@
+#![feature(coroutines)]
+#![feature(trait_alias)]
+
 use vllm_engine_core_client::EngineCoreClient;
 
+mod batch;
 mod error;
 mod output;
 mod request;
@@ -21,12 +25,23 @@ use crate::request_metrics::RequestMetricsTracker;
 /// keeps the boundary close to raw engine-core requests and outputs.
 pub struct Llm {
     client: EngineCoreClient,
+    stream_interval: usize,
 }
 
 impl Llm {
     /// Create a new minimal LLM facade from an already connected engine-core client.
     pub fn new(client: EngineCoreClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            stream_interval: 1,
+        }
+    }
+
+    /// Override the per-request output stream interval in generated token count.
+    pub fn with_stream_interval(mut self, stream_interval: usize) -> Self {
+        assert!(stream_interval >= 1, "stream_interval must be >= 1");
+        self.stream_interval = stream_interval;
+        self
     }
 
     /// Expose the underlying engine-core client for low-level utility/admin calls.
@@ -35,7 +50,7 @@ impl Llm {
     }
 
     /// Submit one tokenized generate request and return a per-request output stream.
-    pub async fn generate(&self, req: GenerateRequest) -> Result<GenerateOutputStream> {
+    pub async fn generate(&self, req: GenerateRequest) -> Result<impl GenerateOutputStream> {
         let prepared = req.prepare()?;
         let prompt_token_ids = prepared.prompt_token_ids().into();
 
@@ -48,11 +63,12 @@ impl Llm {
         );
         let stream = self.client.call(prepared.engine_request).await?;
 
-        Ok(GenerateOutputStream::new(
-            prompt_token_ids,
-            stream,
-            request_metrics,
-        ))
+        let gen_stream =
+            output::GenerateOutputStreamImpl::new(prompt_token_ids, stream, request_metrics);
+        let batched_stream =
+            batch::batched_generate_output_stream(gen_stream, self.stream_interval);
+
+        Ok(batched_stream)
     }
 
     /// Abort one in-flight request by request ID.
