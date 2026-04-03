@@ -16,8 +16,8 @@ use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
 /// Lowered chat request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
-    /// Stable OpenAI-style response ID, reused as the external chat request ID.
-    pub response_id: String,
+    /// Stable OpenAI-style request ID, reused as the external chat request ID.
+    pub request_id: String,
     /// Public model ID echoed back to the client.
     pub response_model: String,
     /// Whether the caller asked for the final streamed usage chunk.
@@ -52,7 +52,7 @@ pub(crate) fn prepare_chat_request_with_request_id_header(
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
-    let response_id = format!(
+    let request_id = format!(
         "chatcmpl-{}",
         resolve_base_request_id(request_id_header, request.request_id.as_deref())
     );
@@ -91,7 +91,7 @@ pub(crate) fn prepare_chat_request_with_request_id_header(
     });
 
     let chat_request = ChatRequest {
-        request_id: response_id.clone(),
+        request_id: request_id.clone(),
         messages,
         sampling_params: SamplingParams {
             temperature: request.temperature,
@@ -139,7 +139,7 @@ pub(crate) fn prepare_chat_request_with_request_id_header(
     };
 
     Ok(PreparedRequest {
-        response_id,
+        request_id,
         response_model: configured_model.to_string(),
         include_usage,
         requested_logprobs,
@@ -348,7 +348,7 @@ mod tests {
         let prepared =
             prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
 
-        assert!(prepared.response_id.starts_with("chatcmpl-"));
+        assert!(prepared.request_id.starts_with("chatcmpl-"));
         assert_eq!(
             prepared.chat_request.messages,
             vec![VllmChatMessage::user(vec![VllmChatContentPart::text(
@@ -383,7 +383,7 @@ mod tests {
         let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat")
             .expect("request is valid");
 
-        assert!(prepared.response_id.starts_with("chatcmpl-"));
+        assert!(prepared.request_id.starts_with("chatcmpl-"));
         assert_eq!(
             prepared.chat_request.messages,
             vec![VllmChatMessage::user("hello")]

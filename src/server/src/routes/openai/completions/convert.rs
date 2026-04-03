@@ -11,8 +11,8 @@ use crate::utils::{convert_logit_bias, merge_kv_transfer_params};
 /// Lowered completion request plus the public response metadata carried by every SSE chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
-    /// Stable OpenAI-style response ID, reused as the external text request ID.
-    pub response_id: String,
+    /// Stable OpenAI-style request ID, reused as the external text request ID.
+    pub request_id: String,
     /// Public model ID echoed back to the client.
     pub response_model: String,
     /// Whether the caller asked for the final streamed usage chunk.
@@ -60,7 +60,7 @@ pub(crate) fn prepare_completion_request_with_request_id_header(
             None
         });
 
-    let response_id = format!(
+    let request_id = format!(
         "cmpl-{}",
         resolve_base_request_id(request_id_header, request.request_id.as_deref())
     );
@@ -81,7 +81,7 @@ pub(crate) fn prepare_completion_request_with_request_id_header(
     });
 
     let text_request = TextRequest {
-        request_id: response_id.clone(),
+        request_id: request_id.clone(),
         prompt: request.prompt,
         sampling_params: SamplingParams {
             temperature: request.temperature,
@@ -120,7 +120,7 @@ pub(crate) fn prepare_completion_request_with_request_id_header(
     };
 
     Ok(PreparedRequest {
-        response_id,
+        request_id,
         response_model: configured_model.to_string(),
         include_usage,
         text_request,

@@ -32,7 +32,7 @@ pub async fn generate(
         Err(error) => return error.into_response(),
     };
 
-    info!(request_id = %prepared.response_id, stream, "raw generate");
+    info!(request_id = %prepared.request_id, stream, "raw generate");
     let include_logprobs = prepared.include_logprobs;
     let include_prompt_logprobs = prepared.include_prompt_logprobs;
 
@@ -49,7 +49,7 @@ pub async fn generate(
 
     let response = match collect_generate(
         raw_stream.collect_output().await,
-        prepared.response_id,
+        prepared.request_id,
         include_logprobs,
         include_prompt_logprobs,
     ) {
@@ -62,7 +62,7 @@ pub async fn generate(
 
 fn collect_generate(
     collected: vllm_llm::Result<CollectedGenerateOutput>,
-    response_id: String,
+    request_id: String,
     include_logprobs: bool,
     include_prompt_logprobs: bool,
 ) -> Result<GenerateResponse, ApiError> {
@@ -96,7 +96,7 @@ fn collect_generate(
     };
 
     Ok(GenerateResponse {
-        request_id: response_id,
+        request_id,
         choices: vec![GenerateResponseChoice {
             index: 0,
             logprobs,
