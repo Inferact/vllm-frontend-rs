@@ -24,10 +24,10 @@ pub struct PreparedRequest {
 
 /// Validate and lower one OpenAI completions request into the internal text-generation format.
 pub fn prepare_completion_request(
-    request: &CompletionRequest,
+    request: CompletionRequest,
     configured_model: &str,
 ) -> Result<PreparedRequest, ApiError> {
-    validate::validate_request_compat(request, configured_model)?;
+    validate::validate_request_compat(&request, configured_model)?;
 
     let logprobs = match request.logprobs {
         Some(logprobs) => Some(i32::try_from(logprobs).map_err(|_| {
@@ -60,7 +60,7 @@ pub fn prepare_completion_request(
 
     let text_request = TextRequest {
         request_id: response_id.clone(),
-        prompt: request.prompt.clone(),
+        prompt: request.prompt,
         sampling_params: SamplingParams {
             temperature: request.temperature,
             top_p: request.top_p,
@@ -74,26 +74,26 @@ pub fn prepare_completion_request(
             frequency_penalty: request.frequency_penalty,
             presence_penalty: request.presence_penalty,
             repetition_penalty: request.repetition_penalty,
-            stop_token_ids: request.stop_token_ids.clone(),
+            stop_token_ids: request.stop_token_ids,
             ignore_eos: request.ignore_eos,
-            logit_bias: convert_logit_bias(request.logit_bias.clone())?,
-            allowed_token_ids: request.allowed_token_ids.clone(),
+            logit_bias: convert_logit_bias(request.logit_bias)?,
+            allowed_token_ids: request.allowed_token_ids,
             bad_words: None,
             structured_outputs,
             vllm_xargs: merge_kv_transfer_params(
-                request.vllm_xargs.clone(),
+                request.vllm_xargs,
                 request.kv_transfer_params.as_ref(),
             ),
         },
         decode_options: TextDecodeOptions {
             skip_special_tokens: request.skip_special_tokens,
             include_stop_str_in_output: request.include_stop_str_in_output,
-            stop_strings: request.stop.as_ref().map(|stop| stop.as_slice().to_vec()),
+            stop_strings: request.stop.map(|stop| stop.into_vec()),
             min_tokens: request.min_tokens.unwrap_or(0),
         },
         intermediate: request.stream,
         priority: request.priority.unwrap_or(0),
-        cache_salt: request.cache_salt.clone(),
+        cache_salt: request.cache_salt,
         add_special_tokens: request.add_special_tokens,
     };
 
@@ -168,7 +168,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(&request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
 
         assert!(prepared.include_usage);
         assert_eq!(
@@ -208,7 +208,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(&request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
 
         assert_eq!(prepared.echo, Some("hello".to_string()));
         assert_eq!(prepared.text_request.sampling_params.max_tokens, Some(7));
@@ -226,7 +226,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(&request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
 
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(3));
         assert_eq!(
@@ -245,7 +245,7 @@ mod tests {
         }))
         .expect("parse request");
 
-        assert!(prepare_completion_request(&request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+        assert!(prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
     }
 
     #[test]
@@ -260,7 +260,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(&request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(1));
         assert_eq!(
             prepared.text_request.sampling_params.prompt_logprobs,

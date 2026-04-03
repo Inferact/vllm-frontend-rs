@@ -20,7 +20,7 @@ use serial_test::serial;
 use tower::{Service as _, ServiceExt as _};
 use vllm_chat::{
     ChatBackend, ChatEvent, ChatLlm, ChatMessage, ChatRequest, ChatRole, ChatTextBackend,
-    ChatToolChoice, SamplingParams,
+    SamplingParams,
 };
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, Logprobs,
@@ -2024,21 +2024,13 @@ async fn chat_harness_streams_text_events() {
     let (chat, engine_task) = test_chat_with_engine_handle().await;
     let mut stream = chat
         .chat(ChatRequest {
-            request_id: "chat-harness".to_string(),
             messages: vec![ChatMessage::text(ChatRole::User, "hello")],
             sampling_params: SamplingParams {
                 max_tokens: Some(8),
                 ..Default::default()
             },
-            chat_options: Default::default(),
-            tools: Vec::new(),
-            tool_choice: ChatToolChoice::None,
-            decode_options: Default::default(),
-            intermediate: true,
-            priority: 0,
-            documents: None,
-            cache_salt: None,
-            add_special_tokens: false,
+            request_id: "chat-harness".to_string(),
+            ..ChatRequest::for_test()
         })
         .await
         .expect("submit chat request");
@@ -2072,7 +2064,7 @@ async fn chat_harness_streams_text_events() {
 async fn prepared_openai_request_streams_text_events() {
     let (chat, engine_task) = test_chat_with_engine_handle().await;
     let prepared = prepare_chat_request(
-        &serde_json::from_value(json!({
+        serde_json::from_value(json!({
             "model": "Qwen/Qwen1.5-0.5B-Chat",
             "stream": true,
             "messages": [{"role": "user", "content": "hello"}]

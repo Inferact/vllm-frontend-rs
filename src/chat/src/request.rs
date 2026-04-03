@@ -293,6 +293,24 @@ pub struct ChatRequest {
 }
 
 impl ChatRequest {
+    /// Return one minimal valid request fixture for tests.
+    pub fn for_test() -> Self {
+        Self {
+            request_id: "test-request".to_string(),
+            messages: vec![ChatMessage::text(ChatRole::User, "test")],
+            sampling_params: SamplingParams::default(),
+            chat_options: ChatOptions::default(),
+            tools: Vec::new(),
+            tool_choice: ChatToolChoice::None,
+            decode_options: TextDecodeOptions::default(),
+            intermediate: true,
+            priority: 0,
+            documents: None,
+            cache_salt: None,
+            add_special_tokens: false,
+        }
+    }
+
     /// Validate basic request invariants before rendering.
     pub fn validate(&self) -> Result<()> {
         if self.messages.is_empty() {
@@ -309,13 +327,6 @@ impl ChatRequest {
     pub(crate) fn template_tools(&self) -> Option<Vec<Value>> {
         self.tool_parsing_enabled()
             .then(|| self.tools.iter().map(ChatTool::to_template_value).collect())
-    }
-
-    /// Return the list of tools in the shape that can be passed to the `tool-parser` crate, based
-    /// on the tool choice and tool list.
-    pub(crate) fn parser_tools(&self) -> Option<Vec<OpenAiTool>> {
-        self.tool_parsing_enabled()
-            .then(|| self.tools.iter().map(ChatTool::to_openai_tool).collect())
     }
 
     /// Return true if this request should enable tool parsing based on the tool choice and tool
