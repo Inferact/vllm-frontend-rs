@@ -100,6 +100,7 @@ pub(crate) fn prepare_chat_request(
             logit_bias: convert_logit_bias(request.logit_bias)?,
             allowed_token_ids: request.allowed_token_ids,
             bad_words: request.bad_words,
+            logprob_token_ids: None,
             structured_outputs,
             vllm_xargs: merge_kv_transfer_params(
                 request.vllm_xargs,

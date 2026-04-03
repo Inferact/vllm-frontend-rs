@@ -78,6 +78,11 @@ pub struct SamplingParams {
     pub allowed_token_ids: Option<Vec<u32>>,
     /// Words to avoid during generation (tokenized to IDs during lowering).
     pub bad_words: Option<Vec<String>>,
+    /// Specific token IDs for which log probabilities should be returned at each position.
+    ///
+    /// When set, the engine returns logprobs for exactly these tokens in addition to the
+    /// sampled/scored token. Mutually exclusive with `logprobs` in practice.
+    pub logprob_token_ids: Option<Vec<u32>>,
     /// Parameters for configuring structured outputs (guided decoding).
     pub structured_outputs: Option<StructuredOutputsParams>,
     /// Additional request parameters for custom extensions.
@@ -105,6 +110,7 @@ impl Default for SamplingParams {
             logit_bias: None,
             allowed_token_ids: None,
             bad_words: None,
+            logprob_token_ids: None,
             structured_outputs: None,
             vllm_xargs: None,
         }

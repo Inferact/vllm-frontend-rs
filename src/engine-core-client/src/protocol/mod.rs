@@ -255,6 +255,12 @@ pub struct EngineCoreSamplingParams {
     /// Parameters for configuring structured outputs (guided decoding).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_outputs: Option<StructuredOutputsParams>,
+    /// Specific token IDs for which log probabilities should be returned at each position.
+    ///
+    /// When set, the engine returns logprobs for exactly these tokens in addition to the
+    /// sampled/scored token. Mutually exclusive with the `logprobs` count field in practice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprob_token_ids: Option<Vec<u32>>,
     /// Additional request parameters for custom extensions (from `vllm_xargs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<HashMap<String, serde_json::Value>>,
@@ -283,6 +289,7 @@ impl EngineCoreSamplingParams {
             allowed_token_ids: None,
             bad_words_token_ids: None,
             structured_outputs: None,
+            logprob_token_ids: None,
             extra_args: None,
         }
     }

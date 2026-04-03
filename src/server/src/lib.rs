@@ -5,6 +5,7 @@
 
 mod config;
 mod error;
+mod grpc;
 mod listener;
 mod middleware;
 mod routes;
@@ -12,12 +13,15 @@ mod state;
 mod utils;
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use axum::serve::ListenerExt as _;
 pub use config::{Config, CoordinatorMode, HttpListenerMode};
+use futures::FutureExt as _;
 use tokio_util::either::Either;
+use tonic::transport::Server as TonicServer;
 use tracing::{info, trace};
 use vllm_chat::{ChatLlm, LoadModelBackendsOptions, load_model_backends};
 pub use vllm_chat::{ChatTemplateContentFormatOption, ParserSelection, RendererSelection};
@@ -90,12 +94,12 @@ where
         .validate()
         .context("invalid OpenAI frontend configuration")?;
 
-    let mut shutdown = Box::pin(shutdown);
+    let shutdown = Box::pin(shutdown).shared();
 
     // Also check shutdown during the (potentially long) startup handshake.
     let state = tokio::select! {
         result = build_state(&config) => result?,
-        _ = &mut shutdown => return Ok(()),
+        _ = shutdown.clone() => return Ok(()),
     };
     let listener = Listener::bind(&config.listener_mode)
         .await
@@ -103,6 +107,20 @@ where
     let bind_address = listener.local_addr()?;
     let model = state.model_id.clone();
     let app = build_router(state.clone());
+
+    // Optionally start the gRPC Generate server on a separate port.
+    let grpc_task = config.grpc_port.map(|grpc_port| {
+        let addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
+        let shutdown = shutdown.clone();
+        let svc = grpc::GenerateServer::new(grpc::GenerateServiceImpl::new(state.clone()));
+        info!(%addr, "starting gRPC server");
+        tokio::spawn(async move {
+            TonicServer::builder()
+                .add_service(svc)
+                .serve_with_shutdown(addr, shutdown)
+                .await
+        })
+    });
 
     info!(%bind_address, %model, "starting OpenAI server");
 
@@ -119,6 +137,10 @@ where
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
+
+    if let Some(task) = grpc_task {
+        task.await?.context("gRPC server failed")?;
+    }
 
     state.shutdown().await
 }
