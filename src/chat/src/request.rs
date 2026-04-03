@@ -203,6 +203,10 @@ pub struct ChatOptions {
     /// message can be left open-ended for continuation instead of starting a new assistant turn.
     pub continue_final_message: bool,
 
+    /// Per-request Jinja chat template override. When set, this template is used instead of the
+    /// model's default chat template.
+    pub chat_template: Option<String>,
+
     /// Additional keyword arguments exposed to the chat template.
     pub template_kwargs: HashMap<String, Value>,
 }
@@ -212,6 +216,7 @@ impl Default for ChatOptions {
         Self {
             add_generation_prompt: true,
             continue_final_message: false,
+            chat_template: None,
             template_kwargs: HashMap::new(),
         }
     }
@@ -278,9 +283,34 @@ pub struct ChatRequest {
     pub intermediate: bool,
     /// Request scheduling priority (lower means earlier handling; default 0).
     pub priority: i32,
+    /// Documents for RAG (retrieval-augmented generation), passed to the chat template.
+    pub documents: Option<Vec<Value>>,
+    /// Salt for prefix cache isolation in multi-user environments.
+    pub cache_salt: Option<String>,
+    /// Whether to add special tokens (e.g. BOS) during prompt tokenization.
+    #[serde(default)]
+    pub add_special_tokens: bool,
 }
 
 impl ChatRequest {
+    /// Return one minimal valid request fixture for tests.
+    pub fn for_test() -> Self {
+        Self {
+            request_id: "test-request".to_string(),
+            messages: vec![ChatMessage::text(ChatRole::User, "test")],
+            sampling_params: SamplingParams::default(),
+            chat_options: ChatOptions::default(),
+            tools: Vec::new(),
+            tool_choice: ChatToolChoice::None,
+            decode_options: TextDecodeOptions::default(),
+            intermediate: true,
+            priority: 0,
+            documents: None,
+            cache_salt: None,
+            add_special_tokens: false,
+        }
+    }
+
     /// Validate basic request invariants before rendering.
     pub fn validate(&self) -> Result<()> {
         if self.messages.is_empty() {
@@ -297,13 +327,6 @@ impl ChatRequest {
     pub(crate) fn template_tools(&self) -> Option<Vec<Value>> {
         self.tool_parsing_enabled()
             .then(|| self.tools.iter().map(ChatTool::to_template_value).collect())
-    }
-
-    /// Return the list of tools in the shape that can be passed to the `tool-parser` crate, based
-    /// on the tool choice and tool list.
-    pub(crate) fn parser_tools(&self) -> Option<Vec<OpenAiTool>> {
-        self.tool_parsing_enabled()
-            .then(|| self.tools.iter().map(ChatTool::to_openai_tool).collect())
     }
 
     /// Return true if this request should enable tool parsing based on the tool choice and tool

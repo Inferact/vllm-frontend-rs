@@ -35,11 +35,11 @@ pub fn lower_text_request(
             prompt_len,
             tokenizer,
         )?,
+        cache_salt: request.cache_salt.clone(),
+        priority: request.priority,
         // Fields below are currently placeholders.
         arrival_time: None,
-        cache_salt: None,
         trace_headers: None,
-        priority: request.priority,
         data_parallel_rank: None,
         reasoning_ended: None,
         lora_request: None,
@@ -160,8 +160,8 @@ fn tokenize_bad_words(
         // With a leading space we only keep it when the prefix-space variant produces a
         // distinct first token but the same sequence length — this mirrors the Python
         // dedup condition that avoids redundant entries.
-        let without_space = tokenizer.encode(bad_word)?;
-        let with_space = tokenizer.encode(&format!(" {}", bad_word.trim_start()))?;
+        let without_space = tokenizer.encode(bad_word, false)?;
+        let with_space = tokenizer.encode(&format!(" {}", bad_word.trim_start()), false)?;
 
         if !without_space.is_empty() {
             all_token_ids.push(without_space);
@@ -235,7 +235,7 @@ mod tests {
     struct StubTokenizer;
 
     impl Tokenizer for StubTokenizer {
-        fn encode(&self, _text: &str) -> crate::error::Result<Vec<u32>> {
+        fn encode(&self, _text: &str, _add_special_tokens: bool) -> crate::error::Result<Vec<u32>> {
             Ok(vec![])
         }
 
@@ -258,12 +258,9 @@ mod tests {
 
     fn sample_request() -> TextRequest {
         TextRequest {
-            request_id: "text-1".to_string(),
             prompt: Prompt::TokenIds(vec![1, 2, 3]),
-            sampling_params: SamplingParams::default(),
-            decode_options: Default::default(),
-            intermediate: true,
-            priority: 0,
+            request_id: "text-1".to_string(),
+            ..TextRequest::for_test()
         }
     }
 

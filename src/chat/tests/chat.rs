@@ -7,8 +7,8 @@ use futures::StreamExt as _;
 use tokio::time::timeout;
 use vllm_chat::{
     AssistantBlockKind, AssistantContentBlock, AssistantMessageExt as _, ChatBackend, ChatEvent,
-    ChatLlm, ChatMessage, ChatOptions, ChatRequest, ChatRole, ChatTextBackend, ChatTool,
-    ChatToolChoice, FinishReason, SamplingParams,
+    ChatLlm, ChatMessage, ChatRequest, ChatRole, ChatTextBackend, ChatTool, ChatToolChoice,
+    FinishReason, SamplingParams,
 };
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest, Logprobs,
@@ -160,7 +160,7 @@ struct FakeChatBackend {
 struct FakeChatTokenizer;
 
 impl Tokenizer for FakeChatTokenizer {
-    fn encode(&self, text: &str) -> vllm_text::Result<Vec<u32>> {
+    fn encode(&self, text: &str, _add_special_tokens: bool) -> vllm_text::Result<Vec<u32>> {
         Ok(text.bytes().map(u32::from).collect())
     }
 
@@ -252,8 +252,8 @@ struct FailingDecodeBackend {
 struct FailingDecodeTokenizer;
 
 impl Tokenizer for FailingDecodeTokenizer {
-    fn encode(&self, text: &str) -> vllm_text::Result<Vec<u32>> {
-        FakeChatTokenizer.encode(text)
+    fn encode(&self, text: &str, add_special_tokens: bool) -> vllm_text::Result<Vec<u32>> {
+        FakeChatTokenizer.encode(text, add_special_tokens)
     }
 
     fn decode(&self, token_ids: &[u32], skip_special_tokens: bool) -> vllm_text::Result<String> {
@@ -296,7 +296,6 @@ where
 
 fn sample_request(request_id: &str) -> ChatRequest {
     ChatRequest {
-        request_id: request_id.to_string(),
         messages: vec![
             ChatMessage::text(ChatRole::System, "You are terse."),
             ChatMessage::text(ChatRole::User, "Say hi"),
@@ -305,12 +304,8 @@ fn sample_request(request_id: &str) -> ChatRequest {
             max_tokens: Some(8),
             ..Default::default()
         },
-        chat_options: ChatOptions::default(),
-        tools: Vec::new(),
-        tool_choice: ChatToolChoice::None,
-        decode_options: Default::default(),
-        intermediate: true,
-        priority: 0,
+        request_id: request_id.to_string(),
+        ..ChatRequest::for_test()
     }
 }
 
