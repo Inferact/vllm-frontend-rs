@@ -2071,6 +2071,7 @@ async fn prepared_openai_request_streams_text_events() {
         }))
         .expect("decode request"),
         "Qwen/Qwen1.5-0.5B-Chat",
+        None,
     )
     .expect("prepare request");
 

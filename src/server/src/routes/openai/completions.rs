@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
@@ -29,17 +30,18 @@ use crate::routes::openai::completions::types::{
     CompletionStreamChoice, CompletionStreamResponse,
 };
 use crate::state::AppState;
-use crate::utils::unix_timestamp;
+use crate::utils::{get_data_parallel_rank, unix_timestamp};
 
 /// Validate one completions request and proxy it into the shared `vllm-text` stack.
 pub async fn completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     ValidatedJson(body): ValidatedJson<CompletionRequest>,
 ) -> Response {
     let stream = body.stream;
     let logprobs = body.logprobs;
-
-    let prepared = match prepare_completion_request(body, &state.model_id) {
+    let data_parallel_rank = get_data_parallel_rank(&headers);
+    let prepared = match prepare_completion_request(body, &state.model_id, data_parallel_rank) {
         Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };

@@ -27,6 +27,7 @@ pub struct PreparedRequest {
 pub fn prepare_completion_request(
     request: CompletionRequest,
     configured_model: &str,
+    data_parallel_rank: Option<u32>,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
@@ -101,6 +102,7 @@ pub fn prepare_completion_request(
         priority: request.priority.unwrap_or(0),
         cache_salt: request.cache_salt,
         add_special_tokens: request.add_special_tokens,
+        data_parallel_rank,
     };
 
     Ok(PreparedRequest {
@@ -174,7 +176,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
 
         assert!(prepared.include_usage);
         assert_eq!(
@@ -214,7 +216,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
 
         assert_eq!(prepared.echo, Some("hello".to_string()));
         assert_eq!(prepared.text_request.sampling_params.max_tokens, Some(7));
@@ -232,7 +234,7 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
 
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(3));
         assert_eq!(
@@ -251,7 +253,7 @@ mod tests {
         }))
         .expect("parse request");
 
-        assert!(prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+        assert!(prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
     }
 
     #[test]
@@ -266,11 +268,39 @@ mod tests {
         .expect("parse request");
 
         let prepared =
-            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("prepare");
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(1));
         assert_eq!(
             prepared.text_request.sampling_params.prompt_logprobs,
             Some(2)
         );
+    }
+
+    #[test]
+    fn prepare_completion_request_threads_data_parallel_rank() {
+        let request: CompletionRequest = serde_json::from_value(json!({
+            "model": "Qwen/Qwen1.5-0.5B-Chat",
+            "prompt": "hello",
+            "stream": false,
+        }))
+        .expect("parse request");
+
+        let prepared = prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", Some(3))
+            .expect("prepare");
+        assert_eq!(prepared.text_request.data_parallel_rank, Some(3));
+    }
+
+    #[test]
+    fn prepare_completion_request_leaves_data_parallel_rank_none_when_absent() {
+        let request: CompletionRequest = serde_json::from_value(json!({
+            "model": "Qwen/Qwen1.5-0.5B-Chat",
+            "prompt": "hello",
+            "stream": false,
+        }))
+        .expect("parse request");
+
+        let prepared =
+            prepare_completion_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).expect("prepare");
+        assert_eq!(prepared.text_request.data_parallel_rank, None);
     }
 }

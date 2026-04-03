@@ -45,18 +45,38 @@ impl RequestRegistry {
 
     /// Register a newly added request. Create the per-request output channel bound to its
     /// `request_id` and return the selected engine id.
-    pub fn register(&mut self, request_id: String) -> Result<(EngineId, OutputReceiver)> {
+    ///
+    /// When `data_parallel_rank` is provided, the request is routed directly to the engine at
+    /// that rank index, bypassing load balancing. Otherwise the engine with the fewest in-flight
+    /// requests is chosen.
+    pub fn register(
+        &mut self,
+        request_id: String,
+        data_parallel_rank: Option<u32>,
+    ) -> Result<(EngineId, OutputReceiver)> {
         if self.requests.contains_key(&request_id) {
             return Err(Error::DuplicateRequestId { request_id });
         }
 
-        // Simple routing strategy: assign to the engine with the least in-flight requests.
-        let engine_id = self
-            .in_flight_per_engine
-            .iter()
-            .min_by_key(|(_, in_flight)| *in_flight)
-            .map(|(engine_id, _)| engine_id.clone())
-            .expect("request registry must contain at least one engine");
+        let engine_id = if let Some(rank) = data_parallel_rank {
+            // Route to the engine at the specified rank index.
+            let rank = rank as usize;
+            self.in_flight_per_engine
+                .keys()
+                .nth(rank)
+                .ok_or_else(|| Error::InvalidDataParallelRank {
+                    rank: rank as u32,
+                    num_engines: self.in_flight_per_engine.len() as u32,
+                })?
+                .clone()
+        } else {
+            // Simple routing strategy: assign to the engine with the least in-flight requests.
+            self.in_flight_per_engine
+                .iter()
+                .min_by_key(|(_, in_flight)| *in_flight)
+                .map(|(engine_id, _)| engine_id.clone())
+                .expect("request registry must contain at least one engine")
+        };
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.requests.insert(
@@ -215,8 +235,8 @@ mod tests {
             engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
-        registry.register("req-1".to_string()).unwrap();
-        let error = registry.register("req-1".to_string()).unwrap_err();
+        registry.register("req-1".to_string(), None).unwrap();
+        let error = registry.register("req-1".to_string(), None).unwrap_err();
         assert!(matches!(
             error,
             crate::error::Error::DuplicateRequestId { request_id } if request_id == "req-1"
@@ -229,7 +249,7 @@ mod tests {
             engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
-        registry.register("req-1".to_string()).unwrap();
+        registry.register("req-1".to_string(), None).unwrap();
 
         let sender = registry.sender_for_output(&EngineCoreOutput {
             request_id: "req-1".to_string(),
@@ -247,8 +267,8 @@ mod tests {
             engine_id: EngineId::from(b"engine-0"),
             ready_message: Default::default(),
         }]);
-        registry.register("req-1".to_string()).unwrap();
-        registry.register("req-2".to_string()).unwrap();
+        registry.register("req-1".to_string(), None).unwrap();
+        registry.register("req-2".to_string(), None).unwrap();
 
         let senders = registry.close();
 
@@ -270,9 +290,9 @@ mod tests {
                 ready_message: Default::default(),
             },
         ]);
-        let (chosen_0, _) = registry.register("req-1".to_string()).unwrap();
-        let (chosen_1, _) = registry.register("req-2".to_string()).unwrap();
-        let (chosen_0_again, _) = registry.register("req-3".to_string()).unwrap();
+        let (chosen_0, _) = registry.register("req-1".to_string(), None).unwrap();
+        let (chosen_1, _) = registry.register("req-2".to_string(), None).unwrap();
+        let (chosen_0_again, _) = registry.register("req-3".to_string(), None).unwrap();
 
         assert_eq!(chosen_0, engine_0);
         assert_eq!(chosen_1, engine_1);
@@ -288,6 +308,109 @@ mod tests {
             &vec!["req-1".to_string(), "req-3".to_string()]
         );
         assert_eq!(grouped.get(&engine_1).unwrap(), &vec!["req-2".to_string()]);
+    }
+
+    #[test]
+    fn register_with_data_parallel_rank_routes_to_specified_engine() {
+        let engine_0 = EngineId::from(b"engine-0");
+        let engine_1 = EngineId::from(b"engine-1");
+        let engine_2 = EngineId::from(b"engine-2");
+        let mut registry = RequestRegistry::new(&[
+            ConnectedEngine {
+                engine_id: engine_0.clone(),
+                ready_message: Default::default(),
+            },
+            ConnectedEngine {
+                engine_id: engine_1.clone(),
+                ready_message: Default::default(),
+            },
+            ConnectedEngine {
+                engine_id: engine_2.clone(),
+                ready_message: Default::default(),
+            },
+        ]);
+
+        // Explicitly target rank 2 (third engine).
+        let (chosen, _) = registry.register("req-1".to_string(), Some(2)).unwrap();
+        assert_eq!(chosen, engine_2);
+
+        // Explicitly target rank 0 (first engine).
+        let (chosen, _) = registry.register("req-2".to_string(), Some(0)).unwrap();
+        assert_eq!(chosen, engine_0);
+
+        // Explicitly target rank 1.
+        let (chosen, _) = registry.register("req-3".to_string(), Some(1)).unwrap();
+        assert_eq!(chosen, engine_1);
+    }
+
+    #[test]
+    fn register_with_data_parallel_rank_bypasses_load_balancing() {
+        let engine_0 = EngineId::from(b"engine-0");
+        let engine_1 = EngineId::from(b"engine-1");
+        let mut registry = RequestRegistry::new(&[
+            ConnectedEngine {
+                engine_id: engine_0.clone(),
+                ready_message: Default::default(),
+            },
+            ConnectedEngine {
+                engine_id: engine_1.clone(),
+                ready_message: Default::default(),
+            },
+        ]);
+
+        // Load-balance: first two go to engine_0 and engine_1.
+        registry.register("req-lb-0".to_string(), None).unwrap();
+
+        // Now engine_0 has 1 in-flight. Without dp_rank, next would go to engine_1.
+        // But with dp_rank=0, it should still go to engine_0.
+        let (chosen, _) = registry.register("req-dp".to_string(), Some(0)).unwrap();
+        assert_eq!(chosen, engine_0);
+    }
+
+    #[test]
+    fn register_with_out_of_range_rank_returns_error() {
+        let mut registry = RequestRegistry::new(&[
+            ConnectedEngine {
+                engine_id: EngineId::from(b"engine-0"),
+                ready_message: Default::default(),
+            },
+            ConnectedEngine {
+                engine_id: EngineId::from(b"engine-1"),
+                ready_message: Default::default(),
+            },
+        ]);
+
+        let error = registry.register("req-1".to_string(), Some(2)).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::Error::InvalidDataParallelRank {
+                rank: 2,
+                num_engines: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn register_with_rank_on_single_engine_only_accepts_zero() {
+        let engine_0 = EngineId::from(b"engine-0");
+        let mut registry = RequestRegistry::new(&[ConnectedEngine {
+            engine_id: engine_0.clone(),
+            ready_message: Default::default(),
+        }]);
+
+        let (chosen, _) = registry.register("req-ok".to_string(), Some(0)).unwrap();
+        assert_eq!(chosen, engine_0);
+
+        let error = registry
+            .register("req-bad".to_string(), Some(1))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::Error::InvalidDataParallelRank {
+                rank: 1,
+                num_engines: 1,
+            }
+        ));
     }
 
     #[test]

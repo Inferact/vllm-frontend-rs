@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
@@ -34,16 +35,17 @@ use crate::routes::openai::utils::logprobs::{
 };
 use crate::routes::openai::utils::types::{ChatLogProbs, Usage};
 use crate::state::AppState;
-use crate::utils::unix_timestamp;
+use crate::utils::{get_data_parallel_rank, unix_timestamp};
 
 /// Validate one chat completion request and proxy it into the shared `vllm-chat` stack.
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     ValidatedJson(body): ValidatedJson<ChatCompletionRequest>,
 ) -> Response {
     let stream = body.stream;
-
-    let prepared = match prepare_chat_request(body, &state.model_id) {
+    let data_parallel_rank = get_data_parallel_rank(&headers);
+    let prepared = match prepare_chat_request(body, &state.model_id, data_parallel_rank) {
         Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };

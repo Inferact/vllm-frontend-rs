@@ -36,6 +36,7 @@ pub struct PreparedRequest {
 pub fn prepare_chat_request(
     request: ChatCompletionRequest,
     configured_model: &str,
+    data_parallel_rank: Option<u32>,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
@@ -120,6 +121,7 @@ pub fn prepare_chat_request(
         documents: request.documents,
         cache_salt: request.cache_salt,
         add_special_tokens: request.add_special_tokens,
+        data_parallel_rank,
     };
 
     Ok(PreparedRequest {
@@ -327,8 +329,8 @@ mod tests {
         request.skip_special_tokens = false;
         request.chat_template_kwargs = Some(HashMap::from([("foo".to_string(), json!("bar"))]));
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
 
         assert!(prepared.response_id.starts_with("chatcmpl-"));
         assert_eq!(
@@ -362,7 +364,7 @@ mod tests {
 
     #[test]
     fn prepare_chat_request_keeps_optional_sampling_fields_unset() {
-        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat")
+        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", None)
             .expect("request is valid");
 
         assert!(prepared.response_id.starts_with("chatcmpl-"));
@@ -400,8 +402,8 @@ mod tests {
             ..base_request()
         };
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
         let expected = VllmSamplingParams {
             seed: Some(42),
             min_p: Some(0.2),
@@ -424,7 +426,7 @@ mod tests {
             ..base_request()
         };
 
-        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
     }
 
     #[test]
@@ -442,7 +444,7 @@ mod tests {
             ..base_request()
         };
 
-        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").is_err());
+        assert!(prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None).is_err());
     }
 
     #[test]
@@ -457,8 +459,8 @@ mod tests {
             ..base_request()
         };
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
         assert_eq!(
             prepared.chat_request.messages,
             vec![VllmChatMessage::assistant_blocks(vec![
@@ -514,8 +516,8 @@ mod tests {
             ..base_request()
         };
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
         assert_eq!(
             prepared.chat_request.messages,
             vec![
@@ -553,8 +555,8 @@ mod tests {
             ..base_request()
         };
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
 
         assert!(prepared.requested_logprobs);
         assert!(prepared.include_prompt_logprobs);
@@ -574,11 +576,25 @@ mod tests {
             ..base_request()
         };
 
-        let prepared =
-            prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat").expect("request is valid");
+        let prepared = prepare_chat_request(request, "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
 
         assert_eq!(prepared.chat_request.sampling_params.logprobs, Some(3));
         assert_eq!(prepared.chat_request.sampling_params.prompt_logprobs, None);
         assert!(!prepared.include_prompt_logprobs);
+    }
+
+    #[test]
+    fn prepare_chat_request_threads_data_parallel_rank() {
+        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", Some(7))
+            .expect("request is valid");
+        assert_eq!(prepared.chat_request.data_parallel_rank, Some(7));
+    }
+
+    #[test]
+    fn prepare_chat_request_leaves_data_parallel_rank_none_when_absent() {
+        let prepared = prepare_chat_request(base_request(), "Qwen/Qwen1.5-0.5B-Chat", None)
+            .expect("request is valid");
+        assert_eq!(prepared.chat_request.data_parallel_rank, None);
     }
 }
