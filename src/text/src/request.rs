@@ -35,6 +35,7 @@ impl Default for Prompt {
 /// Original Python definition:
 /// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/sampling_params.py#L155-L291>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SamplingParams {
     /// Controls randomness. Lower values are more deterministic; zero means
     /// greedy sampling. `None` means no explicit user override.
