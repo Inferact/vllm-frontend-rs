@@ -279,8 +279,8 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
             let mut prompt_logprobs = None;
             let mut collected: Option<CollectedGenerateOutput> = None;
 
-            while let Some(mut output) = stream.next().await.transpose()? {
-                if let Some(info) = output.prompt_info.take() {
+            while let Some(output) = stream.next().await.transpose()? {
+                if let Some(info) = output.prompt_info {
                     if prompt_token_ids.is_none() {
                         prompt_token_ids = Some(info.prompt_token_ids.to_vec());
                     }
@@ -288,9 +288,6 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
                         prompt_logprobs = info.prompt_logprobs;
                     }
                 }
-
-                let finish_reason = output.finish_reason;
-                let kv_transfer_params = output.kv_transfer_params;
 
                 if let Some(existing) = collected.as_mut() {
                     existing.token_ids.extend(output.token_ids);
@@ -313,10 +310,10 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
                     });
                 }
 
-                if let Some(finish_reason) = finish_reason {
+                if let Some(finish_reason) = output.finish_reason {
                     let mut collected = collected.expect("terminal output must exist");
                     collected.finish_reason = finish_reason;
-                    collected.kv_transfer_params = kv_transfer_params;
+                    collected.kv_transfer_params = output.kv_transfer_params;
                     return Ok(collected);
                 }
             }
