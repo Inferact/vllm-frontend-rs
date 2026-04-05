@@ -22,7 +22,7 @@ use uuid::Uuid;
 use vllm_engine_core_client::TransportMode;
 use vllm_server::{
     ChatTemplateContentFormatOption, Config, CoordinatorMode, HttpListenerMode, ParserSelection,
-    RendererSelection,
+    RendererSelection, TlsConfig,
 };
 
 use crate::cli::unsupported::UnsupportedArgs;
@@ -157,6 +157,28 @@ pub struct SharedRuntimeArgs {
     #[serde(default)]
     pub disable_log_stats: bool,
 
+    /// The file path to the SSL key file.
+    #[arg(long)]
+    #[serde(default)]
+    pub ssl_keyfile: Option<String>,
+    /// The file path to the SSL cert file.
+    #[arg(long)]
+    #[serde(default)]
+    pub ssl_certfile: Option<String>,
+    /// The CA certificates file.
+    #[arg(long)]
+    #[serde(default)]
+    pub ssl_ca_certs: Option<String>,
+    /// Whether client certificate is required (see stdlib ssl module's).
+    /// 0 = CERT_NONE, 1 = CERT_OPTIONAL, 2 = CERT_REQUIRED.
+    #[arg(long, default_value_t = 0)]
+    #[serde(default)]
+    pub ssl_cert_reqs: i32,
+    /// Refresh SSL Context when SSL certificate files change.
+    #[arg(long)]
+    #[serde(default)]
+    pub enable_ssl_refresh: bool,
+
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
     #[educe(Debug(ignore))]
     #[command(flatten)]
@@ -170,6 +192,17 @@ impl SharedRuntimeArgs {
         Duration::from_secs(self.engine_ready_timeout_secs)
     }
 
+    /// Build the TLS config from the SSL arguments, if provided.
+    fn tls_config(&self) -> anyhow::Result<Option<TlsConfig>> {
+        TlsConfig::from_args(
+            self.ssl_keyfile.clone(),
+            self.ssl_certfile.clone(),
+            self.ssl_ca_certs.clone(),
+            self.ssl_cert_reqs,
+            self.enable_ssl_refresh,
+        )
+    }
+
     /// Build the OpenAI-server config for the Python-bootstrap worker contract.
     ///
     /// The resulting config binds the Python-supplied transport addresses and inherits an already
@@ -181,8 +214,9 @@ impl SharedRuntimeArgs {
         output_address: String,
         coordinator_address: Option<String>,
         engine_count: usize,
-    ) -> Config {
-        Config {
+    ) -> anyhow::Result<Config> {
+        let tls = self.tls_config()?;
+        Ok(Config {
             transport_mode: TransportMode::Bootstrapped {
                 input_address,
                 output_address,
@@ -195,6 +229,7 @@ impl SharedRuntimeArgs {
             },
             model: self.model,
             listener_mode: HttpListenerMode::InheritedFd { fd: listen_fd },
+            tls,
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             renderer: self.renderer,
@@ -204,7 +239,7 @@ impl SharedRuntimeArgs {
             enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
             grpc_port: self.grpc_port,
-        }
+        })
     }
 
     /// Build the OpenAI-server config for the managed `serve` path that still owns the startup
@@ -217,8 +252,9 @@ impl SharedRuntimeArgs {
         engine_count: usize,
         local_input_address: Option<String>,
         local_output_address: Option<String>,
-    ) -> Config {
-        Config {
+    ) -> anyhow::Result<Config> {
+        let tls = self.tls_config()?;
+        Ok(Config {
             transport_mode: TransportMode::HandshakeOwner {
                 handshake_address,
                 advertised_host,
@@ -230,6 +266,7 @@ impl SharedRuntimeArgs {
             coordinator_mode: CoordinatorMode::MaybeInProc,
             model: self.model,
             listener_mode,
+            tls,
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             renderer: self.renderer,
@@ -239,7 +276,7 @@ impl SharedRuntimeArgs {
             enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
             grpc_port: self.grpc_port,
-        }
+        })
     }
 }
 
@@ -286,7 +323,7 @@ pub struct FrontendArgs {
 
 impl FrontendArgs {
     /// Convert the CLI arguments into the OpenAI server's runtime config.
-    pub fn into_config(self) -> Config {
+    pub fn into_config(self) -> anyhow::Result<Config> {
         self.runtime.into_bootstrapped_config(
             self.listen_fd,
             self.input_address,
@@ -370,7 +407,7 @@ impl ServeArgs {
     }
 
     /// Build the OpenAI-server runtime config used after the managed Python engine starts.
-    pub fn to_frontend_config(&self, handshake_address: String) -> Config {
+    pub fn to_frontend_config(&self, handshake_address: String) -> anyhow::Result<Config> {
         // Prefer IPC sockets for local engine input/output.
         let (local_input_address, local_output_address) = self
             .frontend_local_only()

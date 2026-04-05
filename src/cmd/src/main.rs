@@ -87,7 +87,10 @@ fn main() -> Result<()> {
 
 async fn async_main(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Frontend(args) => vllm_server::serve(args.into_config(), shutdown_signal()).await,
+        Command::Frontend(args) => {
+            let config = args.into_config()?;
+            vllm_server::serve(config, shutdown_signal()).await
+        }
         Command::Serve(args) => {
             let handshake_port = match args.handshake_port {
                 Some(port) => port,
@@ -105,7 +108,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                     engine_count = args.data_parallel_size,
                     "running Rust frontend without a managed local Python engine"
                 );
-                let config = args.to_frontend_config(handshake_address);
+                let config = args.to_frontend_config(handshake_address)?;
                 return vllm_server::serve(config, shutdown_signal()).await;
             }
 
@@ -138,7 +141,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                     Ok(())
                 })
             } else {
-                let config = args.to_frontend_config(handshake_address);
+                let config = args.to_frontend_config(handshake_address)?;
                 tokio::spawn(async move {
                     let result = vllm_server::serve(config, shutdown_signal_rx.map(|_| ())).await;
                     if result.is_ok() {

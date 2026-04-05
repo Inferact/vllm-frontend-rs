@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
             host: "127.0.0.1".to_string(),
             port,
         },
+        tls: None,
         tool_call_parser: ParserSelection::Auto,
         reasoning_parser: ParserSelection::Auto,
         renderer: RendererSelection::Auto,

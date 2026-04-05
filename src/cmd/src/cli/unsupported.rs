@@ -580,31 +580,8 @@ pub struct ServerUnsupportedArgs {
     #[arg(long)]
     pub api_key: Option<Unsupported>,
 
-    /// The file path to the SSL key file.
-    #[arg(long)]
-    pub ssl_keyfile: Option<Unsupported>,
-
-    /// The file path to the SSL cert file.
-    #[arg(long)]
-    pub ssl_certfile: Option<Unsupported>,
-
-    /// The CA certificates file.
-    #[arg(long)]
-    pub ssl_ca_certs: Option<Unsupported>,
-
-    /// Refresh SSL Context when SSL certificate files change
-    #[arg(
-        long,
-        visible_alias = "no-enable-ssl-refresh",
-        default_missing_value = "true",
-        num_args = 0..=1
-    )]
-    pub enable_ssl_refresh: Option<Unsupported>,
-
-    /// Whether client certificate is required (see stdlib ssl module's).
-    #[arg(long)]
-    pub ssl_cert_reqs: Option<Unsupported>,
-
+    // TODO: `ssl_ciphers` uses OpenSSL cipher string format which is not compatible with rustls.
+    // Support could be added by mapping common OpenSSL cipher names to rustls cipher suites.
     /// SSL cipher suites for HTTPS (TLS 1.2 and below only).
     /// Example: 'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305'
     #[arg(long)]
