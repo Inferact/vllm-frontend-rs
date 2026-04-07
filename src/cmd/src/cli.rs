@@ -280,6 +280,11 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
+    /// Build the handshake address shared by the Rust frontend and managed Python engine.
+    pub fn handshake_address(&self, handshake_port: u16) -> String {
+        format!("tcp://{}:{}", self.handshake_host, handshake_port)
+    }
+
     /// Build the OpenAI-server runtime config used after the managed Python engine starts.
     pub fn to_frontend_config(&self, handshake_address: String) -> Config {
         self.runtime.clone().into_managed_config(

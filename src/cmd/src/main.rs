@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
                     bail!("cannot combine `--headless` with `--data-parallel-size-local 0`");
                 }
 
-                let handshake_address = format!("tcp://{}:{}", args.handshake_host, handshake_port);
+                let handshake_address = args.handshake_address(handshake_port);
                 info!(
                     %handshake_address,
                     engine_count = args.data_parallel_size,
