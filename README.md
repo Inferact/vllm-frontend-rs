@@ -9,8 +9,8 @@ The project is organized as a Cargo workspace with several crates, layered botto
 ```
 ┌─────────────────────────────────┐
 │  vllm-cmd / vllm-rs             │  CLI entrypoint:
-│                                 │  managed-engine serve mode
-│                                 │  frontend-only serve mode
+│                                 │  Python vLLM frontend subprocess
+│                                 │  Rust managed-engine serve mode
 ├─────────────────────────────────┤
 │  vllm-server                    │  OpenAI-compatible HTTP API (axum)
 ├─────────────────────────────────┤
