@@ -103,12 +103,7 @@ pub struct SharedRuntimeArgs {
 
     /// Log a summary line for each completed request, including prompt/output token counts
     /// and finish reason.
-    #[arg(
-        long,
-        visible_alias = "no-enable-log-requests",
-        default_missing_value = "true",
-        num_args = 0..=1
-    )]
+    #[arg(long)]
     #[serde(default)]
     pub enable_log_requests: bool,
 

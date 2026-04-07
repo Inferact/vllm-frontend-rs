@@ -19,13 +19,19 @@ pub struct AppState {
 
 impl AppState {
     /// Construct one application state instance.
-    pub fn new(model_id: impl Into<String>, chat: ChatLlm, enable_log_requests: bool) -> Self {
+    pub fn new(model_id: impl Into<String>, chat: ChatLlm) -> Self {
         Self {
             model_id: model_id.into(),
             chat,
-            enable_log_requests,
+            enable_log_requests: false,
             server_load: AtomicU64::new(0),
         }
+    }
+
+    /// Enable per-request completion logging.
+    pub fn with_log_requests(mut self, enabled: bool) -> Self {
+        self.enable_log_requests = enabled;
+        self
     }
 
     /// Return a reference to the underlying engine core client for utility calls.
