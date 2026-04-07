@@ -101,6 +101,12 @@ pub struct SharedRuntimeArgs {
     #[arg(long)]
     pub max_model_len: Option<u32>,
 
+    /// Log a summary line for each completed request, including prompt/output token counts
+    /// and finish reason.
+    #[arg(long)]
+    #[serde(default)]
+    pub enable_log_requests: bool,
+
     /// Disable periodic logging of engine statistics (throughput, queue depth, cache usage).
     #[arg(long)]
     #[serde(default)]
@@ -144,6 +150,7 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
         }
     }
@@ -173,6 +180,7 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
         }
     }
