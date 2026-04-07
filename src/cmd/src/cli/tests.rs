@@ -527,7 +527,7 @@ fn serve_args_accept_handshake_aliases() {
         "10.99.48.128",
         "--handshake-port",
         "13345",
-        "--engine-count",
+        "--data-parallel-size",
         "4",
     ])
     .unwrap();
@@ -544,7 +544,7 @@ fn serve_args_accept_handshake_aliases() {
                     handshake_port: Some(
                         13345,
                     ),
-                    data_parallel_size: 1,
+                    data_parallel_size: 4,
                     data_parallel_size_local: None,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
@@ -553,10 +553,7 @@ fn serve_args_accept_handshake_aliases() {
                         reasoning_parser: None,
                         max_model_len: None,
                     },
-                    python_args: [
-                        "--engine-count",
-                        "4",
-                    ],
+                    python_args: [],
                 },
             ),
         }
@@ -596,7 +593,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
         "Qwen/Qwen3-0.6B",
         "--handshake-host",
         "10.99.48.128",
-        "--engine-count",
+        "--data-parallel-size",
         "4",
     ])
     .unwrap();
@@ -611,7 +608,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
             transport_mode: HandshakeOwner {
                 handshake_address: "tcp://10.99.48.128:29550",
                 advertised_host: "10.99.48.128",
-                engine_count: 1,
+                engine_count: 4,
                 ready_timeout: 300s,
                 local_input_address: None,
                 local_output_address: None,
