@@ -136,8 +136,8 @@ async fn run_stats_logger(model_name: String, engine_count: usize) {
         msg.clear();
         write!(
             msg,
-            "Avg prompt tput: {prompt_throughput:.1} tokens/s, \
-             Avg generation tput: {generation_throughput:.1} tokens/s, \
+            "Avg prompt tput: {prompt_throughput:.1} toks/s, \
+             Avg generation tput: {generation_throughput:.1} toks/s, \
              Reqs Running: {num_running}, \
              Waiting: {num_waiting}, \
              GPU KV cache used: {:.1}%, \
