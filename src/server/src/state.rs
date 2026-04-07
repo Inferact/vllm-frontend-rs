@@ -11,16 +11,19 @@ pub struct AppState {
     pub model_id: String,
     /// Shared chat facade used by all requests.
     pub chat: ChatLlm,
+    /// Whether to log a summary line for each completed request.
+    pub enable_log_requests: bool,
     /// Number of in-flight inference requests currently owned by this frontend.
     server_load: AtomicU64,
 }
 
 impl AppState {
     /// Construct one application state instance.
-    pub fn new(model_id: impl Into<String>, chat: ChatLlm) -> Self {
+    pub fn new(model_id: impl Into<String>, chat: ChatLlm, enable_log_requests: bool) -> Self {
         Self {
             model_id: model_id.into(),
             chat,
+            enable_log_requests,
             server_load: AtomicU64::new(0),
         }
     }

@@ -23,7 +23,10 @@ const PROCESS_LABEL: &str = "RustFrontend";
 
 /// Install the process-wide vLLM-style tracing subscriber for the CLI binary.
 pub(crate) fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        let level = std::env::var("VLLM_LOGGING_LEVEL").unwrap_or_else(|_| "info".to_string());
+        EnvFilter::new(level)
+    });
     let formatter = VllmEventFormatter::new();
 
     let _ = tracing_subscriber::fmt()
@@ -102,7 +105,7 @@ impl VllmEventFormatter {
         line: Option<u32>,
         ansi: bool,
     ) -> fmt::Result {
-        let Some(file) = file else {
+        let Some(file) = file.map(|f| f.rsplit_once('/').map_or(f, |(_, name)| name)) else {
             return Ok(());
         };
         if ansi {

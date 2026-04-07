@@ -68,7 +68,11 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
         chat = chat.with_reasoning_parser(name);
     }
 
-    Ok(Arc::new(AppState::new(config.model.clone(), chat)))
+    Ok(Arc::new(AppState::new(
+        config.model.clone(),
+        chat,
+        config.enable_log_requests,
+    )))
 }
 
 /// Run the OpenAI-compatible HTTP server until the supplied shutdown future resolves.

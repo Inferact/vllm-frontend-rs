@@ -101,6 +101,17 @@ pub struct SharedRuntimeArgs {
     #[arg(long)]
     pub max_model_len: Option<u32>,
 
+    /// Log a summary line for each completed request, including prompt/output token counts
+    /// and finish reason.
+    #[arg(
+        long,
+        visible_alias = "no-enable-log-requests",
+        default_missing_value = "true",
+        num_args = 0..=1
+    )]
+    #[serde(default)]
+    pub enable_log_requests: bool,
+
     /// Unsupported Python vLLM frontend arguments recognized but not yet implemented in Rust.
     #[educe(Debug(ignore))]
     #[command(flatten)]
@@ -139,6 +150,7 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            enable_log_requests: self.enable_log_requests,
         }
     }
 
@@ -167,6 +179,7 @@ impl SharedRuntimeArgs {
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
             max_model_len: self.max_model_len,
+            enable_log_requests: self.enable_log_requests,
         }
     }
 }
