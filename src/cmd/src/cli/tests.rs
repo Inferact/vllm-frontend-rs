@@ -28,7 +28,8 @@ fn serve_args_forward_python_flags_with_separator() {
                     port: 8000,
                     handshake_host: "127.0.0.1",
                     handshake_port: None,
-                    engine_count: 1,
+                    data_parallel_size: 1,
+                    data_parallel_size_local: None,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
                         engine_ready_timeout_secs: 300,
@@ -543,7 +544,8 @@ fn serve_args_accept_handshake_aliases() {
                     handshake_port: Some(
                         13345,
                     ),
-                    engine_count: 4,
+                    data_parallel_size: 1,
+                    data_parallel_size_local: None,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
                         engine_ready_timeout_secs: 300,
@@ -551,7 +553,10 @@ fn serve_args_accept_handshake_aliases() {
                         reasoning_parser: None,
                         max_model_len: None,
                     },
-                    python_args: [],
+                    python_args: [
+                        "--engine-count",
+                        "4",
+                    ],
                 },
             ),
         }
@@ -580,7 +585,7 @@ fn serve_args_accept_data_parallel_primary_flags() {
     assert!(!args.headless);
     assert_eq!(args.handshake_host, "10.99.48.128");
     assert_eq!(args.handshake_port, Some(13345));
-    assert_eq!(args.engine_count, 4);
+    assert_eq!(args.data_parallel_size, 4);
 }
 
 #[test]
@@ -606,7 +611,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
             transport_mode: HandshakeOwner {
                 handshake_address: "tcp://10.99.48.128:29550",
                 advertised_host: "10.99.48.128",
-                engine_count: 4,
+                engine_count: 1,
                 ready_timeout: 300s,
                 local_input_address: None,
                 local_output_address: None,
