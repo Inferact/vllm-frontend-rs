@@ -86,6 +86,7 @@ async fn run_stats_logger(model_name: String, engine_count: usize) {
     let engines = resolve_engine_metrics(&model_name, engine_count);
 
     let mut interval = tokio::time::interval(LOG_STATS_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The first tick fires immediately; skip it so the first log is after one full interval.
     interval.tick().await;
 
