@@ -35,7 +35,7 @@ pub struct ManagedEngineConfig {
     pub handshake_host: String,
     /// Port portion of the headless-engine handshake endpoint.
     pub handshake_port: u16,
-    /// Number of data parallel groups across the whole deployment.
+    /// Number of data parallel replicas across the whole deployment.
     ///
     /// The per-node replica count is forwarded separately in `python_args` as
     /// `--data-parallel-size-local`.

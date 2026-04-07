@@ -250,7 +250,7 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u16).range(1..)
     )]
     pub handshake_port: Option<u16>,
-    /// Number of data parallel groups across the whole deployment.
+    /// Number of data parallel replicas across the whole deployment.
     #[arg(long, default_value_t = 1)]
     pub data_parallel_size: usize,
     /// Number of data parallel replicas to run on this node.
