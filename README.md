@@ -69,12 +69,6 @@ vllm-rs serve Qwen/Qwen3-0.6B --python xxx/vllm/.venv/bin/python
 
 This starts the Rust OpenAI-compatible server on `127.0.0.1:8000` by default.
 
-When the managed frontend and all engine processes are colocated on the same node, `vllm-rs serve`
-now mirrors Python `vLLM` and uses local `ipc://` ZMQ sockets for the frontend-engine
-request/response transport. The startup handshake still uses the configured
-`--data-parallel-address` / `--data-parallel-rpc-port` TCP endpoint. If you run hybrid or remote
-topologies, the transport stays on `tcp://`.
-
 ### Additional Frontend and Engine Args
 
 ```bash
