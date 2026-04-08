@@ -6,7 +6,7 @@ use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
-use prometheus_client::metrics::histogram::Histogram;
+pub use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::registry::Registry;
 
 mod api_server;

@@ -14,7 +14,7 @@ use crate::client::state::{OutputReceiver, RequestRegistry, UtilityReceiver, Uti
 use crate::client::stream::EngineCoreStreamOutput;
 use crate::client::{AbortCause, AbortRequest};
 use crate::error::{client_closed, dispatcher_closed, unexpected_dispatcher_output};
-use crate::metrics::record_scheduler_stats;
+use crate::metrics::SchedulerStatsRecorder;
 use crate::protocol::{
     ClassifiedEngineCoreOutputs, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequestType,
     UtilityOutput, encode_msgpack,
@@ -260,6 +260,8 @@ pub(crate) async fn run_output_dispatcher_loop(
     inner: Arc<ClientInner>,
     mut output_rx: mpsc::Receiver<Result<EngineCoreOutputs>>,
 ) {
+    let mut scheduler_recorder = SchedulerStatsRecorder::new(inner.model_name().to_string());
+
     let Err(error) = try {
         loop {
             let outputs = match output_rx.recv().await {
@@ -300,9 +302,8 @@ pub(crate) async fn run_output_dispatcher_loop(
                     }
 
                     if let Some(scheduler_stats) = batch.scheduler_stats.as_ref() {
-                        record_scheduler_stats(
+                        scheduler_recorder.record(
                             &METRICS.scheduler,
-                            inner.model_name(),
                             batch.engine_index,
                             scheduler_stats,
                         );

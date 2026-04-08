@@ -2,7 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use vllm_engine_core_client::protocol::{EngineCoreEvent, EngineCoreEventType, EngineCoreOutput};
 use vllm_metrics::{
-    EngineLabels, FinishedReasonLabels, METRICS, PromptTokenSourceLabels, RequestMetrics,
+    EngineLabels, FinishedReasonLabels, Histogram, METRICS, PromptTokenSourceLabels,
+    RequestMetrics, U64Counter,
 };
 
 use crate::FinishReason;
@@ -15,6 +16,168 @@ const PROMPT_TOKEN_SOURCE_LOCAL_COMPUTE: &str = "local_compute";
 const PROMPT_TOKEN_SOURCE_LOCAL_CACHE_HIT: &str = "local_cache_hit";
 const PROMPT_TOKEN_SOURCE_EXTERNAL_KV_TRANSFER: &str = "external_kv_transfer";
 
+/// Pre-resolved metric handles for one `(model_name, engine)` pair.
+///
+/// Cloning a handle from a prometheus `Family` is cheap (just `Arc` reference bumps), and
+/// subsequent observations go straight to the underlying atomic / `RwLock` without re-acquiring the
+/// `Family`-level `RwLock` or allocating label `String`s on every call.
+// Debug impl is intentionally opaque since metric handle internals are not useful in debug output.
+struct CachedMetricHandles {
+    // --- Per-output hot path ---
+    generation_tokens: U64Counter,
+    num_preemptions: U64Counter,
+    inter_token_latency_seconds: Histogram,
+
+    // --- Prefill (first output) ---
+    prompt_tokens: U64Counter,
+    prompt_tokens_computed: U64Counter,
+    prompt_tokens_local_cache_hit: U64Counter,
+    prompt_tokens_external_kv_transfer: U64Counter,
+    prompt_tokens_cached: U64Counter,
+    prompt_tokens_recomputed: U64Counter,
+    time_to_first_token_seconds: Histogram,
+
+    // --- Terminal (record_finished) ---
+    request_prompt_tokens: Histogram,
+    request_generation_tokens: Histogram,
+    request_max_num_generation_tokens: Histogram,
+    request_params_max_tokens: Histogram,
+    request_params_n: Histogram,
+    request_prefill_kv_computed_tokens: Histogram,
+    e2e_request_latency_seconds: Histogram,
+    request_queue_time_seconds: Histogram,
+    request_prefill_time_seconds: Histogram,
+    request_decode_time_seconds: Histogram,
+    request_inference_time_seconds: Histogram,
+    request_time_per_output_token_seconds: Histogram,
+
+    // --- Finish-reason counters ---
+    request_success_stop: U64Counter,
+    request_success_length: U64Counter,
+    request_success_abort: U64Counter,
+    request_success_error: U64Counter,
+    request_success_repetition: U64Counter,
+}
+
+impl std::fmt::Debug for CachedMetricHandles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedMetricHandles").finish_non_exhaustive()
+    }
+}
+
+impl CachedMetricHandles {
+    /// Resolve and clone all metric handles for the given engine from the global `Family` entries.
+    fn resolve(model_name: &str, engine: u32) -> Self {
+        let m = metrics();
+        let el = EngineLabels {
+            model_name: model_name.to_string(),
+            engine,
+        };
+
+        let prompt_token_source =
+            |source| PromptTokenSourceLabels {
+                model_name: model_name.to_string(),
+                engine,
+                source,
+            };
+        let finished_reason =
+            |finished_reason| FinishedReasonLabels {
+                model_name: model_name.to_string(),
+                engine,
+                finished_reason,
+            };
+
+        Self {
+            generation_tokens: m.generation_tokens.get_or_create_owned(&el),
+            num_preemptions: m.num_preemptions.get_or_create_owned(&el),
+            inter_token_latency_seconds: m.inter_token_latency_seconds.get_or_create_owned(&el),
+
+            prompt_tokens: m.prompt_tokens.get_or_create_owned(&el),
+            prompt_tokens_computed: m
+                .prompt_tokens_by_source
+                .get_or_create_owned(&prompt_token_source(PROMPT_TOKEN_SOURCE_LOCAL_COMPUTE)),
+            prompt_tokens_local_cache_hit: m
+                .prompt_tokens_by_source
+                .get_or_create_owned(&prompt_token_source(PROMPT_TOKEN_SOURCE_LOCAL_CACHE_HIT)),
+            prompt_tokens_external_kv_transfer: m
+                .prompt_tokens_by_source
+                .get_or_create_owned(&prompt_token_source(PROMPT_TOKEN_SOURCE_EXTERNAL_KV_TRANSFER)),
+            prompt_tokens_cached: m.prompt_tokens_cached.get_or_create_owned(&el),
+            prompt_tokens_recomputed: m.prompt_tokens_recomputed.get_or_create_owned(&el),
+            time_to_first_token_seconds: m.time_to_first_token_seconds.get_or_create_owned(&el),
+
+            request_prompt_tokens: m.request_prompt_tokens.get_or_create_owned(&el),
+            request_generation_tokens: m.request_generation_tokens.get_or_create_owned(&el),
+            request_max_num_generation_tokens: m
+                .request_max_num_generation_tokens
+                .get_or_create_owned(&el),
+            request_params_max_tokens: m.request_params_max_tokens.get_or_create_owned(&el),
+            request_params_n: m.request_params_n.get_or_create_owned(&el),
+            request_prefill_kv_computed_tokens: m
+                .request_prefill_kv_computed_tokens
+                .get_or_create_owned(&el),
+            e2e_request_latency_seconds: m.e2e_request_latency_seconds.get_or_create_owned(&el),
+            request_queue_time_seconds: m.request_queue_time_seconds.get_or_create_owned(&el),
+            request_prefill_time_seconds: m.request_prefill_time_seconds.get_or_create_owned(&el),
+            request_decode_time_seconds: m.request_decode_time_seconds.get_or_create_owned(&el),
+            request_inference_time_seconds: m
+                .request_inference_time_seconds
+                .get_or_create_owned(&el),
+            request_time_per_output_token_seconds: m
+                .request_time_per_output_token_seconds
+                .get_or_create_owned(&el),
+
+            request_success_stop: m
+                .request_success
+                .get_or_create_owned(&finished_reason("stop")),
+            request_success_length: m
+                .request_success
+                .get_or_create_owned(&finished_reason("length")),
+            request_success_abort: m
+                .request_success
+                .get_or_create_owned(&finished_reason("abort")),
+            request_success_error: m
+                .request_success
+                .get_or_create_owned(&finished_reason("error")),
+            request_success_repetition: m
+                .request_success
+                .get_or_create_owned(&finished_reason("repetition")),
+        }
+    }
+
+    fn record_request_success(&self, finish_reason: &FinishReason) {
+        match finish_reason {
+            FinishReason::Stop(_) => self.request_success_stop.inc(),
+            FinishReason::Length => self.request_success_length.inc(),
+            FinishReason::Abort => self.request_success_abort.inc(),
+            FinishReason::Error => self.request_success_error.inc(),
+            FinishReason::Repetition => self.request_success_repetition.inc(),
+        };
+    }
+
+    fn record_prompt_tokens(
+        &self,
+        prompt_len: u32,
+        num_cached_tokens: u32,
+        num_external_computed_tokens: u32,
+    ) {
+        let recomputed = u64::from(num_cached_tokens + 1 == prompt_len);
+        let computed = prompt_len.saturating_sub(num_cached_tokens) as u64;
+        let external_kv_transfer = num_external_computed_tokens as u64;
+        let local_cache_hit = (num_cached_tokens as u64)
+            .saturating_add(recomputed)
+            .saturating_sub(external_kv_transfer);
+
+        self.prompt_tokens.inc_by(prompt_len as u64);
+        self.prompt_tokens_computed.inc_by(computed);
+        self.prompt_tokens_local_cache_hit.inc_by(local_cache_hit);
+        self.prompt_tokens_external_kv_transfer
+            .inc_by(external_kv_transfer);
+        self.prompt_tokens_cached.inc_by(num_cached_tokens as u64);
+        self.prompt_tokens_recomputed.inc_by(recomputed);
+    }
+}
+
 /// Request-scoped metrics state tracked across streamed engine-core updates.
 ///
 /// This is the Rust-side counterpart of the Python frontend's request-lifecycle bookkeeping,
@@ -25,7 +188,7 @@ const PROMPT_TOKEN_SOURCE_EXTERNAL_KV_TRANSFER: &str = "external_kv_transfer";
 ///
 /// Original Python update flow:
 /// <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/v1/engine/output_processor.py#L600-L677>
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct RequestMetricsTracker {
     model_name: String,
     arrival_time: f64,
@@ -40,7 +203,9 @@ pub(crate) struct RequestMetricsTracker {
     first_token_latency: f64,
     num_generation_tokens: u32,
     latest_num_cached_tokens: u32,
-    last_seen_engine_index: u32,
+    /// Pre-resolved metric handles, lazily initialized on the first output when the engine index
+    /// becomes known.
+    cached: Option<CachedMetricHandles>,
 }
 
 impl RequestMetricsTracker {
@@ -66,8 +231,14 @@ impl RequestMetricsTracker {
             first_token_latency: 0.0,
             num_generation_tokens: 0,
             latest_num_cached_tokens: 0,
-            last_seen_engine_index: 0,
+            cached: None,
         }
+    }
+
+    /// Lazily resolve and cache metric handles on first use.
+    fn cached(&mut self, engine_index: u32) -> &CachedMetricHandles {
+        self.cached
+            .get_or_insert_with(|| CachedMetricHandles::resolve(&self.model_name, engine_index))
     }
 
     /// Update request-lifecycle state from one engine-core output item.
@@ -81,40 +252,36 @@ impl RequestMetricsTracker {
         received_at: f64,
         output: &EngineCoreOutput,
     ) {
-        self.last_seen_engine_index = engine_index;
         self.latest_num_cached_tokens = output.num_cached_tokens;
         self.num_generation_tokens += output.new_token_ids.len() as u32;
-        metrics()
+
+        let cached = self.cached(engine_index);
+        cached
             .generation_tokens
-            .get_or_create(&engine_labels(&self.model_name, engine_index))
             .inc_by(output.new_token_ids.len() as u64);
 
         if let Some(events) = &output.events {
-            self.observe_events(engine_index, events);
+            self.observe_events(events);
         }
 
         if self.is_prefilling {
-            record_prompt_tokens(
-                &self.model_name,
-                engine_index,
+            let cached = self.cached.as_ref().unwrap();
+            cached.record_prompt_tokens(
                 self.prompt_len,
                 output.num_cached_tokens,
                 output.num_external_computed_tokens,
             );
             self.first_token_latency = received_at - self.arrival_time;
-            observe_time_to_first_token_seconds(
-                &self.model_name,
-                engine_index,
-                self.first_token_latency,
-            );
+            cached
+                .time_to_first_token_seconds
+                .observe(self.first_token_latency);
             self.first_token_ts = batch_timestamp;
             self.is_prefilling = false;
         } else if self.last_token_ts > 0.0 {
-            observe_inter_token_latency_seconds(
-                &self.model_name,
-                engine_index,
-                batch_timestamp - self.last_token_ts,
-            );
+            let cached = self.cached.as_ref().unwrap();
+            cached
+                .inter_token_latency_seconds
+                .observe(batch_timestamp - self.last_token_ts);
         }
 
         self.last_token_ts = batch_timestamp;
@@ -125,7 +292,10 @@ impl RequestMetricsTracker {
     /// Original Python finished-request stats:
     /// <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/v1/metrics/stats.py#L222-L237>
     pub(crate) fn record_finished(&self, received_at: f64, finish_reason: FinishReason) {
-        let labels = engine_labels(&self.model_name, self.last_seen_engine_index);
+        let Some(cached) = self.cached.as_ref() else {
+            return;
+        };
+
         let prefill_kv_computed_tokens = self
             .prompt_len
             .saturating_sub(self.latest_num_cached_tokens);
@@ -141,60 +311,46 @@ impl RequestMetricsTracker {
             0.0
         };
 
-        record_request_success(&self.model_name, self.last_seen_engine_index, finish_reason);
-        metrics()
+        cached.record_request_success(&finish_reason);
+        cached
             .request_prompt_tokens
-            .get_or_create(&labels)
             .observe(self.prompt_len as f64);
-        metrics()
+        cached
             .request_generation_tokens
-            .get_or_create(&labels)
             .observe(self.num_generation_tokens as f64);
-        metrics()
+        cached
             .request_max_num_generation_tokens
-            .get_or_create(&labels)
             .observe(self.num_generation_tokens as f64);
         if let Some(max_tokens_param) = self.max_tokens_param {
-            metrics()
+            cached
                 .request_params_max_tokens
-                .get_or_create(&labels)
                 .observe(max_tokens_param as f64);
         }
-        metrics()
-            .request_params_n
-            .get_or_create(&labels)
-            .observe(self.n_param as f64);
-        metrics()
+        cached.request_params_n.observe(self.n_param as f64);
+        cached
             .request_prefill_kv_computed_tokens
-            .get_or_create(&labels)
             .observe(prefill_kv_computed_tokens as f64);
-        metrics()
+        cached
             .e2e_request_latency_seconds
-            .get_or_create(&labels)
             .observe(e2e_latency_seconds);
-        metrics()
+        cached
             .request_queue_time_seconds
-            .get_or_create(&labels)
             .observe(queue_time_seconds);
-        metrics()
+        cached
             .request_prefill_time_seconds
-            .get_or_create(&labels)
             .observe(prefill_time_seconds);
-        metrics()
+        cached
             .request_decode_time_seconds
-            .get_or_create(&labels)
             .observe(decode_time_seconds);
-        metrics()
+        cached
             .request_inference_time_seconds
-            .get_or_create(&labels)
             .observe(inference_time_seconds);
-        metrics()
+        cached
             .request_time_per_output_token_seconds
-            .get_or_create(&labels)
             .observe(time_per_output_token_seconds);
     }
 
-    fn observe_events(&mut self, engine_index: u32, events: &[EngineCoreEvent]) {
+    fn observe_events(&mut self, events: &[EngineCoreEvent]) {
         for event in events {
             match event.r#type {
                 EngineCoreEventType::Queued => {
@@ -206,110 +362,13 @@ impl RequestMetricsTracker {
                     }
                 }
                 EngineCoreEventType::Preempted => {
-                    metrics()
-                        .num_preemptions
-                        .get_or_create(&engine_labels(&self.model_name, engine_index))
-                        .inc();
+                    if let Some(cached) = self.cached.as_ref() {
+                        cached.num_preemptions.inc();
+                    }
                 }
             }
         }
     }
-}
-
-fn engine_labels(model_name: &str, engine: u32) -> EngineLabels {
-    EngineLabels {
-        model_name: model_name.to_string(),
-        engine,
-    }
-}
-
-fn observe_time_to_first_token_seconds(model_name: &str, engine: u32, seconds: f64) {
-    metrics()
-        .time_to_first_token_seconds
-        .get_or_create(&engine_labels(model_name, engine))
-        .observe(seconds);
-}
-
-fn observe_inter_token_latency_seconds(model_name: &str, engine: u32, seconds: f64) {
-    metrics()
-        .inter_token_latency_seconds
-        .get_or_create(&engine_labels(model_name, engine))
-        .observe(seconds);
-}
-
-fn record_request_success(model_name: &str, engine: u32, finish_reason: FinishReason) {
-    metrics()
-        .request_success
-        .get_or_create(&FinishedReasonLabels {
-            model_name: model_name.to_string(),
-            engine,
-            finished_reason: finish_reason.as_str(),
-        })
-        .inc();
-}
-
-fn prompt_token_source_labels(
-    model_name: &str,
-    engine: u32,
-    source: &'static str,
-) -> PromptTokenSourceLabels {
-    PromptTokenSourceLabels {
-        model_name: model_name.to_string(),
-        engine,
-        source,
-    }
-}
-
-fn record_prompt_tokens(
-    model_name: &str,
-    engine: u32,
-    prompt_len: u32,
-    num_cached_tokens: u32,
-    num_external_computed_tokens: u32,
-) {
-    let recomputed = u64::from(num_cached_tokens + 1 == prompt_len);
-    let computed = prompt_len.saturating_sub(num_cached_tokens) as u64;
-    let external_kv_transfer = num_external_computed_tokens as u64;
-    let local_cache_hit = (num_cached_tokens as u64)
-        .saturating_add(recomputed)
-        .saturating_sub(external_kv_transfer);
-
-    metrics()
-        .prompt_tokens
-        .get_or_create(&engine_labels(model_name, engine))
-        .inc_by(prompt_len as u64);
-    metrics()
-        .prompt_tokens_by_source
-        .get_or_create(&prompt_token_source_labels(
-            model_name,
-            engine,
-            PROMPT_TOKEN_SOURCE_LOCAL_COMPUTE,
-        ))
-        .inc_by(computed);
-    metrics()
-        .prompt_tokens_by_source
-        .get_or_create(&prompt_token_source_labels(
-            model_name,
-            engine,
-            PROMPT_TOKEN_SOURCE_LOCAL_CACHE_HIT,
-        ))
-        .inc_by(local_cache_hit);
-    metrics()
-        .prompt_tokens_by_source
-        .get_or_create(&prompt_token_source_labels(
-            model_name,
-            engine,
-            PROMPT_TOKEN_SOURCE_EXTERNAL_KV_TRANSFER,
-        ))
-        .inc_by(external_kv_transfer);
-    metrics()
-        .prompt_tokens_cached
-        .get_or_create(&engine_labels(model_name, engine))
-        .inc_by(num_cached_tokens as u64);
-    metrics()
-        .prompt_tokens_recomputed
-        .get_or_create(&engine_labels(model_name, engine))
-        .inc_by(recomputed);
 }
 
 fn diff_or_zero(end: f64, start: f64) -> f64 {
@@ -385,7 +444,6 @@ mod tests {
         );
 
         assert!(!tracker.is_prefilling);
-        assert_eq!(tracker.last_seen_engine_index, 2);
         assert_eq!(tracker.num_generation_tokens, 3);
         assert_eq!(tracker.queued_ts, 8.0);
         assert_eq!(tracker.scheduled_ts, 9.0);

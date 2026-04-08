@@ -5,6 +5,10 @@ use anyhow::Context as _;
 use vllm_chat::ChatLlm;
 use vllm_engine_core_client::EngineCoreClient;
 
+/// Cache-line-aligned atomic counter to prevent false sharing with adjacent read-only fields.
+#[repr(align(128))]
+struct CacheLineAlignedCounter(AtomicU64);
+
 /// Shared router state for the minimal single-model OpenAI server.
 pub struct AppState {
     /// Public model ID returned by `/v1/models` and validated on chat requests.
@@ -14,7 +18,9 @@ pub struct AppState {
     /// Whether to log a summary line for each completed request.
     pub enable_log_requests: bool,
     /// Number of in-flight inference requests currently owned by this frontend.
-    server_load: AtomicU64,
+    /// Aligned to a cache line boundary to avoid false sharing with the read-only fields above,
+    /// which are accessed on every request.
+    server_load: CacheLineAlignedCounter,
 }
 
 impl AppState {
@@ -24,7 +30,7 @@ impl AppState {
             model_id: model_id.into(),
             chat,
             enable_log_requests: false,
-            server_load: AtomicU64::new(0),
+            server_load: CacheLineAlignedCounter(AtomicU64::new(0)),
         }
     }
 
@@ -41,17 +47,17 @@ impl AppState {
 
     /// Return the current in-flight inference request count for the `/load` endpoint.
     pub fn server_load(&self) -> u64 {
-        self.server_load.load(Ordering::Relaxed)
+        self.server_load.0.load(Ordering::Relaxed)
     }
 
     /// Increment the in-flight inference request count, called by the load tracking middleware.
     pub(crate) fn increment_server_load(&self) {
-        self.server_load.fetch_add(1, Ordering::Relaxed);
+        self.server_load.0.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Decrement the in-flight inference request count, called by the load tracking middleware.
     pub(crate) fn decrement_server_load(&self) {
-        self.server_load.fetch_sub(1, Ordering::Relaxed);
+        self.server_load.0.fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Shutdown the app. Caller should ensure that no outstanding references to the state remain
