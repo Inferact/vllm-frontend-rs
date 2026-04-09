@@ -4,14 +4,14 @@ use parking_lot::Mutex;
 use thiserror_ext::AsReport;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
-use zeromq::prelude::SocketSend;
-use zeromq::{XPubSocket, ZmqMessage};
+use zeromq::prelude::{Socket, SocketRecv, SocketSend};
+use zeromq::{XPubSocket, XSubSocket, ZmqMessage};
 
 use crate::client::imp::ClientInner;
 use crate::error::{Error, Result, bail_control_closed, bail_unexpected_coordinator_output};
 use crate::protocol::{
     ClassifiedEngineCoreOutputs, DpControlMessage, EngineCoreOutputs, EngineCoreRequestType,
-    encode_msgpack,
+    OpaqueValue, encode_msgpack,
 };
 use crate::transport::EngineId;
 
@@ -53,9 +53,11 @@ pub(crate) struct CoordinatorHandle {
 }
 
 impl CoordinatorHandle {
-    /// Build the paired frontend handle and background runner around one
-    /// engine-facing coordinator broadcast socket.
-    pub(crate) fn new(coordinator_input: XPubSocket) -> (Self, CoordinatorRunner) {
+    fn new_parts() -> (
+        Self,
+        Arc<CoordinatorState>,
+        mpsc::UnboundedReceiver<CoordinatorCommand>,
+    ) {
         let state = Arc::new(Mutex::new(CoordinatorStateSnapshot {
             current_wave: 0,
             engines_running: false,
@@ -66,8 +68,34 @@ impl CoordinatorHandle {
                 state: state.clone(),
                 command_tx,
             },
-            CoordinatorRunner::new(state, command_rx, coordinator_input),
+            state,
+            command_rx,
         )
+    }
+
+    /// Build the paired frontend handle and background runner around one
+    /// engine-facing coordinator broadcast socket.
+    pub(crate) fn new_inproc(coordinator_input: XPubSocket) -> (Self, InProcCoordinatorRunner) {
+        let (handle, state, command_rx) = Self::new_parts();
+        (
+            handle,
+            InProcCoordinatorRunner::new(state, command_rx, coordinator_input),
+        )
+    }
+
+    /// Build the paired frontend handle and background service around an external
+    /// Python-owned frontend-side coordinator socket.
+    pub(crate) async fn connect_external(
+        coordinator_address: &str,
+    ) -> Result<(Self, ExternalCoordinatorService)> {
+        let (handle, state, command_rx) = Self::new_parts();
+        let mut socket = XSubSocket::new();
+        socket.connect(coordinator_address).await?;
+        socket.subscribe("").await?;
+        Ok((
+            handle,
+            ExternalCoordinatorService::new(state, command_rx, socket),
+        ))
     }
 
     /// Snapshot the coordinator state for request routing and stamping.
@@ -104,13 +132,13 @@ impl CoordinatorHandle {
 /// This owns the command receiver and the engine-facing coordinator input socket.
 /// It is the single place where wave transitions are serialized and where
 /// `START_DP_WAVE` broadcasts are emitted.
-pub(crate) struct CoordinatorRunner {
+pub(crate) struct InProcCoordinatorRunner {
     state: Arc<CoordinatorState>,
     command_rx: mpsc::UnboundedReceiver<CoordinatorCommand>,
     coordinator_input: XPubSocket,
 }
 
-impl CoordinatorRunner {
+impl InProcCoordinatorRunner {
     fn new(
         state: Arc<CoordinatorState>,
         command_rx: mpsc::UnboundedReceiver<CoordinatorCommand>,
@@ -259,6 +287,106 @@ impl CoordinatorRunner {
         };
 
         warn!(error = %error.as_report(), "coordinator runner exiting with error");
+        inner.close_registries(Arc::new(error));
+    }
+}
+
+/// Background half of an external Python-owned coordinator connection.
+///
+/// This owns the command receiver and one frontend-facing XSUB socket. It mirrors
+/// the subset of Python's coordinator protocol needed by the Rust bootstrapped
+/// frontend: receive `(counts, wave, running)` publishes, ignore `counts`, and
+/// send `(exclude_engine_index, wave)` wakeup messages when the first request
+/// arrives while engines are paused.
+pub(crate) struct ExternalCoordinatorService {
+    state: Arc<CoordinatorState>,
+    command_rx: mpsc::UnboundedReceiver<CoordinatorCommand>,
+    socket: XSubSocket,
+}
+
+impl ExternalCoordinatorService {
+    fn new(
+        state: Arc<CoordinatorState>,
+        command_rx: mpsc::UnboundedReceiver<CoordinatorCommand>,
+        socket: XSubSocket,
+    ) -> Self {
+        Self {
+            state,
+            command_rx,
+            socket,
+        }
+    }
+
+    /// Apply one frontend-originated command to th
+    async fn handle_command(&mut self, command: CoordinatorCommand) -> Result<()> {
+        match command {
+            CoordinatorCommand::FirstRequest {
+                target_engine_id,
+                wave,
+            } => {
+                let target_engine_index = target_engine_id.engine_index().ok_or_else(|| {
+                    Error::UnsupportedCoordinatorEngineId {
+                        engine_id: target_engine_id.to_vec(),
+                    }
+                })?;
+                debug!(
+                    wave,
+                    exclude_engine_index = target_engine_index,
+                    "notifying external coordinator about first request while engines were paused"
+                );
+                let payload = encode_msgpack(&(target_engine_index, wave))?;
+                self.socket.send(ZmqMessage::from(payload)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply one publish received from the xsub socket containing a coordinator state update.
+    async fn handle_publish(&mut self, message: ZmqMessage) -> Result<()> {
+        let frames = message.into_vec();
+        if frames.len() != 1 {
+            bail_unexpected_coordinator_output!(
+                "received malformed external coordinator publish with {} frame(s)",
+                frames.len()
+            );
+        }
+
+        // Note: we ignore `counts` since the client doesn't track stats for routing decisions.
+        let (_counts, wave, running): (OpaqueValue, u32, bool) =
+            crate::protocol::decode_msgpack(&frames[0])?;
+        let mut state = self.state.lock();
+        state.current_wave = wave;
+        state.engines_running = running;
+        Ok(())
+    }
+
+    /// Drive the coordinator event loop until either side of the control plane
+    /// is closed or a fatal error is observed.
+    pub(crate) async fn run(mut self, inner: Arc<ClientInner>) {
+        let Err(error) = try {
+            loop {
+                tokio::select! {
+                    // Received frontend-originated command from the handle.
+                    command = self.command_rx.recv() => {
+                        let Some(command) = command else {
+                            warn!("external coordinator command channel closed, shutting down service");
+                            return;
+                        };
+                        self.handle_command(command).await?;
+                    }
+                    // Received publish from the external coordinator socket.
+                    publish = self.socket.recv() => {
+                        let publish = publish.map_err(Error::from)?;
+                        self.handle_publish(publish).await?;
+                    }
+                }
+            }
+        };
+
+        warn!(
+            error = %error.as_report(),
+            "external coordinator service exiting with error"
+        );
         inner.close_registries(Arc::new(error));
     }
 }
