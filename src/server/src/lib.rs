@@ -89,7 +89,9 @@ where
         result = build_state(&config) => result?,
         _ = &mut shutdown => return Ok(()),
     };
-    let listener = bind_listener(&config.listener_mode).await?;
+    let listener = bind_listener(&config.listener_mode)
+        .await
+        .context("failed to bind listener for OpenAI server")?;
     let bind_address = listener.local_addr()?;
     let model = state.model_id.clone();
     let app = build_router(state.clone());
