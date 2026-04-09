@@ -787,7 +787,7 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
                 ready_timeout: 300s,
             },
             coordinator_mode: External {
-                coordinator_address: "tcp://127.0.0.1:7000",
+                address: "tcp://127.0.0.1:7000",
             },
             model: "Qwen/Qwen3-0.6B",
             listener_mode: InheritedFd {
