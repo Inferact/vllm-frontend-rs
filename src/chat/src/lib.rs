@@ -41,6 +41,32 @@ use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;
 use vllm_text::{Prompt, TextLlm, TextRequest};
 
+/// Validate explicit parser override names without starting request processing.
+pub fn validate_parser_overrides(
+    tool_call_parser: Option<&str>,
+    reasoning_parser: Option<&str>,
+) -> Result<()> {
+    let tool_parser_factory = ToolParserFactory::new();
+    if let Some(name) = tool_call_parser
+        && !tool_parser_factory.registry().has_parser(name)
+    {
+        return Err(Error::ToolParserUnavailableByName {
+            name: name.to_string(),
+        });
+    }
+
+    let reasoning_parser_factory = ReasoningParserFactory::new();
+    if let Some(name) = reasoning_parser
+        && !reasoning_parser_factory.registry().has_parser(name)
+    {
+        return Err(Error::ReasoningParserUnavailableByName {
+            name: name.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 /// Structured chat facade above [`TextLlm`].
 ///
 /// This layer stays above raw text semantics: it takes care of chat-template rendering, exposes
@@ -142,5 +168,37 @@ impl ChatLlm {
     pub async fn shutdown(self) -> Result<()> {
         self.text.shutdown().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_parser_overrides;
+
+    #[test]
+    fn validate_parser_overrides_accepts_registered_names() {
+        validate_parser_overrides(Some("json"), Some("qwen3")).unwrap();
+    }
+
+    #[test]
+    fn validate_parser_overrides_rejects_unknown_tool_parser() {
+        let error =
+            validate_parser_overrides(Some("definitely_missing_tool_parser"), None).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::ToolParserUnavailableByName { ref name }
+            if name == "definitely_missing_tool_parser"
+        ));
+    }
+
+    #[test]
+    fn validate_parser_overrides_rejects_unknown_reasoning_parser() {
+        let error = validate_parser_overrides(None, Some("definitely_missing_reasoning_parser"))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::ReasoningParserUnavailableByName { ref name }
+            if name == "definitely_missing_reasoning_parser"
+        ));
     }
 }
