@@ -41,6 +41,18 @@ use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;
 use vllm_text::{Prompt, TextLlm, TextRequest};
 
+fn available_tool_parser_names(tool_parser_factory: &ToolParserFactory) -> Vec<String> {
+    let mut available_names = tool_parser_factory.list_parsers();
+    available_names.sort_unstable();
+    available_names
+}
+
+fn available_reasoning_parser_names(
+    reasoning_parser_factory: &ReasoningParserFactory,
+) -> Vec<String> {
+    reasoning_parser_factory.list_parsers()
+}
+
 /// Validate explicit parser override names without starting request processing.
 pub fn validate_parser_overrides(
     tool_call_parser: Option<&str>,
@@ -50,8 +62,10 @@ pub fn validate_parser_overrides(
     if let Some(name) = tool_call_parser
         && !tool_parser_factory.registry().has_parser(name)
     {
+        let available_names = available_tool_parser_names(&tool_parser_factory);
         return Err(Error::ToolParserUnavailableByName {
             name: name.to_string(),
+            available_names,
         });
     }
 
@@ -59,8 +73,10 @@ pub fn validate_parser_overrides(
     if let Some(name) = reasoning_parser
         && !reasoning_parser_factory.registry().has_parser(name)
     {
+        let available_names = available_reasoning_parser_names(&reasoning_parser_factory);
         return Err(Error::ReasoningParserUnavailableByName {
             name: name.to_string(),
+            available_names,
         });
     }
 
@@ -173,6 +189,8 @@ impl ChatLlm {
 
 #[cfg(test)]
 mod tests {
+    use thiserror_ext::AsReport;
+
     use super::validate_parser_overrides;
 
     #[test]
@@ -184,21 +202,15 @@ mod tests {
     fn validate_parser_overrides_rejects_unknown_tool_parser() {
         let error =
             validate_parser_overrides(Some("definitely_missing_tool_parser"), None).unwrap_err();
-        assert!(matches!(
-            error,
-            crate::Error::ToolParserUnavailableByName { ref name }
-            if name == "definitely_missing_tool_parser"
-        ));
+
+        expect_test::expect!["tool call parser `definitely_missing_tool_parser` is not registered (choose from: cohere, deepseek, deepseek31, glm45_moe, glm47_moe, json, kimik2, llama, minimax_m2, mistral, passthrough, pythonic, qwen, qwen_coder, step3)"].assert_eq(&error.to_report_string());
     }
 
     #[test]
     fn validate_parser_overrides_rejects_unknown_reasoning_parser() {
         let error = validate_parser_overrides(None, Some("definitely_missing_reasoning_parser"))
             .unwrap_err();
-        assert!(matches!(
-            error,
-            crate::Error::ReasoningParserUnavailableByName { ref name }
-            if name == "definitely_missing_reasoning_parser"
-        ));
+
+        expect_test::expect!["reasoning parser `definitely_missing_reasoning_parser` is not registered (choose from: base, cohere_cmd, deepseek_r1, glm45, kimi, minimax, nano_v3, qwen3, qwen3_thinking, step3)"].assert_eq(&error.to_report_string());
     }
 }
