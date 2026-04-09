@@ -1061,8 +1061,7 @@ dependencies = [
 [[package]]
 name = "fastokens"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aca43986686f3dff724cc465e0afcf883c361112474072b1d825058852b25f9c"
+source = "git+https://github.com/Atero-ai/fastokens.git?rev=ff12e3f555b30d08dbd3390ad6f61ff64b9ee78b#ff12e3f555b30d08dbd3390ad6f61ff64b9ee78b"
 dependencies = [
  "daachorse",
  "fancy-regex 0.17.0",
