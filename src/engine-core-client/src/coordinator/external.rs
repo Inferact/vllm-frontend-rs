@@ -114,10 +114,19 @@ impl ExternalCoordinatorService {
         }
 
         let update: CoordinatorStateUpdate = decode_msgpack(&frames[0])?;
+
         let mut state = self.state.lock();
-        let _ = update.counts;
+        let previous_wave = state.current_wave;
+        let previous_engines_running = state.engines_running;
         state.current_wave = update.wave;
         state.engines_running = update.engines_running;
+        debug!(
+            previous_wave,
+            wave = update.wave,
+            previous_engines_running,
+            engines_running = update.engines_running,
+            "applied external coordinator state update"
+        );
         Ok(())
     }
 
