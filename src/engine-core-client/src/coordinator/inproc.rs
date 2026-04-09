@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use thiserror_ext::AsReport;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -13,6 +14,22 @@ use crate::protocol::{
     ClassifiedEngineCoreOutputs, DpControlMessage, EngineCoreOutputs, EngineCoreRequestType,
     encode_msgpack,
 };
+
+/// Coordinator-to-engine `START_DP_WAVE` control payload encoded on the engine-facing
+/// coordinator socket.
+///
+/// This matches the msgpack tuple broadcast by Python `DPCoordinatorProc._send_start_wave`.
+///
+/// Original Python definition:
+/// <https://github.com/vllm-project/vllm/blob/694449050f8dac3d9853e97e518b4a43ec52106a/vllm/v1/engine/coordinator.py#L453-L459>
+#[derive(Debug, Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+struct StartDpWaveMessage {
+    /// DP wave number that all engines should start processing.
+    wave: u32,
+    /// Engine index that already received the triggering request and should not
+    /// receive an extra wakeup notification.
+    exclude_engine_index: u32,
+}
 
 /// Background half of the in-process coordinator.
 ///
@@ -40,7 +57,10 @@ impl InProcCoordinatorRunner {
 
     /// Broadcast Python-compatible `START_DP_WAVE` to all connected engines.
     async fn broadcast_start_wave(&mut self, wave: u32, exclude_engine_index: u32) -> Result<()> {
-        let payload = encode_msgpack(&(wave, exclude_engine_index))?;
+        let payload = encode_msgpack(&StartDpWaveMessage {
+            wave,
+            exclude_engine_index,
+        })?;
         self.coordinator_input
             .send(
                 ZmqMessage::try_from(vec![
