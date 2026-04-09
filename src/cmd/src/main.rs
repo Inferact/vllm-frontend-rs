@@ -92,23 +92,29 @@ async fn main() -> Result<()> {
                 reason
             });
 
-            let serve_result = if args.headless {
+            let serve_task = if args.headless {
                 info!("running managed Python headless engine without Rust frontend");
-                let _ = shutdown_signal_rx.await;
-                Ok(())
+                tokio::spawn(async move {
+                    let _ = shutdown_signal_rx.await;
+                    Ok(())
+                })
             } else {
                 let config = args.to_frontend_config(handshake_address);
-                vllm_server::serve(config, shutdown_signal_rx.map(|_| ()))
-                    .await
-                    .inspect(|_| info!("OpenAI server shut down gracefully"))
+                tokio::spawn(async move {
+                    let result = vllm_server::serve(config, shutdown_signal_rx.map(|_| ())).await;
+                    if result.is_ok() {
+                        info!("OpenAI server shut down gracefully");
+                    }
+                    result
+                })
             };
-
-            let shutdown_result = engine.shutdown().await;
             let shutdown_reason = shutdown_task.await.context("shutdown task join failed")?;
 
-            serve_result?;
-            shutdown_result?;
-            info!("managed Python headless engine shut down gracefully");
+            // Shutdown begins. Terminate the managed engine first.
+            engine.shutdown().await?;
+            info!("managed engine shut down gracefully");
+            // Wait for the API server to shut down gracefully by draining in-flight requests.
+            serve_task.await.context("serve task join failed")??;
 
             match shutdown_reason {
                 ShutdownReason::Signal => Ok(()),
