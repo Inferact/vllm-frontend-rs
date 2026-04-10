@@ -30,6 +30,12 @@ pub fn to_text_request(
         )));
     }
 
+    if req.truncate_prompt_tokens != 0 {
+        return Err(Status::invalid_argument(
+            "truncate_prompt_tokens is not supported",
+        ));
+    }
+
     let prompt = match req.prompt {
         Some(pb::generate_request::Prompt::Text(text)) => Prompt::Text(text),
         Some(pb::generate_request::Prompt::TokenIds(ids)) => Prompt::TokenIds(ids.ids),
@@ -92,6 +98,14 @@ fn build_sampling_params(
 
     // RandomSampling
     if let Some(s) = sampling {
+        // num_sequences (n > 1) is not supported yet by the TextLlm layer; the response
+        // path also hardcodes SequenceOutput.index = 0, so accepting >1 would silently
+        // truncate output cardinality. Reject explicitly.
+        if s.num_sequences > 1 {
+            return Err(Status::invalid_argument(
+                "num_sequences > 1 is not supported",
+            ));
+        }
         if s.temperature != 0.0 {
             params.temperature = Some(s.temperature);
         }
@@ -105,7 +119,6 @@ fn build_sampling_params(
             params.min_p = Some(s.min_p);
         }
         params.seed = s.seed.map(|v| v as i64);
-        // TODO: num_sequences (n > 1) is not supported yet by the TextLlm layer.
     }
 
     // DecodingParameters
@@ -150,6 +163,18 @@ fn build_sampling_params(
             params.logprob_token_ids = token_ids;
         }
         if r.prompt_logprobs {
+            // The engine-core protocol has only one shared `logprob_token_ids` field
+            // for output and prompt logprobs, so a per-token-id selector for prompt
+            // candidates can't be honored independently. Reject it instead of silently
+            // dropping the list.
+            if matches!(
+                r.prompt_candidates.as_ref().and_then(|c| c.select.as_ref()),
+                Some(pb::candidate_tokens::Select::TokenIds(_))
+            ) {
+                return Err(Status::invalid_argument(
+                    "prompt_candidates token_ids selector is not supported",
+                ));
+            }
             let (count, _) = candidate_logprob_spec(r.prompt_candidates.as_ref());
             params.prompt_logprobs = Some(count);
         }
