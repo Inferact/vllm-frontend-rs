@@ -13,7 +13,9 @@ use async_openai::types::chat::{
 };
 use futures::StreamExt as _;
 use serial_test::serial;
-use vllm_chat::{ChatBackend, ChatLlm, ChatRequest, ChatTextBackend};
+use vllm_chat::{
+    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DynChatRenderer,
+};
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
 };
@@ -175,7 +177,13 @@ impl TextBackend for FakeChatBackend {
 }
 
 impl ChatBackend for FakeChatBackend {
-    fn apply_chat_template(&self, request: &ChatRequest) -> vllm_chat::Result<String> {
+    fn chat_renderer(&self) -> DynChatRenderer {
+        Arc::new(self.clone())
+    }
+}
+
+impl ChatRenderer for FakeChatBackend {
+    fn render(&self, request: &ChatRequest) -> vllm_chat::Result<String> {
         let mut prompt = String::new();
         for message in &request.messages {
             prompt.push_str(message.role().as_str());

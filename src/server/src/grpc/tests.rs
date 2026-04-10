@@ -6,7 +6,9 @@ use std::task::{Context, Poll};
 use futures::StreamExt as _;
 use serial_test::serial;
 use tonic::transport::Server as TonicServer;
-use vllm_chat::{ChatBackend, ChatLlm, ChatRequest, ChatTextBackend};
+use vllm_chat::{
+    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DynChatRenderer,
+};
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
 };
@@ -169,7 +171,13 @@ impl TextBackend for FakeTextBackend {
 }
 
 impl ChatBackend for FakeTextBackend {
-    fn apply_chat_template(&self, _request: &ChatRequest) -> vllm_chat::Result<String> {
+    fn chat_renderer(&self) -> DynChatRenderer {
+        Arc::new(self.clone())
+    }
+}
+
+impl ChatRenderer for FakeTextBackend {
+    fn render(&self, _request: &ChatRequest) -> vllm_chat::Result<String> {
         Ok(String::new())
     }
 }

@@ -20,6 +20,8 @@ use anyhow::{Context as _, Result};
 use axum::serve::ListenerExt as _;
 pub use config::{Config, CoordinatorMode, HttpListenerMode};
 use futures::FutureExt as _;
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::either::Either;
 use tonic::transport::Server as TonicServer;
 use tracing::{info, trace};
@@ -108,19 +110,27 @@ where
     let model = state.model_id.clone();
     let app = build_router(state.clone());
 
-    // Optionally start the gRPC Generate server on a separate port.
-    let grpc_task = config.grpc_port.map(|grpc_port| {
+    // Optionally start the gRPC Generate server on a separate port. Bind the listener
+    // synchronously here so bind errors (port in use, permission denied, ...) surface
+    // before we start the HTTP server, rather than being deferred until shutdown.
+    let grpc_task = if let Some(grpc_port) = config.grpc_port {
         let addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
+        let grpc_listener = TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("failed to bind gRPC listener on {addr}"))?;
         let shutdown = shutdown.clone();
         let svc = grpc::GenerateServer::new(grpc::GenerateServiceImpl::new(state.clone()));
         info!(%addr, "starting gRPC server");
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
+            let incoming = TcpListenerStream::new(grpc_listener);
             TonicServer::builder()
                 .add_service(svc)
-                .serve_with_shutdown(addr, shutdown)
+                .serve_with_incoming_shutdown(incoming, shutdown)
                 .await
-        })
-    });
+        }))
+    } else {
+        None
+    };
 
     info!(%bind_address, %model, "starting OpenAI server");
 
