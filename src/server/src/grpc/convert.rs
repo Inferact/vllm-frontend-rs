@@ -15,7 +15,21 @@ use super::pb;
 // ========================================================================================
 
 /// Convert a gRPC `GenerateRequest` into the internal `TextRequest`.
-pub fn to_text_request(req: pb::GenerateRequest, stream: bool) -> Result<TextRequest, Status> {
+///
+/// If `req.model` is non-empty, it must match `configured_model`; otherwise the request is
+/// rejected with `NotFound`. An empty string is treated as "unset" (proto3 default) and accepted.
+pub fn to_text_request(
+    req: pb::GenerateRequest,
+    stream: bool,
+    configured_model: &str,
+) -> Result<TextRequest, Status> {
+    if !req.model.is_empty() && req.model != configured_model {
+        return Err(Status::not_found(format!(
+            "model `{}` not found",
+            req.model
+        )));
+    }
+
     let prompt = match req.prompt {
         Some(pb::generate_request::Prompt::Text(text)) => Prompt::Text(text),
         Some(pb::generate_request::Prompt::TokenIds(ids)) => Prompt::TokenIds(ids.ids),

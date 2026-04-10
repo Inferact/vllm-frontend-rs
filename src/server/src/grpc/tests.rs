@@ -526,6 +526,90 @@ async fn unary_generate_with_sampling_params() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
+async fn unary_generate_rejects_wrong_model() {
+    let (mut client, server_task, _engine_task) =
+        grpc_test_server(b"engine-grpc-wrong-model", default_stream_output_specs()).await;
+
+    let status = client
+        .generate(pb::GenerateRequest {
+            request_id: "test-wrong-model".to_string(),
+            model: "other-model".to_string(),
+            prompt: Some(pb::generate_request::Prompt::Text("hi".to_string())),
+            stopping: Some(pb::StoppingCriteria {
+                max_new_tokens: 10,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect_err("should fail with wrong model");
+
+    assert_eq!(status.code(), tonic::Code::NotFound);
+    assert!(status.message().contains("other-model"));
+
+    server_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn streaming_generate_rejects_wrong_model() {
+    let (mut client, server_task, _engine_task) = grpc_test_server(
+        b"engine-grpc-stream-wrong-model",
+        default_stream_output_specs(),
+    )
+    .await;
+
+    let status = client
+        .generate_stream(pb::GenerateRequest {
+            request_id: "test-stream-wrong-model".to_string(),
+            model: "other-model".to_string(),
+            prompt: Some(pb::generate_request::Prompt::Text("hi".to_string())),
+            stopping: Some(pb::StoppingCriteria {
+                max_new_tokens: 10,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect_err("should fail with wrong model");
+
+    assert_eq!(status.code(), tonic::Code::NotFound);
+    assert!(status.message().contains("other-model"));
+
+    server_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn unary_generate_accepts_empty_model() {
+    let (mut client, server_task, engine_task) =
+        grpc_test_server(b"engine-grpc-empty-model", default_stream_output_specs()).await;
+
+    // Empty `model` (proto3 default) is treated as "unset" and should be accepted.
+    let response = client
+        .generate(pb::GenerateRequest {
+            request_id: "test-empty-model".to_string(),
+            model: String::new(),
+            prompt: Some(pb::generate_request::Prompt::Text("hi".to_string())),
+            stopping: Some(pb::StoppingCriteria {
+                max_new_tokens: 10,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect("unary generate with empty model")
+        .into_inner();
+
+    let outputs = response.outputs.expect("outputs present");
+    assert_eq!(outputs.text, "hi");
+
+    engine_task.await.expect("mock engine task");
+    server_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn unary_generate_output_text_defaults_to_true() {
     let (mut client, server_task, engine_task) =
         grpc_test_server(b"engine-grpc-default-text", default_stream_output_specs()).await;

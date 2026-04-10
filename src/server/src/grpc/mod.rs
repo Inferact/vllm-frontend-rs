@@ -49,7 +49,7 @@ impl pb::generate_server::Generate for GenerateServiceImpl {
     ) -> Result<Response<pb::GenerateResponse>, Status> {
         let proto_req = request.into_inner();
         let response_opts = ResponseOpts::from_proto(proto_req.response.as_ref());
-        let text_request = convert::to_text_request(proto_req, false)?;
+        let text_request = convert::to_text_request(proto_req, false, &self.state.model_id)?;
 
         let request_id = text_request.request_id.clone();
         info!(%request_id, "grpc generate (unary)");
@@ -97,7 +97,7 @@ impl pb::generate_server::Generate for GenerateServiceImpl {
     ) -> Result<Response<Self::GenerateStreamStream>, Status> {
         let proto_req = request.into_inner();
         let response_opts = ResponseOpts::from_proto(proto_req.response.as_ref());
-        let text_request = convert::to_text_request(proto_req, true)?;
+        let text_request = convert::to_text_request(proto_req, true, &self.state.model_id)?;
 
         let request_id = text_request.request_id.clone();
         info!(%request_id, "grpc generate (stream)");
