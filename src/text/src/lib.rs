@@ -56,10 +56,7 @@ impl TextLlm {
     pub fn new(llm: Llm, backend: DynTextBackend) -> Self {
         // Prefer the engine-reported max_model_len because it reflects the post-profiling,
         // auto-fitted KV cache limit rather than static frontend metadata.
-        let max_model_len = llm
-            .engine_core_client()
-            .max_model_len()
-            .map(|len| len as u32);
+        let max_model_len = llm.engine_core_client().max_model_len();
 
         Self {
             llm,
