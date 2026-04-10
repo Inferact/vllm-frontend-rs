@@ -31,7 +31,7 @@ impl HfChatRenderer {
     ///
     /// If the request carries a per-request `chat_template` override, a temporary template is
     /// compiled from that string and used instead of the model's default.
-    pub fn apply_chat_template(&self, request: &ChatRequest) -> Result<String> {
+    fn apply_chat_template(&self, request: &ChatRequest) -> Result<String> {
         if let Some(override_template) = &request.chat_options.chat_template {
             let overridden =
                 Self::new(Some(override_template.clone()), self.special_tokens.clone())?;
@@ -232,7 +232,7 @@ mod tests {
     use crate::request::{
         ChatContentPart, ChatMessage, ChatRequest, ChatRole, ChatTool, ChatToolChoice,
     };
-    use crate::{AssistantContentBlock, Error, Result};
+    use crate::{AssistantContentBlock, ChatRenderer, Error, Result};
 
     const QWEN3_0_6B_TEMPLATE: &str = include_str!("../../tests/templates/qwen3.jinja");
 
@@ -245,7 +245,7 @@ mod tests {
     }
 
     fn render(template: Option<&str>, request: &ChatRequest) -> Result<String> {
-        HfChatRenderer::new(template.map(str::to_owned), None)?.apply_chat_template(request)
+        HfChatRenderer::new(template.map(str::to_owned), None)?.render(request)
     }
 
     #[test]
