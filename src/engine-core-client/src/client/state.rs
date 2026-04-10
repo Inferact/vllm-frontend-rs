@@ -57,14 +57,18 @@ impl EngineRoutingState {
     ///
     /// If real scheduler stats exist, use `waiting * 4 + running`, plus any local optimistic
     /// waiting overlay. Otherwise, fall back to treating the frontend's in-flight count as the
-    /// waiting count and `0` as running.
+    /// waiting count and `0` as running, without re-applying the optimistic overlay on top.
     fn routing_score(&self) -> usize {
-        let (waiting, running) = self
-            .last_scheduler_stats
-            .map(|stats| (stats.waiting, stats.running))
-            .unwrap_or((self.inflight, 0));
+        let (waiting, running, overlay) = match self.last_scheduler_stats {
+            Some(stats) => (
+                stats.waiting,
+                stats.running,
+                self.optimistic_waiting_overlay,
+            ),
+            None => (self.inflight, 0, 0),
+        };
 
-        (waiting + self.optimistic_waiting_overlay) * 4 + running
+        (waiting + overlay) * 4 + running
     }
 
     /// Replace the local routing view with a fresh real scheduler snapshot.
@@ -322,7 +326,7 @@ impl UtilityRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestRegistry, UtilityRegistry};
+    use super::{EngineRoutingState, RequestRegistry, UtilityRegistry};
     use crate::EngineId;
     use crate::client::state::EngineLoadSnapshot;
     use crate::protocol::{EngineCoreFinishReason, EngineCoreOutput, UtilityOutput};
@@ -431,6 +435,17 @@ mod tests {
         assert_eq!(chosen_0, engine_0);
         assert_eq!(chosen_1, engine_1);
         assert_eq!(chosen_0_again, engine_0);
+    }
+
+    #[test]
+    fn routing_score_does_not_double_count_overlay_before_stats_arrive() {
+        let state = EngineRoutingState {
+            inflight: 3,
+            last_scheduler_stats: None,
+            optimistic_waiting_overlay: 2,
+        };
+
+        assert_eq!(state.routing_score(), 12);
     }
 
     #[test]
