@@ -276,11 +276,11 @@ pub fn to_sequence_output(
         logprobs: lp_values,
         ranks: rank_values,
         candidate_tokens: candidates,
-        finish_info: finished.map(to_finish_info),
+        finish_info: finished.map(|f| to_finish_info(f, token_ids)),
     }
 }
 
-fn to_finish_info(finished: &Finished) -> pb::FinishInfo {
+fn to_finish_info(finished: &Finished, token_ids: &[u32]) -> pb::FinishInfo {
     use pb::finish_info::FinishReason as PbFinishReason;
 
     let (finish_reason, stop_reason) = match &finished.finish_reason {
@@ -292,7 +292,14 @@ fn to_finish_info(finished: &Finished) -> pb::FinishInfo {
                 Some(StopReason::Text(s)) => {
                     Some(pb::finish_info::StopReason::StopString(s.clone()))
                 }
-                None => Some(pb::finish_info::StopReason::EosTokenId(0)),
+                // EOS-driven stop: engine-core matched the primary EOS token id but did not
+                // echo it back as a `stop_reason`. The matched token is, by construction, the
+                // last token of the terminal output batch (see vllm's `check_stop` in
+                // vllm/v1/core/sched/utils.py), so we recover it from there.
+                None => token_ids
+                    .last()
+                    .copied()
+                    .map(pb::finish_info::StopReason::EosTokenId),
             };
             (PbFinishReason::Stop as i32, sr)
         }
@@ -459,5 +466,103 @@ impl ResponseOpts {
                 ..Default::default()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use vllm_engine_core_client::protocol::StopReason;
+    use vllm_text::{FinishReason, Finished};
+
+    use super::pb::finish_info::{FinishReason as PbFinishReason, StopReason as PbStopReason};
+    use super::{ResponseOpts, to_finish_info, to_sequence_output};
+
+    fn finished(reason: FinishReason) -> Finished {
+        Finished {
+            prompt_token_count: 0,
+            output_token_count: 0,
+            finish_reason: reason,
+            kv_transfer_params: None,
+        }
+    }
+
+    #[test]
+    fn eos_stop_reports_last_output_token_as_eos_id() {
+        let fin = finished(FinishReason::Stop(None));
+        let token_ids = [1_u32, 2, 3, 151643];
+
+        let info = to_finish_info(&fin, &token_ids);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Stop as i32);
+        assert_eq!(info.stop_reason, Some(PbStopReason::EosTokenId(151643)));
+    }
+
+    #[test]
+    fn eos_stop_with_empty_token_ids_leaves_stop_reason_unset() {
+        let fin = finished(FinishReason::Stop(None));
+
+        let info = to_finish_info(&fin, &[]);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Stop as i32);
+        assert_eq!(info.stop_reason, None);
+    }
+
+    #[test]
+    fn explicit_stop_token_id_is_preserved() {
+        let fin = finished(FinishReason::Stop(Some(StopReason::TokenId(42))));
+        // Terminal token list should be ignored when an explicit stop reason is present.
+        let info = to_finish_info(&fin, &[7, 42]);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Stop as i32);
+        assert_eq!(info.stop_reason, Some(PbStopReason::StopTokenId(42)));
+    }
+
+    #[test]
+    fn explicit_stop_string_is_preserved() {
+        let fin = finished(FinishReason::Stop(Some(StopReason::Text("</stop>".into()))));
+
+        let info = to_finish_info(&fin, &[1, 2, 3]);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Stop as i32);
+        assert_eq!(
+            info.stop_reason,
+            Some(PbStopReason::StopString("</stop>".into()))
+        );
+    }
+
+    #[test]
+    fn length_finish_has_no_stop_reason() {
+        let fin = finished(FinishReason::Length);
+
+        let info = to_finish_info(&fin, &[1, 2, 3]);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Length as i32);
+        assert_eq!(info.stop_reason, None);
+    }
+
+    #[test]
+    fn abort_finish_is_mapped_to_aborted() {
+        let fin = finished(FinishReason::Abort);
+
+        let info = to_finish_info(&fin, &[]);
+
+        assert_eq!(info.finish_reason, PbFinishReason::Aborted as i32);
+        assert_eq!(info.stop_reason, None);
+    }
+
+    #[test]
+    fn to_sequence_output_threads_token_ids_into_eos_id() {
+        let fin = finished(FinishReason::Stop(None));
+        let opts = ResponseOpts {
+            output_text: true,
+            output_token_ids: true,
+            ..Default::default()
+        };
+
+        let out = to_sequence_output("hello", &[10, 20, 30], None, Some(&fin), &opts);
+
+        let finish = out.finish_info.expect("finish_info should be present");
+        assert_eq!(finish.finish_reason, PbFinishReason::Stop as i32);
+        assert_eq!(finish.stop_reason, Some(PbStopReason::EosTokenId(30)));
     }
 }
