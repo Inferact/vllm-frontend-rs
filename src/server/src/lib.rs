@@ -55,7 +55,7 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
     .await
     .context("failed to connect to engine core")?;
 
-    let llm = Llm::new(client).with_disable_log_stats(config.disable_log_stats);
+    let llm = Llm::new(client).with_log_stats(!config.disable_log_stats);
     let text = TextLlm::new(llm, text_backend);
 
     let mut chat = ChatLlm::new(text, chat_backend);
