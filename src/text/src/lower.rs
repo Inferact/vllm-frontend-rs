@@ -89,12 +89,15 @@ pub fn lower_sampling_params(
         bad_words,
         logprob_token_ids,
         structured_outputs,
+        skip_reading_prefix_cache,
         vllm_xargs,
     } = sampling_params;
 
     // Mirrors the model-generation-config inheritance used by vLLM's OpenAI chat path:
     // https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/entrypoints/openai/chat_completion/protocol.py#L424-L450
-    let temperature = temperature.or(default_temperature).unwrap_or(1.0);
+    // If neither the caller nor the model provides a value, fall back to a neutral/disabled
+    // setting — 0.0 for temperature means greedy sampling.
+    let temperature = temperature.or(default_temperature).unwrap_or(0.0);
     let top_p = top_p.or(default_top_p).unwrap_or(1.0);
     let top_k = top_k.or(default_top_k).unwrap_or(0);
     let min_p = min_p.or(default_min_p).unwrap_or(0.0);
@@ -138,6 +141,7 @@ pub fn lower_sampling_params(
         bad_words_token_ids: tokenize_bad_words(bad_words.as_deref(), tokenizer)?,
         structured_outputs,
         logprob_token_ids,
+        skip_reading_prefix_cache,
         extra_args: vllm_xargs,
     })
 }
@@ -293,7 +297,7 @@ mod tests {
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 1.0,
+                temperature: 0.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,
@@ -320,6 +324,7 @@ mod tests {
                 bad_words_token_ids: None,
                 structured_outputs: None,
                 logprob_token_ids: None,
+                skip_reading_prefix_cache: None,
                 extra_args: None,
             }
         "#]]
@@ -342,7 +347,7 @@ mod tests {
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 1.0,
+                temperature: 0.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,
@@ -365,6 +370,7 @@ mod tests {
                 bad_words_token_ids: None,
                 structured_outputs: None,
                 logprob_token_ids: None,
+                skip_reading_prefix_cache: None,
                 extra_args: None,
             }
         "#]]
@@ -471,7 +477,7 @@ mod tests {
 
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 1.0,
+                temperature: 0.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,
@@ -502,6 +508,7 @@ mod tests {
                 bad_words_token_ids: None,
                 structured_outputs: None,
                 logprob_token_ids: None,
+                skip_reading_prefix_cache: None,
                 extra_args: None,
             }
         "#]]
@@ -559,6 +566,7 @@ mod tests {
                 bad_words_token_ids: None,
                 structured_outputs: None,
                 logprob_token_ids: None,
+                skip_reading_prefix_cache: None,
                 extra_args: None,
             }
         "#]]
@@ -637,6 +645,7 @@ mod tests {
                 bad_words_token_ids: None,
                 structured_outputs: None,
                 logprob_token_ids: None,
+                skip_reading_prefix_cache: None,
                 extra_args: None,
             }
         "#]]

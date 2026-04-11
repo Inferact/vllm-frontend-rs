@@ -54,15 +54,22 @@ pub fn to_text_request(
     let response = req.response.as_ref();
     let kv = req.kv.as_ref();
 
-    let mut sampling_params = build_sampling_params(sampling, decoding, stopping, response)?;
+    let mut sampling_params =
+        build_sampling_params(req.temperature, sampling, decoding, stopping, response)?;
 
-    // Thread kv_transfer_params through vllm_xargs, matching the HTTP route convention.
-    if let Some(kv_struct) = kv.and_then(|k| k.kv_transfer_params.as_ref()) {
-        let kv_json = proto_struct_to_json(kv_struct);
-        let map = sampling_params
-            .vllm_xargs
-            .get_or_insert_with(Default::default);
-        map.insert("kv_transfer_params".to_string(), kv_json);
+    // Thread KVCacheParameters → SamplingParams fields.
+    if let Some(kv) = kv {
+        // Thread kv_transfer_params through vllm_xargs, matching the HTTP route convention.
+        if let Some(kv_struct) = kv.kv_transfer_params.as_ref() {
+            let kv_json = proto_struct_to_json(kv_struct);
+            let map = sampling_params
+                .vllm_xargs
+                .get_or_insert_with(Default::default);
+            map.insert("kv_transfer_params".to_string(), kv_json);
+        }
+        if kv.bypass_prefix_cache {
+            sampling_params.skip_reading_prefix_cache = Some(true);
+        }
     }
 
     let decode_options = TextDecodeOptions {
@@ -89,14 +96,20 @@ pub fn to_text_request(
 }
 
 fn build_sampling_params(
+    temperature: Option<f32>,
     sampling: Option<&pb::RandomSampling>,
     decoding: Option<&pb::DecodingParameters>,
     stopping: Option<&pb::StoppingCriteria>,
     response: Option<&pb::ResponseOptions>,
 ) -> Result<SamplingParams, Status> {
-    let mut params = SamplingParams::default();
+    // Temperature is a top-level GenerateRequest field. `None` leaves the decision to the
+    // lowering stage, which will fall back to the model-provided default or finally to 0
+    // (greedy).
+    let mut params = SamplingParams { temperature, ..SamplingParams::default() };
 
-    // RandomSampling
+    // RandomSampling: for every remaining sampling field the protobuf default (`0`) is
+    // treated as "unset" and leaves the resolved value to the lowering stage, which falls
+    // back to the model-provided default or a neutral/disabled value otherwise.
     if let Some(s) = sampling {
         // num_sequences (n > 1) is not supported yet by the TextLlm layer; the response
         // path also hardcodes SequenceOutput.index = 0, so accepting >1 would silently
@@ -105,9 +118,6 @@ fn build_sampling_params(
             return Err(Status::invalid_argument(
                 "num_sequences > 1 is not supported",
             ));
-        }
-        if s.temperature != 0.0 {
-            params.temperature = Some(s.temperature);
         }
         if s.top_k != 0 {
             params.top_k = Some(s.top_k);
@@ -497,10 +507,77 @@ impl ResponseOpts {
 #[cfg(test)]
 mod tests {
     use vllm_engine_core_client::protocol::StopReason;
-    use vllm_text::{FinishReason, Finished};
+    use vllm_text::{FinishReason, Finished, Prompt};
 
     use super::pb::finish_info::{FinishReason as PbFinishReason, StopReason as PbStopReason};
-    use super::{ResponseOpts, to_finish_info, to_sequence_output};
+    use super::{ResponseOpts, pb, to_finish_info, to_sequence_output, to_text_request};
+
+    fn base_request() -> pb::GenerateRequest {
+        pb::GenerateRequest {
+            request_id: "req".to_string(),
+            model: "test-model".to_string(),
+            prompt: Some(pb::generate_request::Prompt::Text("hi".to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn temperature_propagates_from_top_level_request_field() {
+        let req = pb::GenerateRequest {
+            temperature: Some(0.7),
+            ..base_request()
+        };
+        let text = to_text_request(req, false, "test-model").expect("convert ok");
+        assert_eq!(text.sampling_params.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn unset_temperature_leaves_sampling_params_temperature_none() {
+        let text = to_text_request(base_request(), false, "test-model").expect("convert ok");
+        // `None` defers the fallback decision (model default → 0.0) to the lowering stage.
+        assert_eq!(text.sampling_params.temperature, None);
+    }
+
+    #[test]
+    fn protobuf_default_seed_is_treated_as_unset() {
+        let req = pb::GenerateRequest {
+            sampling: Some(pb::RandomSampling {
+                seed: 0,
+                ..Default::default()
+            }),
+            ..base_request()
+        };
+        let text = to_text_request(req, false, "test-model").expect("convert ok");
+        assert_eq!(text.sampling_params.seed, None);
+    }
+
+    #[test]
+    fn bypass_prefix_cache_maps_to_skip_reading_prefix_cache() {
+        let req = pb::GenerateRequest {
+            kv: Some(pb::KvCacheParameters {
+                bypass_prefix_cache: true,
+                ..Default::default()
+            }),
+            ..base_request()
+        };
+        let text = to_text_request(req, false, "test-model").expect("convert ok");
+        assert_eq!(text.sampling_params.skip_reading_prefix_cache, Some(true));
+    }
+
+    #[test]
+    fn bypass_prefix_cache_false_leaves_field_unset() {
+        let req = pb::GenerateRequest {
+            kv: Some(pb::KvCacheParameters {
+                bypass_prefix_cache: false,
+                ..Default::default()
+            }),
+            ..base_request()
+        };
+        let text = to_text_request(req, false, "test-model").expect("convert ok");
+        assert_eq!(text.sampling_params.skip_reading_prefix_cache, None);
+        // Prompt conversion still succeeds and reaches the expected variant.
+        assert!(matches!(text.prompt, Prompt::Text(s) if s == "hi"));
+    }
 
     fn finished(reason: FinishReason) -> Finished {
         Finished {

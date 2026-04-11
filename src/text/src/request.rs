@@ -85,6 +85,10 @@ pub struct SamplingParams {
     pub logprob_token_ids: Option<Vec<u32>>,
     /// Parameters for configuring structured outputs (guided decoding).
     pub structured_outputs: Option<StructuredOutputsParams>,
+    /// If true, bypass reads from the prefix cache for this request (the prompt will not
+    /// reuse cached KV blocks from earlier requests, though newly computed blocks may still
+    /// populate the cache). `None` defers to engine-core defaults.
+    pub skip_reading_prefix_cache: Option<bool>,
     /// Additional request parameters for custom extensions.
     pub vllm_xargs: Option<HashMap<String, Value>>,
 }
@@ -112,6 +116,7 @@ impl Default for SamplingParams {
             bad_words: None,
             logprob_token_ids: None,
             structured_outputs: None,
+            skip_reading_prefix_cache: None,
             vllm_xargs: None,
         }
     }

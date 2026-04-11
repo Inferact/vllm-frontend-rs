@@ -261,6 +261,10 @@ pub struct EngineCoreSamplingParams {
     /// sampled/scored token. Mutually exclusive with the `logprobs` count field in practice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logprob_token_ids: Option<Vec<u32>>,
+    /// If `Some(true)`, the request will not attempt to read from the prefix cache; newly
+    /// computed blocks may still populate the cache. `None` defers to engine-core defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reading_prefix_cache: Option<bool>,
     /// Additional request parameters for custom extensions (from `vllm_xargs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<HashMap<String, serde_json::Value>>,
@@ -290,6 +294,7 @@ impl EngineCoreSamplingParams {
             bad_words_token_ids: None,
             structured_outputs: None,
             logprob_token_ids: None,
+            skip_reading_prefix_cache: None,
             extra_args: None,
         }
     }
