@@ -49,7 +49,7 @@ message RandomSampling {
   uint32 top_k = 2;  // 0 means default
   float top_p = 3;  // 0 means default
   float min_p = 4;  // 0 means default
-  uint64 seed = 5;
+  optional int64 seed = 5;
 }
 
 message DecodingParameters {

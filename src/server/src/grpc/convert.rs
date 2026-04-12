@@ -102,10 +102,14 @@ fn build_sampling_params(
     stopping: Option<&pb::StoppingCriteria>,
     response: Option<&pb::ResponseOptions>,
 ) -> Result<SamplingParams, Status> {
-    // Temperature is a top-level GenerateRequest field. `None` leaves the decision to the
-    // lowering stage, which will fall back to the model-provided default or finally to 0
-    // (greedy).
-    let mut params = SamplingParams { temperature, ..SamplingParams::default() };
+    // Temperature is a top-level GenerateRequest field. Default to greedy (0.0) for the gRPC
+    // API when the caller does not specify a value. This differs from the HTTP/OpenAI API
+    // (which defaults to 1.0) and matches the convention of programmatic generation APIs.
+    let temperature = temperature.or(Some(0.0));
+    let mut params = SamplingParams {
+        temperature,
+        ..SamplingParams::default()
+    };
 
     // RandomSampling: for every remaining sampling field the protobuf default (`0`) is
     // treated as "unset" and leaves the resolved value to the lowering stage, which falls
@@ -128,7 +132,7 @@ fn build_sampling_params(
         if s.min_p != 0.0 {
             params.min_p = Some(s.min_p);
         }
-        params.seed = s.seed.map(|v| v as i64);
+        params.seed = s.seed;
     }
 
     // DecodingParameters
@@ -532,23 +536,36 @@ mod tests {
     }
 
     #[test]
-    fn unset_temperature_leaves_sampling_params_temperature_none() {
+    fn unset_temperature_defaults_to_greedy() {
         let text = to_text_request(base_request(), false, "test-model").expect("convert ok");
-        // `None` defers the fallback decision (model default → 0.0) to the lowering stage.
-        assert_eq!(text.sampling_params.temperature, None);
+        // The gRPC API defaults to greedy (0.0) when temperature is not specified.
+        assert_eq!(text.sampling_params.temperature, Some(0.0));
     }
 
     #[test]
-    fn protobuf_default_seed_is_treated_as_unset() {
+    fn absent_seed_is_none() {
         let req = pb::GenerateRequest {
             sampling: Some(pb::RandomSampling {
-                seed: 0,
+                seed: None,
                 ..Default::default()
             }),
             ..base_request()
         };
         let text = to_text_request(req, false, "test-model").expect("convert ok");
         assert_eq!(text.sampling_params.seed, None);
+    }
+
+    #[test]
+    fn zero_seed_is_valid() {
+        let req = pb::GenerateRequest {
+            sampling: Some(pb::RandomSampling {
+                seed: Some(0),
+                ..Default::default()
+            }),
+            ..base_request()
+        };
+        let text = to_text_request(req, false, "test-model").expect("convert ok");
+        assert_eq!(text.sampling_params.seed, Some(0));
     }
 
     #[test]

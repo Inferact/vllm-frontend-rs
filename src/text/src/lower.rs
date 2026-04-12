@@ -95,9 +95,9 @@ pub fn lower_sampling_params(
 
     // Mirrors the model-generation-config inheritance used by vLLM's OpenAI chat path:
     // https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/entrypoints/openai/chat_completion/protocol.py#L424-L450
-    // If neither the caller nor the model provides a value, fall back to a neutral/disabled
-    // setting — 0.0 for temperature means greedy sampling.
-    let temperature = temperature.or(default_temperature).unwrap_or(0.0);
+    // If neither the caller nor the model provides a value, fall back to 1.0 — the default
+    // used by the Python vLLM OpenAI-compatible API (via `_DEFAULT_SAMPLING_PARAMS`).
+    let temperature = temperature.or(default_temperature).unwrap_or(1.0);
     let top_p = top_p.or(default_top_p).unwrap_or(1.0);
     let top_k = top_k.or(default_top_k).unwrap_or(0);
     let min_p = min_p.or(default_min_p).unwrap_or(0.0);
@@ -297,7 +297,7 @@ mod tests {
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 0.0,
+                temperature: 1.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,
@@ -347,7 +347,7 @@ mod tests {
         let params = prepared.generate_request.sampling_params;
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 0.0,
+                temperature: 1.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,
@@ -477,7 +477,7 @@ mod tests {
 
         expect_test::expect![[r#"
             EngineCoreSamplingParams {
-                temperature: 0.0,
+                temperature: 1.0,
                 top_p: 1.0,
                 top_k: 0,
                 seed: None,

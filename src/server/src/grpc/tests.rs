@@ -503,7 +503,7 @@ async fn unary_generate_with_sampling_params() {
             sampling: Some(pb::RandomSampling {
                 top_k: 50,
                 top_p: 0.9,
-                seed: 42,
+                seed: Some(42),
                 ..Default::default()
             }),
             stopping: Some(pb::StoppingCriteria {
