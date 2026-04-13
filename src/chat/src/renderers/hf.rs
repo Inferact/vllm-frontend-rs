@@ -106,6 +106,8 @@ impl ChatRenderer for HfChatRenderer {
     }
 }
 
+/// Construct the [`ReasoningParserInit`] based on the template's thinking toggle configuration and
+/// any relevant template kwargs in the request.
 fn reasoning_parser_init(
     template_state: &ChatTemplateState,
     request: &ChatRequest,
@@ -113,10 +115,10 @@ fn reasoning_parser_init(
     let thinking_enabled = match template_state.thinking_toggle() {
         ThinkingToggle::None => false,
         ThinkingToggle::DefaultOn => {
-            extract_request_thinking(template_state, request) != Some(false)
+            extract_request_thinking(template_state, request).unwrap_or(true)
         }
         ThinkingToggle::DefaultOff => {
-            extract_request_thinking(template_state, request) == Some(true)
+            extract_request_thinking(template_state, request).unwrap_or(false)
         }
     };
 
@@ -127,6 +129,11 @@ fn reasoning_parser_init(
     }
 }
 
+/// Extract the thinking toggle value from the request's template kwargs based on the template's
+/// expected key name.
+///
+/// Returns `None` if the template doesn't have a thinking toggle or if the expected key is not
+/// present in the request.
 fn extract_request_thinking(
     template_state: &ChatTemplateState,
     request: &ChatRequest,
