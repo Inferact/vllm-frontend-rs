@@ -122,10 +122,9 @@ fn reasoning_parser_init(
         }
     };
 
-    let should_initialize = thinking_enabled && template_state.think_in_prefill();
     ReasoningParserInit {
-        mark_reasoning_started: should_initialize,
-        mark_think_start_stripped: should_initialize,
+        mark_reasoning_started: thinking_enabled,
+        mark_think_start_stripped: thinking_enabled && template_state.think_in_prefill(),
     }
 }
 
@@ -301,6 +300,14 @@ mod tests {
         {% if add_generation_prompt %}
         assistant
         {% if thinking %}<think>{% endif %}
+        {% endif %}
+    "#;
+    const DEFAULT_ON_NO_PREFILL_THINK_TEMPLATE: &str = r#"
+        {% if add_generation_prompt %}
+        assistant
+        {% endif %}
+        {% if enable_thinking is defined and enable_thinking is false %}
+        no_thinking
         {% endif %}
     "#;
 
@@ -678,6 +685,23 @@ mod tests {
             ReasoningParserInit {
                 mark_reasoning_started: true,
                 mark_think_start_stripped: true,
+            }
+        "#]]
+        .assert_debug_eq(&rendered.reasoning_parser_init);
+    }
+
+    #[test]
+    fn thinking_enabled_without_prefill_think_only_marks_reasoning_started() {
+        let request = sample_request(vec![ChatMessage::text(ChatRole::User, "hello")]);
+
+        let rendered =
+            rendered_prompt(Some(DEFAULT_ON_NO_PREFILL_THINK_TEMPLATE), &request).unwrap();
+
+        assert!(!rendered.prompt.contains("<think>"));
+        expect![[r#"
+            ReasoningParserInit {
+                mark_reasoning_started: true,
+                mark_think_start_stripped: false,
             }
         "#]]
         .assert_debug_eq(&rendered.reasoning_parser_init);
