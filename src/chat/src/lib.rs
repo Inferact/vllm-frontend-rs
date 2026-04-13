@@ -137,8 +137,8 @@ impl ChatLlm {
         &self.text
     }
 
-    /// Return the model ID reported by the underlying text backend when available.
-    pub fn model_id(&self) -> Option<&str> {
+    /// Return the model ID reported by the underlying text backend.
+    pub fn model_id(&self) -> &str {
         self.text.model_id()
     }
 
@@ -232,10 +232,7 @@ impl ChatLlm {
             });
         }
 
-        let model_id = self
-            .text
-            .model_id()
-            .ok_or(Error::ToolParserRequiresModelId)?;
+        let model_id = self.text.model_id();
         registry
             .create_for_model(model_id)
             .ok_or_else(|| Error::ToolParserUnavailableForModel {
@@ -260,9 +257,7 @@ impl ChatLlm {
                 }
             })?
         } else {
-            self.text
-                .model_id()
-                .and_then(|model_id| registry.create_for_model(model_id))
+            registry.create_for_model(self.text.model_id())
         };
 
         // Apply initialization hints from the rendering result.
