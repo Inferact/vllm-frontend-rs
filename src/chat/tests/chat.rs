@@ -1430,8 +1430,15 @@ async fn chat_rejects_tool_parsing_without_model_hint() {
     let handshake_address = ipc.handshake_endpoint();
     let engine_id = b"engine-chat-tool-no-model".to_vec();
     let (shutdown_tx, engine_task) =
-        spawn_mock_engine_task(handshake_address.clone(), engine_id, |_, _| {
-            Box::pin(async move {})
+        spawn_mock_engine_task(handshake_address.clone(), engine_id, |dealer, _| {
+            Box::pin(async move {
+                assert!(
+                    timeout(Duration::from_millis(100), recv_engine_message(dealer))
+                        .await
+                        .is_err(),
+                    "chat request should fail before any engine request is sent"
+                );
+            })
         });
 
     let backend: Arc<dyn ChatTextBackend> = Arc::new(FakeChatBackend::new());
