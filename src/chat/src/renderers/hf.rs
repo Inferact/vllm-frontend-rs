@@ -112,6 +112,10 @@ fn reasoning_parser_init(
     template_state: &ChatTemplateState,
     request: &ChatRequest,
 ) -> ReasoningParserInit {
+    if !request.chat_options.add_generation_prompt {
+        return ReasoningParserInit::default();
+    }
+
     let thinking_enabled = match template_state.thinking_toggle() {
         ThinkingToggle::None => false,
         ThinkingToggle::DefaultOn => {
@@ -746,6 +750,27 @@ mod tests {
                 .prompt
                 .ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n")
         );
+        expect![[r#"
+            ReasoningParserInit {
+                mark_reasoning_started: false,
+                mark_think_start_stripped: false,
+            }
+        "#]]
+        .assert_debug_eq(&rendered.reasoning_parser_init);
+    }
+
+    #[test]
+    fn reasoning_init_stays_off_without_generation_prompt() {
+        let mut request = sample_request(vec![ChatMessage::text(ChatRole::User, "hello")]);
+        request.chat_options.add_generation_prompt = false;
+        request.chat_options.continue_final_message = true;
+        request
+            .chat_options
+            .template_kwargs
+            .insert("enable_thinking".to_string(), Value::Bool(true));
+
+        let rendered = rendered_prompt(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
+
         expect![[r#"
             ReasoningParserInit {
                 mark_reasoning_started: false,
