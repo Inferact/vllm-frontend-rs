@@ -112,6 +112,11 @@ fn reasoning_parser_init(
     template_state: &ChatTemplateState,
     request: &ChatRequest,
 ) -> ReasoningParserInit {
+    // `think_in_prefill()` only describes what the template would emit inside its
+    // `add_generation_prompt` branch. Continuation renders intentionally skip that
+    // branch, so carrying any parser pre-init into those requests would incorrectly
+    // classify early assistant text as reasoning even though no prefill `<think>`
+    // was injected for this render.
     if !request.chat_options.add_generation_prompt {
         return ReasoningParserInit::default();
     }
@@ -748,7 +753,8 @@ mod tests {
         assert!(
             rendered
                 .prompt
-                .ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+                .trim()
+                .ends_with("<|im_start|>assistant\n<think>\n\n</think>")
         );
         expect![[r#"
             ReasoningParserInit {
@@ -771,6 +777,7 @@ mod tests {
 
         let rendered = rendered_prompt(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
 
+        assert!(rendered.prompt.trim().ends_with("hello<|im_end|>"));
         expect![[r#"
             ReasoningParserInit {
                 mark_reasoning_started: false,
