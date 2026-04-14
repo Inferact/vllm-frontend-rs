@@ -108,10 +108,18 @@ fn available_parser_hint(available_names: &[String]) -> String {
 pub struct DelimitedReasoningParser {
     current_in_reasoning: bool,
     buffer: String,
+
     start_token: String,
     end_token: String,
     start_token_id: u32,
     end_token_id: u32,
+
+    /// Fallback initial state when the prompt contains neither start nor end delimiter.
+    ///
+    /// Most models should keep this `false` so the parser waits for an explicit
+    /// start token. Models such as DeepSeek R1, whose generations may begin
+    /// directly inside reasoning and only emit `</think>`, should set it to `true`.
+    default_in_reasoning: bool,
 }
 
 impl DelimitedReasoningParser {
@@ -120,6 +128,7 @@ impl DelimitedReasoningParser {
         tokenizer: &dyn Tokenizer,
         start_token: &'static str,
         end_token: &'static str,
+        default_in_reasoning: bool,
     ) -> Result<Self> {
         let start_token_id =
             tokenizer
@@ -135,12 +144,13 @@ impl DelimitedReasoningParser {
                 })?;
 
         Ok(Self {
-            current_in_reasoning: false,
+            current_in_reasoning: default_in_reasoning,
             buffer: String::new(),
             start_token: start_token.to_string(),
             end_token: end_token.to_string(),
             start_token_id,
             end_token_id,
+            default_in_reasoning,
         })
     }
 
@@ -197,9 +207,13 @@ impl DelimitedReasoningParser {
 
 impl ReasoningParser for DelimitedReasoningParser {
     /// Initialize parser state from the last relevant reasoning boundary in the prompt.
+    ///
+    /// If the prompt contains no start/end reasoning delimiter at all, the parser falls back to
+    /// `default_in_reasoning`.
     fn initialize(&mut self, prompt_token_ids: &[u32]) -> Result<()> {
         self.current_in_reasoning =
-            last_reasoning_boundary(prompt_token_ids, self.start_token_id, self.end_token_id);
+            last_reasoning_boundary(prompt_token_ids, self.start_token_id, self.end_token_id)
+                .unwrap_or(self.default_in_reasoning);
         Ok(())
     }
 
@@ -232,7 +246,7 @@ impl Qwen3ReasoningParser {
     /// Create a Qwen reasoning parser using `<think>...</think>` delimiters.
     pub fn new(tokenizer: &dyn Tokenizer) -> Result<Self> {
         Ok(Self {
-            inner: DelimitedReasoningParser::new(tokenizer, "<think>", "</think>")?,
+            inner: DelimitedReasoningParser::new(tokenizer, "<think>", "</think>", false)?,
         })
     }
 }
@@ -270,7 +284,7 @@ impl ReasoningParserFactory {
         let mut factory = Self::default();
         factory.register_parser("base", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("cohere_cmd", |tokenizer| {
@@ -278,21 +292,22 @@ impl ReasoningParserFactory {
                 tokenizer,
                 "<|START_THINKING|>",
                 "<|END_THINKING|>",
+                false,
             )?))
         });
         factory.register_parser("deepseek_r1", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", true,
             )?))
         });
         factory.register_parser("deepseek_v31", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("glm45", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("kimi", |tokenizer| {
@@ -300,26 +315,27 @@ impl ReasoningParserFactory {
                 tokenizer,
                 "◁think▷",
                 "◁/think▷",
+                false,
             )?))
         });
         factory.register_parser("kimi_k25", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("kimi_thinking", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("minimax", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("nano_v3", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
         factory.register_parser("qwen3", |tokenizer| {
@@ -330,7 +346,7 @@ impl ReasoningParserFactory {
         });
         factory.register_parser("step3", |tokenizer| {
             Ok(Box::new(DelimitedReasoningParser::new(
-                tokenizer, "<think>", "</think>",
+                tokenizer, "<think>", "</think>", false,
             )?))
         });
 
@@ -422,22 +438,22 @@ impl ReasoningStreamParserFactory for ReasoningParserFactory {
     }
 }
 
-/// Determine whether the prompt currently ends inside or outside a reasoning span.
+/// Determine the reasoning state implied by the last prompt boundary, if any.
 fn last_reasoning_boundary(
     prompt_token_ids: &[u32],
     start_token_id: u32,
     end_token_id: u32,
-) -> bool {
+) -> Option<bool> {
     for token_id in prompt_token_ids.iter().rev() {
         if *token_id == start_token_id {
-            return true;
+            return Some(true);
         }
         if *token_id == end_token_id {
-            return false;
+            return Some(false);
         }
     }
 
-    false
+    None
 }
 
 #[cfg(test)]
@@ -483,7 +499,8 @@ mod tests {
     #[test]
     fn delimited_content_only_stream() {
         let tokenizer = FakeTokenizer;
-        let mut parser = DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>").unwrap();
+        let mut parser =
+            DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", false).unwrap();
 
         assert_eq!(
             parser.push("plain content").unwrap().content.as_deref(),
@@ -494,7 +511,8 @@ mod tests {
     #[test]
     fn delimited_single_chunk_with_reasoning_and_content() {
         let tokenizer = FakeTokenizer;
-        let mut parser = DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>").unwrap();
+        let mut parser =
+            DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", false).unwrap();
 
         let delta = parser.push("<think>reason</think>answer").unwrap();
         assert_eq!(delta.reasoning.as_deref(), Some("reason"));
@@ -504,7 +522,8 @@ mod tests {
     #[test]
     fn delimited_partial_tokens_across_chunks() {
         let tokenizer = FakeTokenizer;
-        let mut parser = DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>").unwrap();
+        let mut parser =
+            DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", false).unwrap();
 
         assert!(parser.push("<thi").unwrap().is_empty());
         let delta = parser.push("nk>reason</think>answer").unwrap();
@@ -515,7 +534,8 @@ mod tests {
     #[test]
     fn delimited_finish_flushes_buffer() {
         let tokenizer = FakeTokenizer;
-        let mut parser = DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>").unwrap();
+        let mut parser =
+            DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", false).unwrap();
         parser.initialize(&[1]).unwrap();
 
         assert!(parser.push("unfinished</thi").unwrap().reasoning.is_some());
@@ -558,6 +578,18 @@ mod tests {
         let new = new_parser.push("reason</think>answer").unwrap();
         assert_eq!(new.reasoning.as_deref(), Some("reason"));
         assert_eq!(new.content.as_deref(), Some("answer"));
+    }
+
+    #[test]
+    fn delimited_can_default_to_reasoning_when_prompt_has_no_boundary() {
+        let tokenizer = FakeTokenizer;
+        let mut parser =
+            DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", true).unwrap();
+        parser.initialize(&[]).unwrap();
+
+        let delta = parser.push("reason</think>answer").unwrap();
+        assert_eq!(delta.reasoning.as_deref(), Some("reason"));
+        assert_eq!(delta.content.as_deref(), Some("answer"));
     }
 
     #[test]
