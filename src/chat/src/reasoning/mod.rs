@@ -16,22 +16,30 @@ pub(crate) use self::delimited::DelimitedReasoningParser;
 pub use self::kimi::KimiReasoningParser;
 pub use self::qwen3::Qwen3ReasoningParser;
 
-/// Standard `<think>...</think>` parser used by several model families.
-pub type BaseReasoningParser = Qwen3ReasoningParser;
-/// DeepSeek V3.1 currently shares the standard `<think>...</think>` parser.
-pub type DeepSeekV31ReasoningParser = Qwen3ReasoningParser;
+/// Canonical public names for registered reasoning parsers.
+pub mod names {
+    pub const COHERE_CMD: &str = "cohere_cmd";
+    pub const DEEPSEEK_R1: &str = "deepseek_r1";
+    pub const DEEPSEEK_V3: &str = "deepseek_v3";
+    pub const GLM45: &str = "glm45";
+    pub const KIMI: &str = "kimi";
+    pub const KIMI_K2: &str = "kimi_k2";
+    pub const MINIMAX_M2: &str = "minimax_m2";
+    pub const NEMOTRON_V3: &str = "nemotron_v3";
+    pub const QWEN3: &str = "qwen3";
+    pub const STEP3: &str = "step3";
+}
+
+/// DeepSeek V3 currently shares the standard `<think>...</think>` parser.
+pub type DeepSeekV3ReasoningParser = Qwen3ReasoningParser;
 /// GLM45 currently shares the standard `<think>...</think>` parser.
 pub type Glm45ReasoningParser = Qwen3ReasoningParser;
-/// Kimi K2.5 currently shares the standard `<think>...</think>` parser.
-pub type KimiK25ReasoningParser = Qwen3ReasoningParser;
-/// Kimi thinking mode currently shares the standard `<think>...</think>` parser.
-pub type KimiThinkingReasoningParser = Qwen3ReasoningParser;
-/// MiniMax currently shares the standard `<think>...</think>` parser.
-pub type MiniMaxReasoningParser = Qwen3ReasoningParser;
-/// Nano V3 currently shares the standard `<think>...</think>` parser.
-pub type NanoV3ReasoningParser = Qwen3ReasoningParser;
-/// Qwen thinking mode currently shares the standard `<think>...</think>` parser.
-pub type Qwen3ThinkingReasoningParser = Qwen3ReasoningParser;
+/// Kimi K2 currently shares the standard `<think>...</think>` parser.
+pub type KimiK2ReasoningParser = Qwen3ReasoningParser;
+/// MiniMax M2 currently shares the standard `<think>...</think>` parser.
+pub type MiniMaxM2ReasoningParser = Qwen3ReasoningParser;
+/// Nemotron V3 currently shares the standard `<think>...</think>` parser.
+pub type NemotronV3ReasoningParser = Qwen3ReasoningParser;
 /// Step3 currently shares the standard `<think>...</think>` parser.
 pub type Step3ReasoningParser = Qwen3ReasoningParser;
 
@@ -135,40 +143,31 @@ impl ReasoningParserFactory {
     /// Create the default registry with built-in parser names and model mappings.
     pub fn new() -> Self {
         let mut factory = Self::default();
-        factory.register_parser_type::<BaseReasoningParser>("base");
-        factory.register_parser_type::<CohereCmdReasoningParser>("cohere_cmd");
-        factory.register_parser_type::<DeepSeekR1ReasoningParser>("deepseek_r1");
-        factory.register_parser_type::<DeepSeekV31ReasoningParser>("deepseek_v31");
-        factory.register_parser_type::<Glm45ReasoningParser>("glm45");
-        factory.register_parser_type::<KimiReasoningParser>("kimi");
-        factory.register_parser_type::<KimiK25ReasoningParser>("kimi_k25");
-        factory.register_parser_type::<KimiThinkingReasoningParser>("kimi_thinking");
-        factory.register_parser_type::<MiniMaxReasoningParser>("minimax");
-        factory.register_parser_type::<NanoV3ReasoningParser>("nano_v3");
-        factory.register_parser_type::<Qwen3ReasoningParser>("qwen3");
-        factory.register_parser_type::<Qwen3ThinkingReasoningParser>("qwen3_thinking");
-        factory.register_parser_type::<Step3ReasoningParser>("step3");
+        factory.register_parser_type::<CohereCmdReasoningParser>(names::COHERE_CMD);
+        factory.register_parser_type::<DeepSeekR1ReasoningParser>(names::DEEPSEEK_R1);
+        factory.register_parser_type::<DeepSeekV3ReasoningParser>(names::DEEPSEEK_V3);
+        factory.register_parser_type::<Glm45ReasoningParser>(names::GLM45);
+        factory.register_parser_type::<KimiReasoningParser>(names::KIMI);
+        factory.register_parser_type::<KimiK2ReasoningParser>(names::KIMI_K2);
+        factory.register_parser_type::<MiniMaxM2ReasoningParser>(names::MINIMAX_M2);
+        factory.register_parser_type::<NemotronV3ReasoningParser>(names::NEMOTRON_V3);
+        factory.register_parser_type::<Qwen3ReasoningParser>(names::QWEN3);
+        factory.register_parser_type::<Step3ReasoningParser>(names::STEP3);
 
-        factory.register_pattern("deepseek-r1", "deepseek_r1");
-        factory.register_pattern("deepseek-v3.1", "deepseek_v31");
-        factory.register_pattern("deepseek-v3-1", "deepseek_v31");
-        factory.register_pattern("qwen3-thinking", "qwen3_thinking");
-        factory.register_pattern("qwen-thinking", "qwen3_thinking");
-        factory.register_pattern("qwen3", "qwen3");
-        factory.register_pattern("qwen", "qwen3");
-        factory.register_pattern("glm45", "glm45");
-        factory.register_pattern("glm47", "glm45");
-        factory.register_pattern("kimi-k2-thinking", "kimi_thinking");
-        factory.register_pattern("kimi-k2.5", "kimi_k25");
-        factory.register_pattern("kimi", "kimi");
-        factory.register_pattern("step3", "step3");
-        factory.register_pattern("minimax", "minimax");
-        factory.register_pattern("minimax-m2", "minimax");
-        factory.register_pattern("mm-m2", "minimax");
-        factory.register_pattern("cohere", "cohere_cmd");
-        factory.register_pattern("command", "cohere_cmd");
-        factory.register_pattern("nano", "nano_v3");
-        factory.register_pattern("nemotron", "nano_v3");
+        factory.register_pattern("deepseek-r1", names::DEEPSEEK_R1);
+        factory.register_pattern("deepseek-v3", names::DEEPSEEK_V3);
+        factory.register_pattern("qwen", names::QWEN3);
+        factory.register_pattern("glm45", names::GLM45);
+        factory.register_pattern("glm47", names::GLM45);
+        factory.register_pattern("kimi-k2", names::KIMI_K2);
+        factory.register_pattern("kimi", names::KIMI);
+        factory.register_pattern("step3", names::STEP3);
+        factory.register_pattern("minimax", names::MINIMAX_M2);
+        factory.register_pattern("mm-m2", names::MINIMAX_M2);
+        factory.register_pattern("cohere", names::COHERE_CMD);
+        factory.register_pattern("command", names::COHERE_CMD);
+        factory.register_pattern("nano", names::NEMOTRON_V3);
+        factory.register_pattern("nemotron", names::NEMOTRON_V3);
 
         factory
     }

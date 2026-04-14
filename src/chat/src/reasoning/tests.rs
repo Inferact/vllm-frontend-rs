@@ -2,7 +2,7 @@ use vllm_text::tokenizers::Tokenizer;
 
 use super::{
     DeepSeekR1ReasoningParser, DelimitedReasoningParser, Qwen3ReasoningParser, ReasoningParser,
-    ReasoningParserFactory,
+    ReasoningParserFactory, names,
 };
 
 struct FakeTokenizer;
@@ -130,8 +130,8 @@ fn deepseek_r1_defaults_to_reasoning_without_prompt_boundary() {
 #[test]
 fn factory_contains_and_lists_registered_parsers() {
     let factory = ReasoningParserFactory::new();
-    assert!(factory.contains("qwen3"));
-    assert!(factory.list().contains(&"qwen3".to_string()));
+    assert!(factory.contains(names::QWEN3));
+    assert!(factory.list().contains(&names::QWEN3.to_string()));
 }
 
 #[test]

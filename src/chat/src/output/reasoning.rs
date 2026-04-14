@@ -198,7 +198,7 @@ mod tests {
     use super::reasoning_event_stream;
     use crate::event::AssistantBlockKind;
     use crate::reasoning::{
-        ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,
+        ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory, names,
     };
 
     struct FakeTokenizer;
@@ -400,10 +400,12 @@ mod tests {
         ]);
 
         let factory = ReasoningParserFactory::new();
-        let collected =
-            reasoning_event_stream(events, Some(factory.create("qwen3", &*tokenizer).unwrap()))
-                .collect::<Vec<_>>()
-                .await;
+        let collected = reasoning_event_stream(
+            events,
+            Some(factory.create(names::QWEN3, &*tokenizer).unwrap()),
+        )
+        .collect::<Vec<_>>()
+        .await;
 
         let events = collected
             .into_iter()
@@ -452,10 +454,12 @@ mod tests {
         ]);
 
         let factory = ReasoningParserFactory::new();
-        let collected =
-            reasoning_event_stream(events, Some(factory.create("qwen3", &*tokenizer).unwrap()))
-                .collect::<Vec<_>>()
-                .await;
+        let collected = reasoning_event_stream(
+            events,
+            Some(factory.create(names::QWEN3, &*tokenizer).unwrap()),
+        )
+        .collect::<Vec<_>>()
+        .await;
 
         let events = collected
             .into_iter()

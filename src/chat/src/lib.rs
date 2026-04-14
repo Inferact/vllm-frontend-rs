@@ -273,10 +273,11 @@ mod tests {
     use thiserror_ext::AsReport;
 
     use super::validate_parser_overrides;
+    use crate::reasoning::names;
 
     #[test]
     fn validate_parser_overrides_accepts_registered_names() {
-        validate_parser_overrides(Some("json"), Some("qwen3")).unwrap();
+        validate_parser_overrides(Some("json"), Some(names::QWEN3)).unwrap();
     }
 
     #[test]
@@ -292,6 +293,6 @@ mod tests {
         let error = validate_parser_overrides(None, Some("definitely_missing_reasoning_parser"))
             .unwrap_err();
 
-        expect_test::expect!["reasoning parser `definitely_missing_reasoning_parser` is not registered (choose from: base, cohere_cmd, deepseek_r1, deepseek_v31, glm45, kimi, kimi_k25, kimi_thinking, minimax, nano_v3, qwen3, qwen3_thinking, step3)"].assert_eq(&error.to_report_string());
+        expect_test::expect!["reasoning parser `definitely_missing_reasoning_parser` is not registered (choose from: cohere_cmd, deepseek_r1, deepseek_v3, glm45, kimi, kimi_k2, minimax_m2, nemotron_v3, qwen3, step3)"].assert_eq(&error.to_report_string());
     }
 }
