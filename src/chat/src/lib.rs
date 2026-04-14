@@ -64,25 +64,25 @@ pub fn validate_parser_overrides(
     reasoning_parser: &ParserSelection,
 ) -> Result<()> {
     let tool_parser_factory = ToolParserFactory::new();
-    if let ParserSelection::Explicit(name) = tool_call_parser {
-        if !tool_parser_factory.registry().has_parser(name) {
-            let available_names = available_tool_parser_names(&tool_parser_factory);
-            return Err(Error::ToolParserUnavailableByName {
-                name: name.clone(),
-                available_names,
-            });
-        }
+    if let ParserSelection::Explicit(name) = tool_call_parser
+        && !tool_parser_factory.registry().has_parser(name)
+    {
+        let available_names = available_tool_parser_names(&tool_parser_factory);
+        return Err(Error::ToolParserUnavailableByName {
+            name: name.clone(),
+            available_names,
+        });
     }
 
     let reasoning_parser_factory = ReasoningParserFactory::new();
-    if let ParserSelection::Explicit(name) = reasoning_parser {
-        if !reasoning_parser_factory.contains(name) {
-            let available_names = available_reasoning_parser_names(&reasoning_parser_factory);
-            return Err(Error::ReasoningParserUnavailableByName {
-                name: name.clone(),
-                available_names,
-            });
-        }
+    if let ParserSelection::Explicit(name) = reasoning_parser
+        && !reasoning_parser_factory.contains(name)
+    {
+        let available_names = available_reasoning_parser_names(&reasoning_parser_factory);
+        return Err(Error::ReasoningParserUnavailableByName {
+            name: name.clone(),
+            available_names,
+        });
     }
 
     Ok(())
