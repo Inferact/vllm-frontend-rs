@@ -13,7 +13,7 @@ const THOUGHT_PREFIX: &str = "thought\n";
 /// only layers on Gemma4-specific request adjustment plus prefix stripping.
 ///
 /// Original Python implementation:
-/// <https://github.com/Inferact/vllm-internal/blob/e33250a37dfed717c263a6352cff3ab0ac875c52/vllm/reasoning/gemma4_reasoning_parser.py#L23>
+/// <https://github.com/vllm-project/vllm/blob/18b1c77211d8f6fe800bcfb89524d2b598708032/vllm/reasoning/gemma4_reasoning_parser.py#L23>
 pub struct Gemma4ReasoningParser {
     inner: DelimitedReasoningParser,
     reasoning_text: String,
@@ -221,6 +221,30 @@ mod tests {
                 vec!["Before\n<|channel>This is a reasoning section<channel|>\nThis is the rest"],
                 Some("This is a reasoning section"),
                 Some("Before\n\nThis is the rest"),
+            ),
+            (
+                "thought_prefix",
+                vec!["<|channel>thought\nActual reasoning here<channel|>Final answer"],
+                Some("Actual reasoning here"),
+                Some("Final answer"),
+            ),
+            (
+                "thought_prefix_only",
+                vec!["<|channel>thought\n<channel|>"],
+                None,
+                None,
+            ),
+            (
+                "thought_prefix_multiline",
+                vec!["<|channel>thought\nLine1\nLine2<channel|>Answer"],
+                Some("Line1\nLine2"),
+                Some("Answer"),
+            ),
+            (
+                "thought_prefix_diverge",
+                vec!["<|channel>thousand reasons<channel|>Done"],
+                Some("thousand reasons"),
+                Some("Done"),
             ),
         ];
 
