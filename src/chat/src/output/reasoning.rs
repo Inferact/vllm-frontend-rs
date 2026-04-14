@@ -252,7 +252,7 @@ mod tests {
     }
 
     fn test_reasoning_parser(factory: &mut ReasoningParserFactory) -> Box<dyn ReasoningParser> {
-        factory.register_parser_type::<FailingReasoningParser>("failing");
+        factory.register_parser::<FailingReasoningParser>("failing");
 
         factory.create("failing", &FakeTokenizer).unwrap()
     }

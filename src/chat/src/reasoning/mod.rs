@@ -35,6 +35,8 @@ pub type DeepSeekV3ReasoningParser = Qwen3ReasoningParser;
 /// GLM45 currently shares the standard `<think>...</think>` parser.
 pub type Glm45ReasoningParser = Qwen3ReasoningParser;
 /// Kimi K2 currently shares the standard `<think>...</think>` parser.
+// TODO: kimi k2 may implicitly end reasoning by starting a tool call section using
+// <|tool_calls_section_begin|>, we should support that.
 pub type KimiK2ReasoningParser = Qwen3ReasoningParser;
 /// MiniMax M2 currently shares the standard `<think>...</think>` parser.
 pub type MiniMaxM2ReasoningParser = Qwen3ReasoningParser;
@@ -143,47 +145,52 @@ impl ReasoningParserFactory {
     /// Create the default registry with built-in parser names and model mappings.
     pub fn new() -> Self {
         let mut factory = Self::default();
-        factory.register_parser_type::<CohereCmdReasoningParser>(names::COHERE_CMD);
-        factory.register_parser_type::<DeepSeekR1ReasoningParser>(names::DEEPSEEK_R1);
-        factory.register_parser_type::<DeepSeekV3ReasoningParser>(names::DEEPSEEK_V3);
-        factory.register_parser_type::<Glm45ReasoningParser>(names::GLM45);
-        factory.register_parser_type::<KimiReasoningParser>(names::KIMI);
-        factory.register_parser_type::<KimiK2ReasoningParser>(names::KIMI_K2);
-        factory.register_parser_type::<MiniMaxM2ReasoningParser>(names::MINIMAX_M2);
-        factory.register_parser_type::<NemotronV3ReasoningParser>(names::NEMOTRON_V3);
-        factory.register_parser_type::<Qwen3ReasoningParser>(names::QWEN3);
-        factory.register_parser_type::<Step3ReasoningParser>(names::STEP3);
 
-        factory.register_pattern("deepseek-r1", names::DEEPSEEK_R1);
-        factory.register_pattern("deepseek-v3", names::DEEPSEEK_V3);
-        factory.register_pattern("qwen", names::QWEN3);
-        factory.register_pattern("glm45", names::GLM45);
-        factory.register_pattern("glm47", names::GLM45);
-        factory.register_pattern("kimi-k2", names::KIMI_K2);
-        factory.register_pattern("kimi", names::KIMI);
-        factory.register_pattern("step3", names::STEP3);
-        factory.register_pattern("minimax", names::MINIMAX_M2);
-        factory.register_pattern("mm-m2", names::MINIMAX_M2);
-        factory.register_pattern("cohere", names::COHERE_CMD);
-        factory.register_pattern("command", names::COHERE_CMD);
-        factory.register_pattern("nano", names::NEMOTRON_V3);
-        factory.register_pattern("nemotron", names::NEMOTRON_V3);
+        factory
+            .register_parser::<CohereCmdReasoningParser>(names::COHERE_CMD)
+            .register_parser::<DeepSeekR1ReasoningParser>(names::DEEPSEEK_R1)
+            .register_parser::<DeepSeekV3ReasoningParser>(names::DEEPSEEK_V3)
+            .register_parser::<Glm45ReasoningParser>(names::GLM45)
+            .register_parser::<KimiReasoningParser>(names::KIMI)
+            .register_parser::<KimiK2ReasoningParser>(names::KIMI_K2)
+            .register_parser::<MiniMaxM2ReasoningParser>(names::MINIMAX_M2)
+            .register_parser::<NemotronV3ReasoningParser>(names::NEMOTRON_V3)
+            .register_parser::<Qwen3ReasoningParser>(names::QWEN3)
+            .register_parser::<Step3ReasoningParser>(names::STEP3);
+
+        factory
+            .register_pattern("deepseek-r1", names::DEEPSEEK_R1)
+            .register_pattern("deepseek-v3", names::DEEPSEEK_V3)
+            .register_pattern("qwen", names::QWEN3)
+            .register_pattern("glm45", names::GLM45)
+            .register_pattern("glm47", names::GLM45)
+            .register_pattern("kimi-k2", names::KIMI_K2)
+            .register_pattern("kimi", names::KIMI)
+            .register_pattern("step3", names::STEP3)
+            .register_pattern("minimax", names::MINIMAX_M2)
+            .register_pattern("mm-m2", names::MINIMAX_M2)
+            .register_pattern("cohere", names::COHERE_CMD)
+            .register_pattern("command", names::COHERE_CMD)
+            .register_pattern("nano", names::NEMOTRON_V3)
+            .register_pattern("nemotron", names::NEMOTRON_V3);
 
         factory
     }
 
     /// Register one parser type that exposes a static `create()` constructor.
-    pub fn register_parser_type<T>(&mut self, name: &str)
+    pub fn register_parser<T>(&mut self, name: &str) -> &mut Self
     where
         T: ReasoningParser + 'static,
     {
         self.creators.insert(name.to_string(), Arc::new(T::create));
+        self
     }
 
     /// Add a case-insensitive substring match from model ID to parser name.
-    pub fn register_pattern(&mut self, pattern: &str, parser_name: &str) {
+    pub fn register_pattern(&mut self, pattern: &str, parser_name: &str) -> &mut Self {
         self.patterns
             .push((pattern.to_string(), parser_name.to_string()));
+        self
     }
 
     /// Return the first registered parser name matching the given model ID.
