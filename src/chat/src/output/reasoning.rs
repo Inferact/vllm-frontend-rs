@@ -199,7 +199,6 @@ mod tests {
     use crate::event::AssistantBlockKind;
     use crate::reasoning::{
         ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,
-        ReasoningStreamParserFactory,
     };
 
     struct FakeTokenizer;
@@ -234,6 +233,13 @@ mod tests {
     }
 
     impl ReasoningParser for FailingReasoningParser {
+        fn create(_tokenizer: &dyn Tokenizer) -> Result<Box<dyn ReasoningParser>, ReasoningError>
+        where
+            Self: Sized + 'static,
+        {
+            Ok(Box::new(Self { fail_next: true }))
+        }
+
         fn push(&mut self, _text: &str) -> Result<ReasoningDelta, ReasoningError> {
             if self.fail_next {
                 self.fail_next = false;
@@ -246,9 +252,7 @@ mod tests {
     }
 
     fn test_reasoning_parser(factory: &mut ReasoningParserFactory) -> Box<dyn ReasoningParser> {
-        factory.register_parser("failing", |_tokenizer| {
-            Ok(Box::new(FailingReasoningParser { fail_next: true }))
-        });
+        factory.register_parser_type::<FailingReasoningParser>("failing");
 
         factory.create("failing", &FakeTokenizer).unwrap()
     }

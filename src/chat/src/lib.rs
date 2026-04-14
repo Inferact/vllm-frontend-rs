@@ -19,10 +19,7 @@ pub use event::{
     AssistantToolCall, ChatEvent,
 };
 use futures::{StreamExt, TryStreamExt as _};
-pub use reasoning::{
-    DelimitedReasoningParser, Qwen3ReasoningParser, ReasoningDelta, ReasoningError,
-    ReasoningParser, ReasoningParserFactory, ReasoningStreamParserFactory,
-};
+pub use reasoning::{ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory};
 pub use renderers::{ChatRenderer, DynChatRenderer, RenderedPrompt};
 pub use request::{
     ChatContent, ChatContentPart, ChatMessage, ChatOptions, ChatRequest, ChatRole, ChatTool,
