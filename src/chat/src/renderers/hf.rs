@@ -235,7 +235,7 @@ mod tests {
     use crate::request::{
         ChatContentPart, ChatMessage, ChatRequest, ChatRole, ChatTool, ChatToolChoice,
     };
-    use crate::{AssistantContentBlock, ChatRenderer, Error, RenderedPrompt, Result};
+    use crate::{AssistantContentBlock, ChatRenderer, Error, Result};
 
     const QWEN3_0_6B_TEMPLATE: &str = include_str!("../../tests/templates/qwen3.jinja");
     const QWEN3_5_0_8B_TEMPLATE: &str = include_str!("../../tests/templates/qwen35.jinja");
@@ -249,11 +249,9 @@ mod tests {
     }
 
     fn render(template: Option<&str>, request: &ChatRequest) -> Result<String> {
-        Ok(rendered_prompt(template, request)?.prompt)
-    }
-
-    fn rendered_prompt(template: Option<&str>, request: &ChatRequest) -> Result<RenderedPrompt> {
-        HfChatRenderer::new(template.map(str::to_owned), None)?.render(request)
+        Ok(HfChatRenderer::new(template.map(str::to_owned), None)?
+            .render(request)?
+            .prompt)
     }
 
     #[test]
@@ -524,13 +522,15 @@ mod tests {
             .template_kwargs
             .insert("enable_thinking".to_string(), Value::Bool(true));
 
-        let rendered = rendered_prompt(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
+        let rendered = render(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
 
-        assert!(
-            rendered
-                .prompt
-                .ends_with("<|im_start|>assistant\n<think>\n")
-        );
+        expect![[r#"
+            <|im_start|>user
+            hello<|im_end|>
+            <|im_start|>assistant
+            <think>
+        "#]]
+        .assert_eq(&rendered);
     }
 
     #[test]
@@ -541,14 +541,18 @@ mod tests {
             .template_kwargs
             .insert("enable_thinking".to_string(), Value::Bool(false));
 
-        let rendered = rendered_prompt(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
+        let rendered = render(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
 
-        assert!(
-            rendered
-                .prompt
-                .trim()
-                .ends_with("<|im_start|>assistant\n<think>\n\n</think>")
-        );
+        expect![[r#"
+            <|im_start|>user
+            hello<|im_end|>
+            <|im_start|>assistant
+            <think>
+
+            </think>
+
+        "#]]
+        .assert_eq(&rendered);
     }
 
     #[test]
@@ -561,9 +565,12 @@ mod tests {
             .template_kwargs
             .insert("enable_thinking".to_string(), Value::Bool(true));
 
-        let rendered = rendered_prompt(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
+        let rendered = render(Some(QWEN3_5_0_8B_TEMPLATE), &request).unwrap();
 
-        assert!(rendered.prompt.trim().ends_with("hello<|im_end|>"));
-        assert!(!rendered.prompt.contains("<|im_start|>assistant"));
+        expect![[r#"
+            <|im_start|>user
+            hello<|im_end|>
+        "#]]
+        .assert_eq(&rendered);
     }
 }
