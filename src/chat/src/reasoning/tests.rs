@@ -74,7 +74,8 @@ fn delimited_finish_flushes_buffer() {
         DelimitedReasoningParser::new(&tokenizer, "<think>", "</think>", false).unwrap();
     parser.initialize(&[1]);
 
-    assert!(parser.push("unfinished</thi").reasoning.is_some());
+    let delta = parser.push("unfinished</thi");
+    assert_eq!(delta.reasoning.as_deref(), Some("unfinished"));
     let final_delta = parser.finish();
     assert_eq!(final_delta.reasoning.as_deref(), Some("</thi"));
 }
@@ -120,7 +121,6 @@ fn qwen3_tolerates_old_and_new_formats() {
 fn deepseek_r1_defaults_to_reasoning_without_prompt_boundary() {
     let tokenizer = FakeTokenizer;
     let mut parser = DeepSeekR1ReasoningParser::new(&tokenizer).unwrap();
-    parser.initialize(&[]).unwrap();
 
     let delta = parser.push("reason</think>answer").unwrap();
     assert_eq!(delta.reasoning.as_deref(), Some("reason"));

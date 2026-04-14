@@ -7,6 +7,12 @@ use super::{ReasoningDelta, ReasoningError, Result};
 /// This helper is intentionally not a public parser type. Model-family parser
 /// wrappers own one `DelimitedReasoningParser` internally and expose the
 /// request-facing [`super::ReasoningParser`] trait.
+///
+/// The shared state machine stays generic by deriving its initial
+/// `current_in_reasoning` state from the rendered prompt instead of hardcoding
+/// model-family conventions. That means families with the same delimiters can
+/// often reuse this implementation even if one template prefills `<think>` and
+/// another expects the model to emit it (like Qwen3 vs Qwen3 Thinking vs Qwen3.5).
 pub(crate) struct DelimitedReasoningParser {
     current_in_reasoning: bool,
     buffer: String,

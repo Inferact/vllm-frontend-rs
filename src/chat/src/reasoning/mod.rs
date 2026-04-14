@@ -1,3 +1,19 @@
+//! Streaming reasoning parsers for chat completions.
+//!
+//! The key design choice here is that parser initialization prefers the
+//! *actual rendered prompt state* over model-family conventions. When a stream
+//! starts, each parser receives the prompt token IDs and inspects the last
+//! reasoning boundary that is already present in the prompt. In practice this
+//! is a more faithful signal than hardcoding assumptions such as "this model
+//! always starts in reasoning" or "this model always emits `<think>` itself".
+//!
+//! That prompt-first initialization lets multiple model families share the
+//! same incremental parser implementation even when older Python parsers split
+//! them apart. If two families use the same textual delimiters and differ
+//! mostly in how their chat templates prefill `<think>` / `</think>`, they can
+//! usually reuse one parser here because the prompt token IDs already tell us
+//! which state the stream is entering with.
+
 mod cohere_cmd;
 mod deepseek_r1;
 mod delimited;
