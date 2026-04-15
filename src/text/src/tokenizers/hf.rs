@@ -158,23 +158,40 @@ impl Tokenizer for HuggingFaceTokenizer {
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-    use tokenizers::models::wordlevel::WordLevel;
+    use tokenizers::models::bpe::BPE;
     use tokenizers::{AddedToken, Tokenizer as HfTokenizer};
 
     use super::{HuggingFaceTokenizer, Tokenizer};
 
-    #[test]
-    fn hf_constructor_resolves_added_token_ids() {
-        let model = WordLevel::builder()
-            .vocab(
-                [("<unk>".to_string(), 0u32), ("hello".to_string(), 1u32)]
-                    .into_iter()
-                    .collect(),
-            )
+    fn tiny_bpe_tokenizer() -> HfTokenizer {
+        let vocab = [
+            ("<unk>".to_string(), 0),
+            ("h".to_string(), 1),
+            ("e".to_string(), 2),
+            ("l".to_string(), 3),
+            ("o".to_string(), 4),
+            ("he".to_string(), 5),
+            ("ll".to_string(), 6),
+            ("hell".to_string(), 7),
+            ("hello".to_string(), 8),
+        ];
+        let merges = vec![
+            ("h".to_string(), "e".to_string()),
+            ("l".to_string(), "l".to_string()),
+            ("he".to_string(), "ll".to_string()),
+            ("hell".to_string(), "o".to_string()),
+        ];
+        let model = BPE::builder()
+            .vocab_and_merges(vocab, merges)
             .unk_token("<unk>".to_string())
             .build()
-            .expect("build wordlevel tokenizer");
-        let mut tokenizer = HfTokenizer::new(model);
+            .expect("build bpe tokenizer");
+        HfTokenizer::new(model)
+    }
+
+    #[test]
+    fn hf_constructor_resolves_added_token_ids() {
+        let mut tokenizer = tiny_bpe_tokenizer();
         tokenizer.add_special_tokens(&[AddedToken::from("<|im_end|>", true)]);
 
         let dir = tempdir().expect("create temp dir");
@@ -182,28 +199,27 @@ mod tests {
         tokenizer.save(&path, false).expect("save tokenizer json");
 
         let wrapper = HuggingFaceTokenizer::new_hf(&path).expect("load hf wrapper");
-        assert_eq!(wrapper.token_to_id("<|im_end|>"), Some(2));
+        let special_id = wrapper
+            .token_to_id("<|im_end|>")
+            .expect("resolve added special token id");
+        assert!(wrapper.is_special_id(special_id));
     }
 
     #[test]
-    fn new_preserves_special_ids_when_fastokens_is_used() {
-        let model = WordLevel::builder()
-            .vocab(
-                [("<unk>".to_string(), 0u32), ("hello".to_string(), 1u32)]
-                    .into_iter()
-                    .collect(),
-            )
-            .unk_token("<unk>".to_string())
-            .build()
-            .expect("build wordlevel tokenizer");
-        let mut tokenizer = HfTokenizer::new(model);
+    fn new_fastokens_preserves_special_ids_from_hf_metadata() {
+        let mut tokenizer = tiny_bpe_tokenizer();
         tokenizer.add_special_tokens(&[AddedToken::from("<|im_end|>", true)]);
 
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join("tokenizer.json");
         tokenizer.save(&path, false).expect("save tokenizer json");
 
-        let wrapper = HuggingFaceTokenizer::new(&path).expect("load wrapper with metadata");
-        assert!(wrapper.is_special_id(2));
+        let wrapper = HuggingFaceTokenizer::new_fastokens(&path)
+            .expect("load wrapper with fastokens backend");
+        assert!(matches!(wrapper.backend, super::Backend::Fastokens(_)));
+        let special_id = wrapper
+            .token_to_id("<|im_end|>")
+            .expect("resolve added special token id");
+        assert!(wrapper.is_special_id(special_id));
     }
 }
