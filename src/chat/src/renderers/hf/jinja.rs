@@ -25,14 +25,14 @@ pub enum ChatTemplateContentFormat {
     #[default]
     String,
     /// Content is a list of structured parts (OpenAI format).
-    OpenAI,
+    OpenAi,
 }
 
 impl std::fmt::Display for ChatTemplateContentFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::String => write!(f, "string"),
-            Self::OpenAI => write!(f, "openai"),
+            Self::OpenAi => write!(f, "openai"),
         }
     }
 }
@@ -292,7 +292,7 @@ fn detect_format_with_ast(template: &str) -> ChatTemplateContentFormat {
 
     let flags = Detector::new(&ast).run();
     if flags.any() {
-        ChatTemplateContentFormat::OpenAI
+        ChatTemplateContentFormat::OpenAi
     } else {
         ChatTemplateContentFormat::String
     }

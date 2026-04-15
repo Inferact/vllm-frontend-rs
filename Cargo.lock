@@ -4590,6 +4590,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "serde_with",
  "subenum",
  "tempfile",
  "thiserror 2.0.18",
