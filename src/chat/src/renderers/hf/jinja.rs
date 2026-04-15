@@ -18,6 +18,8 @@ use serde_json::ser::PrettyFormatter;
 use serde_json::{self, Value as JsonValue};
 use vllm_text::backends::hf::HfSpecialTokens;
 
+use crate::renderers::hf::TemplateTool;
+
 /// Chat template content format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChatTemplateContentFormat {
@@ -300,9 +302,9 @@ fn detect_format_with_ast(template: &str) -> ChatTemplateContentFormat {
 
 /// Parameters for chat template application.
 #[derive(Default)]
-pub struct ChatTemplateParams<'a> {
+pub(super) struct ChatTemplateParams<'a> {
     pub add_generation_prompt: bool,
-    pub tools: Option<&'a [serde_json::Value]>,
+    pub tools: Option<&'a [TemplateTool]>,
     pub documents: Option<&'a [serde_json::Value]>,
     pub template_kwargs: Option<&'a HashMap<String, serde_json::Value>>,
     /// Special tokens to inject into the template context.
@@ -507,7 +509,7 @@ pub fn load_chat_template_from_file(template_path: &str) -> Result<Option<String
 }
 
 /// One compiled chat template with its Jinja environment and detected content format.
-pub struct CompiledChatTemplate {
+pub(super) struct CompiledChatTemplate {
     /// Cached, fully-configured environment for one compiled template.
     env: Environment<'static>,
     content_format: ChatTemplateContentFormat,

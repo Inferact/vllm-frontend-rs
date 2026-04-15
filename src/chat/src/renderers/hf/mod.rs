@@ -1,3 +1,4 @@
+use openai_protocol::common::Tool as OpenAiTool;
 use serde::Serialize;
 use serde_json::Value;
 use thiserror_ext::AsReport as _;
@@ -8,7 +9,7 @@ use self::jinja::{ChatTemplateContentFormat, ChatTemplateParams, CompiledChatTem
 use super::{ChatRenderer, RenderedPrompt};
 use crate::error::Result;
 use crate::request::{ChatContent, ChatMessage, ChatRequest};
-use crate::{AssistantContentBlock, AssistantMessageExt, Error};
+use crate::{AssistantContentBlock, AssistantMessageExt, ChatTool, Error};
 
 pub mod jinja;
 
@@ -62,12 +63,15 @@ impl HfChatRenderer {
     ) -> Result<RenderedPrompt> {
         let messages =
             to_template_messages(&request.messages, effective_template.content_format())?;
-        let tools = request.template_tools();
+        let tools = request
+            .tool_parsing_enabled()
+            .then(|| to_template_tools(&request.tools));
         trace!(
             request_id = %request.request_id,
             message_count = messages.len(),
             content_format = ?effective_template.content_format(),
             ?messages,
+            ?tools,
             "applying chat template"
         );
 
@@ -147,6 +151,10 @@ struct TemplateToolFunction {
     name: String,
     arguments: Value,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+struct TemplateTool(OpenAiTool);
 
 /// Convert chat messages into the JSON shape expected by Jinja chat templates.
 fn to_template_messages(
@@ -247,6 +255,13 @@ fn to_template_content(
         }
         ChatTemplateContentFormat::OpenAi => TemplateContent::OpenAi(content.clone()),
     })
+}
+
+fn to_template_tools(tools: &[ChatTool]) -> Vec<TemplateTool> {
+    tools
+        .iter()
+        .map(|tool| TemplateTool(tool.to_openai_tool()))
+        .collect()
 }
 
 #[cfg(test)]
