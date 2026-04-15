@@ -32,6 +32,10 @@ impl Tokenizer for FakeTokenizer {
             _ => None,
         }
     }
+
+    fn is_special_id(&self, token_id: u32) -> bool {
+        token_id == 7
+    }
 }
 
 #[test]
