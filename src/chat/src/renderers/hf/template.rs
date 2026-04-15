@@ -12,13 +12,13 @@ use minijinja::machinery::ast::{Expr, Stmt};
 use minijinja::machinery::{WhitespaceConfig, parse};
 use minijinja::syntax::SyntaxConfig;
 use minijinja::value::Kwargs;
-use minijinja::{Environment, Error as MinijinjaError, ErrorKind, Value, context};
+use minijinja::{Environment, Error as MinijinjaError, ErrorKind, Value};
 use serde::Serialize;
 use serde_json::ser::PrettyFormatter;
 use serde_json::{self, Value as JsonValue};
 use vllm_text::backends::hf::HfSpecialTokens;
 
-use crate::renderers::hf::TemplateTool;
+use crate::renderers::hf::{TemplateMessage, TemplateTool};
 
 /// Chat template content format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -300,17 +300,6 @@ fn detect_format_with_ast(template: &str) -> ChatTemplateContentFormat {
     }
 }
 
-/// Parameters for chat template application.
-#[derive(Default)]
-pub(super) struct ChatTemplateParams<'a> {
-    pub add_generation_prompt: bool,
-    pub tools: Option<&'a [TemplateTool]>,
-    pub documents: Option<&'a [serde_json::Value]>,
-    pub template_kwargs: Option<&'a HashMap<String, serde_json::Value>>,
-    /// Special tokens to inject into the template context.
-    pub special_tokens: Option<&'a HfSpecialTokens>,
-}
-
 /// Custom `tojson` filter compatible with HuggingFace transformers' implementation.
 fn tojson_filter(value: Value, kwargs: Kwargs) -> std::result::Result<Value, MinijinjaError> {
     let _ensure_ascii: Option<bool> = kwargs.get("ensure_ascii")?;
@@ -412,73 +401,17 @@ fn build_environment(template: String) -> Result<Environment<'static>> {
     Ok(env)
 }
 
-/// Convert an optional token string to a minijinja value.
-fn special_token_value(token: Option<&str>) -> Value {
-    token.map_or(Value::UNDEFINED, Value::from)
-}
-
-fn render_chat_template(
-    env: &Environment<'_>,
-    messages: &[serde_json::Value],
-    params: ChatTemplateParams,
-) -> Result<String> {
-    let tmpl = env
-        .get_template("chat")
-        .map_err(|e| anyhow!("Failed to get template: {e}"))?;
-
-    let minijinja_messages: Vec<Value> = messages.iter().map(Value::from_serialize).collect();
-    let tools_value = params.tools.map_or(Value::UNDEFINED, Value::from_serialize);
-    let documents_value = params
-        .documents
-        .map_or(Value::UNDEFINED, Value::from_serialize);
-
-    let bos_value = special_token_value(
-        params
-            .special_tokens
-            .and_then(|st| st.bos_token.as_ref())
-            .map(|token| token.as_str()),
-    );
-    let eos_value = special_token_value(
-        params
-            .special_tokens
-            .and_then(|st| st.eos_token.as_ref())
-            .map(|token| token.as_str()),
-    );
-    let unk_value = special_token_value(
-        params
-            .special_tokens
-            .and_then(|st| st.unk_token.as_ref())
-            .map(|token| token.as_str()),
-    );
-    let pad_value = special_token_value(
-        params
-            .special_tokens
-            .and_then(|st| st.pad_token.as_ref())
-            .map(|token| token.as_str()),
-    );
-
-    let base_context = context! {
-        messages => &minijinja_messages,
-        add_generation_prompt => params.add_generation_prompt,
-        tools => tools_value,
-        documents => documents_value,
-        bos_token => bos_value,
-        eos_token => eos_value,
-        unk_token => unk_value,
-        pad_token => pad_value,
-    };
-
-    let ctx = if let Some(kwargs) = params.template_kwargs {
-        context! {
-            ..base_context,
-            ..Value::from_serialize(kwargs)
-        }
-    } else {
-        base_context
-    };
-
-    tmpl.render(&ctx)
-        .map_err(|e| anyhow!("Failed to render template: {e}"))
+#[serde_with::skip_serializing_none]
+#[derive(Default, Serialize)]
+pub(super) struct TemplateContext<'a> {
+    pub(super) messages: &'a [TemplateMessage],
+    pub(super) add_generation_prompt: bool,
+    pub(super) tools: Option<&'a [TemplateTool]>,
+    pub(super) documents: Option<&'a [serde_json::Value]>,
+    #[serde(flatten)]
+    pub(super) special_tokens: Option<&'a HfSpecialTokens>,
+    #[serde(flatten)]
+    pub(super) template_kwargs: Option<&'a HashMap<String, serde_json::Value>>,
 }
 
 /// Load chat template from a file (`.jinja` or `.json` containing Jinja).
@@ -524,6 +457,7 @@ impl std::fmt::Debug for CompiledChatTemplate {
 }
 
 impl CompiledChatTemplate {
+    /// Compile the given chat template string into a [`CompiledChatTemplate`].
     pub fn new(template: String) -> Result<Self> {
         let content_format = detect_chat_template_content_format(&template);
         let env = build_environment(template)?;
@@ -533,12 +467,15 @@ impl CompiledChatTemplate {
         })
     }
 
-    pub fn apply(
-        &self,
-        messages: &[serde_json::Value],
-        params: ChatTemplateParams,
-    ) -> Result<String> {
-        render_chat_template(&self.env, messages, params)
+    /// Apply the compiled template to the given context and return the rendered prompt.
+    pub fn apply(&self, ctx: TemplateContext<'_>) -> Result<String> {
+        let tmpl = self
+            .env
+            .get_template("chat")
+            .map_err(|e| anyhow!("Failed to get template: {e}"))?;
+
+        tmpl.render(ctx)
+            .map_err(|e| anyhow!("Failed to render template: {e}"))
     }
 
     pub fn content_format(&self) -> ChatTemplateContentFormat {
@@ -559,7 +496,7 @@ mod tests {
     fn test_chat_template_state_valid_template() {
         let template = CompiledChatTemplate::new("{{ messages }}".to_string()).unwrap();
         assert_eq!(template.content_format(), ChatTemplateContentFormat::String);
-        let result = template.apply(&[], ChatTemplateParams::default()).unwrap();
+        let result = template.apply(TemplateContext::default()).unwrap();
         assert_eq!(result, "[]");
     }
 
@@ -576,10 +513,9 @@ mod tests {
 
     #[test]
     fn test_special_tokens_injected_into_context() {
-        let template = "{{ bos_token }}{% for message in messages %}{{ message.content }}{% endfor %}{{ eos_token }}";
+        let template = "{{ bos_token }}hello{{ eos_token }}";
         let template = CompiledChatTemplate::new(template.to_string()).unwrap();
 
-        let messages = vec![serde_json::json!({"role": "user", "content": "hello"})];
         let special_tokens = HfSpecialTokens {
             bos_token: Some(NamedSpecialToken::Text("<s>".to_string())),
             eos_token: Some(NamedSpecialToken::Text("</s>".to_string())),
@@ -587,13 +523,10 @@ mod tests {
         };
 
         let result = template
-            .apply(
-                &messages,
-                ChatTemplateParams {
-                    special_tokens: Some(&special_tokens),
-                    ..Default::default()
-                },
-            )
+            .apply(TemplateContext {
+                special_tokens: Some(&special_tokens),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(result, "<s>hello</s>");
@@ -604,7 +537,7 @@ mod tests {
         let template = "{% if bos_token is defined %}{{ bos_token }}{% endif %}hello";
         let template = CompiledChatTemplate::new(template.to_string()).unwrap();
 
-        let result = template.apply(&[], ChatTemplateParams::default()).unwrap();
+        let result = template.apply(TemplateContext::default()).unwrap();
         assert_eq!(result, "hello");
     }
 
@@ -621,13 +554,10 @@ mod tests {
         };
 
         let result = template
-            .apply(
-                &[],
-                ChatTemplateParams {
-                    special_tokens: Some(&special_tokens),
-                    ..Default::default()
-                },
-            )
+            .apply(TemplateContext {
+                special_tokens: Some(&special_tokens),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(result, "<s>hello");
@@ -643,13 +573,10 @@ mod tests {
         kwargs.insert("payload".to_string(), serde_json::json!({"b": 1, "a": 2}));
 
         let result = template
-            .apply(
-                &[],
-                ChatTemplateParams {
-                    template_kwargs: Some(&kwargs),
-                    ..Default::default()
-                },
-            )
+            .apply(TemplateContext {
+                template_kwargs: Some(&kwargs),
+                ..Default::default()
+            })
             .unwrap();
 
         assert_eq!(result, "{\n  \"a\": 2,\n  \"b\": 1\n}");

@@ -4749,6 +4749,7 @@ dependencies = [
  "rustc-hash 1.1.0",
  "serde",
  "serde_json",
+ "serde_with",
  "tekken-rs",
  "tempfile",
  "thiserror 2.0.18",

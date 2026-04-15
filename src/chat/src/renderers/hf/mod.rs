@@ -5,13 +5,13 @@ use thiserror_ext::AsReport as _;
 use tracing::trace;
 use vllm_text::backends::hf::HfSpecialTokens;
 
-use self::jinja::{ChatTemplateContentFormat, ChatTemplateParams, CompiledChatTemplate};
+use self::template::{ChatTemplateContentFormat, CompiledChatTemplate, TemplateContext};
 use super::{ChatRenderer, RenderedPrompt};
 use crate::error::Result;
 use crate::request::{ChatContent, ChatMessage, ChatRequest};
 use crate::{AssistantContentBlock, AssistantMessageExt, ChatTool, Error};
 
-pub mod jinja;
+pub mod template;
 
 /// Hugging Face chat-template renderer backed by the local Jinja chat-template state.
 pub struct HfChatRenderer {
@@ -85,16 +85,14 @@ impl HfChatRenderer {
         };
 
         let prompt = effective_template
-            .apply(
-                &messages,
-                ChatTemplateParams {
-                    add_generation_prompt: request.chat_options.add_generation_prompt,
-                    tools: tools.as_deref(),
-                    documents: request.documents.as_deref(),
-                    template_kwargs: Some(&merged_template_kwargs),
-                    special_tokens: self.special_tokens.as_ref(),
-                },
-            )
+            .apply(TemplateContext {
+                messages: &messages,
+                add_generation_prompt: request.chat_options.add_generation_prompt,
+                tools: tools.as_deref(),
+                documents: request.documents.as_deref(),
+                template_kwargs: Some(&merged_template_kwargs),
+                special_tokens: self.special_tokens.as_ref(),
+            })
             .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
 
         trace!(
@@ -116,8 +114,8 @@ impl ChatRenderer for HfChatRenderer {
 
 /// Chat message in the JSON shape expected by Jinja chat templates.
 #[serde_with::skip_serializing_none]
-#[derive(Serialize)]
-struct TemplateMessage {
+#[derive(Debug, Serialize)]
+pub(super) struct TemplateMessage {
     role: &'static str,
     content: TemplateContent,
     // Reasoning-capable HF templates are inconsistent on the exact field name,
@@ -132,21 +130,21 @@ struct TemplateMessage {
 }
 
 /// Chat content in the two shapes HF templates commonly expect.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum TemplateContent {
     String(String),
     OpenAi(ChatContent),
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct TemplateToolCall {
     id: String,
     r#type: &'static str, // always "function"
     function: TemplateToolFunction,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct TemplateToolFunction {
     name: String,
     arguments: Value,
@@ -154,13 +152,13 @@ struct TemplateToolFunction {
 
 #[derive(Debug, Serialize)]
 #[serde(transparent)]
-struct TemplateTool(OpenAiTool);
+pub(super) struct TemplateTool(OpenAiTool);
 
 /// Convert chat messages into the JSON shape expected by Jinja chat templates.
 fn to_template_messages(
     messages: &[ChatMessage],
     content_format: ChatTemplateContentFormat,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<TemplateMessage>> {
     messages
         .iter()
         .map(|message| to_template_message(message, content_format))
@@ -170,8 +168,8 @@ fn to_template_messages(
 fn to_template_message(
     message: &ChatMessage,
     content_format: ChatTemplateContentFormat,
-) -> Result<Value> {
-    let msg = match message {
+) -> Result<TemplateMessage> {
+    Ok(match message {
         ChatMessage::System { content } => TemplateMessage {
             role: "system",
             content: to_template_content(content, content_format)?,
@@ -213,9 +211,7 @@ fn to_template_message(
             tool_calls: None,
             tool_call_id: Some(tool_call_id.clone()),
         },
-    };
-
-    Ok(serde_json::to_value(msg).expect("chat message should serialize to valid JSON"))
+    })
 }
 
 fn to_template_tool_calls(

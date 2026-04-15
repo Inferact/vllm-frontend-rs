@@ -12,7 +12,7 @@ use crate::backends::LoadedModelBackends;
 use crate::error::{Error, Result};
 use crate::renderers::DynChatRenderer;
 use crate::renderers::hf::HfChatRenderer;
-use crate::renderers::hf::jinja::load_chat_template_from_file;
+use crate::renderers::hf::template::load_chat_template_from_file;
 
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
