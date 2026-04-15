@@ -14,16 +14,33 @@ use crate::{AssistantMessageExt, Error};
 
 /// Hugging Face chat-template renderer backed by smg's [`ChatTemplateState`].
 pub struct HfChatRenderer {
-    inner: ChatTemplateState,
+    default_template: Option<CompiledChatTemplate>,
     special_tokens: Option<SpecialTokens>,
+}
+
+/// One compiled chat template that is guaranteed to contain template content.
+struct CompiledChatTemplate {
+    state: ChatTemplateState,
+}
+
+impl CompiledChatTemplate {
+    fn new(template: String) -> Result<Self> {
+        Ok(Self {
+            state: ChatTemplateState::new(Some(template))
+                .map_err(|error| Error::ChatTemplate(error.to_report_string()))?,
+        })
+    }
+
+    fn content_format(&self) -> ChatTemplateContentFormat {
+        self.state.content_format()
+    }
 }
 
 impl HfChatRenderer {
     /// Create a renderer from the given template string.
     pub fn new(template: Option<String>, special_tokens: Option<SpecialTokens>) -> Result<Self> {
         Ok(Self {
-            inner: ChatTemplateState::new(template)
-                .map_err(|error| Error::ChatTemplate(error.to_report_string()))?,
+            default_template: template.map(CompiledChatTemplate::new).transpose()?,
             special_tokens,
         })
     }
@@ -34,21 +51,32 @@ impl HfChatRenderer {
     /// If the request carries a per-request `chat_template` override, a temporary template is
     /// compiled from that string and used instead of the model's default.
     fn apply_chat_template(&self, request: &ChatRequest) -> Result<RenderedPrompt> {
-        if let Some(override_template) = &request.chat_options.chat_template {
-            let overridden =
-                Self::new(Some(override_template.clone()), self.special_tokens.clone())?;
-            return overridden.apply_chat_template_inner(request);
-        }
-        self.apply_chat_template_inner(request)
+        let override_template = request
+            .chat_options
+            .chat_template
+            .as_ref()
+            .map(|template| CompiledChatTemplate::new(template.clone()))
+            .transpose()?;
+        let template = override_template
+            .as_ref()
+            .or(self.default_template.as_ref())
+            .ok_or(Error::MissingChatTemplate)?;
+
+        self.apply_chat_template_inner(template, request)
     }
 
-    fn apply_chat_template_inner(&self, request: &ChatRequest) -> Result<RenderedPrompt> {
-        let messages = template_messages_to_json(&request.messages, self.inner.content_format())?;
+    fn apply_chat_template_inner(
+        &self,
+        effective_template: &CompiledChatTemplate,
+        request: &ChatRequest,
+    ) -> Result<RenderedPrompt> {
+        let messages =
+            template_messages_to_json(&request.messages, effective_template.content_format())?;
         let tools = request.template_tools();
         trace!(
             request_id = %request.request_id,
             message_count = messages.len(),
-            content_format = ?self.inner.content_format(),
+            content_format = ?effective_template.content_format(),
             ?messages,
             "applying chat template"
         );
@@ -62,8 +90,8 @@ impl HfChatRenderer {
             kwargs
         };
 
-        let prompt = self
-            .inner
+        let prompt = effective_template
+            .state
             .apply(
                 &messages,
                 ChatTemplateParams {
@@ -74,14 +102,7 @@ impl HfChatRenderer {
                     special_tokens: self.special_tokens.as_ref(),
                 },
             )
-            .map_err(|error| {
-                let message = error.to_report_string();
-                if message.contains("tokenizer.chat_template is not set") {
-                    Error::MissingChatTemplate
-                } else {
-                    Error::ChatTemplate(message)
-                }
-            })?;
+            .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
 
         trace!(
             request_id = %request.request_id,
@@ -355,6 +376,16 @@ mod tests {
         request.chat_options.chat_template = Some("override:{{ messages[0].content }}".to_string());
         let overridden = render(Some("{{ messages[0].content }}"), &request).unwrap();
         assert_eq!(overridden, "override:hello");
+    }
+
+    #[test]
+    fn chat_template_per_request_override_without_default_template() {
+        let mut request = sample_request(vec![ChatMessage::text(ChatRole::User, "hello")]);
+        request.chat_options.chat_template = Some("override:{{ messages[0].content }}".to_string());
+
+        let rendered = render(None, &request).unwrap();
+
+        assert_eq!(rendered, "override:hello");
     }
 
     #[test]
