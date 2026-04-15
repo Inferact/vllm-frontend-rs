@@ -147,8 +147,10 @@ fn sort_json_keys(value: &JsonValue) -> JsonValue {
 
 #[cfg(test)]
 mod tests {
+    use expect_test::expect;
     use minijinja::Environment;
     use serde_json::json;
+    use thiserror_ext::AsReport;
 
     use super::hf_tojson_filter;
 
@@ -157,6 +159,13 @@ mod tests {
         env.add_filter("tojson", hf_tojson_filter);
         env.render_str(template, json!({ "payload": payload }))
             .unwrap()
+    }
+
+    fn render_error(template: &str, payload: serde_json::Value) -> minijinja::Error {
+        let mut env = Environment::new();
+        env.add_filter("tojson", hf_tojson_filter);
+        env.render_str(template, json!({ "payload": payload }))
+            .unwrap_err()
     }
 
     #[test]
@@ -244,5 +253,29 @@ mod tests {
             rendered,
             "{\n  \"a\":[\n    1,\n    2\n  ],\n  \"b\":\"<\\u4e2d>\"\n}"
         );
+    }
+
+    #[test]
+    fn tojson_rejects_invalid_indent() {
+        let error = render_error("{{ payload|tojson(indent='-->') }}", json!({"a": 1}));
+        expect!["invalid operation: invalid indent value for tojson: string contains unexpected character '-' (in <string>:1)"]
+            .assert_eq(&error.to_report_string());
+    }
+
+    #[test]
+    fn tojson_rejects_invalid_separator_shape() {
+        let error = render_error("{{ payload|tojson(separators=':,') }}", json!({"a": 1}));
+        expect!["cannot deserialize: invalid type: string \":,\", expected a tuple of size 2 (in <string>:1)"]
+            .assert_eq(&error.to_report_string());
+    }
+
+    #[test]
+    fn tojson_rejects_invalid_key_separator() {
+        let error = render_error(
+            "{{ payload|tojson(separators=[',', '=>']) }}",
+            json!({"a": 1}),
+        );
+        expect!["invalid operation: invalid separators (key) value for tojson: string contains unexpected character '=' (in <string>:1)"]
+            .assert_eq(&error.to_report_string());
     }
 }
