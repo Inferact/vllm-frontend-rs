@@ -15,14 +15,6 @@ use crate::backend::{SamplingHints, TextBackend};
 use crate::error::Result;
 use crate::tokenizers::{DynTokenizer, HuggingFaceTokenizer, TekkenTokenizer, TiktokenTokenizer};
 
-fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
-    match tokenizer {
-        TokenizerSource::HuggingFace(path) => Ok(Arc::new(HuggingFaceTokenizer::new(path)?)),
-        TokenizerSource::Tiktoken(path) => Ok(Arc::new(TiktokenTokenizer::new(path)?)),
-        TokenizerSource::Tekken(path) => Ok(Arc::new(TekkenTokenizer::new(path)?)),
-    }
-}
-
 /// [`TextBackend`] implementation built on Hugging Face model files.
 pub struct HfTextBackend {
     model_id: String,
@@ -49,7 +41,7 @@ impl HfTextBackend {
     /// Load the text backend from resolved Hugging Face model files.
     pub fn from_resolved_model_files(files: ResolvedModelFiles, model_id: String) -> Result<Self> {
         let tokenizer_config = load_tokenizer_config(files.tokenizer_config_path.as_deref())?;
-        let tokenizer = load_tokenizer(&files.tokenizer)?;
+        let tokenizer = load_tokenizer_with_config(&files.tokenizer, &tokenizer_config)?;
         let primary_eos_token_id = tokenizer_config
             .special_tokens
             .eos_token
@@ -86,6 +78,22 @@ impl HfTextBackend {
     /// Expose the resolved model files for use by the chat backend to load the chat template.
     pub fn resolved_model_files(&self) -> &ResolvedModelFiles {
         &self.files
+    }
+}
+
+fn load_tokenizer_with_config(
+    tokenizer: &TokenizerSource,
+    tokenizer_config: &HfTokenizerConfig,
+) -> Result<DynTokenizer> {
+    match tokenizer {
+        TokenizerSource::HuggingFace(path) => {
+            Ok(Arc::new(HuggingFaceTokenizer::new_with_special_tokens(
+                path,
+                Some(&tokenizer_config.special_tokens),
+            )?))
+        }
+        TokenizerSource::Tiktoken(path) => Ok(Arc::new(TiktokenTokenizer::new(path)?)),
+        TokenizerSource::Tekken(path) => Ok(Arc::new(TekkenTokenizer::new(path)?)),
     }
 }
 
