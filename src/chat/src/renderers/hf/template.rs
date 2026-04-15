@@ -179,12 +179,11 @@ impl<'a> Detector<'a> {
             Stmt::EmitExpr(e) => {
                 self.inspect_expr_for_structure(&e.expr);
             }
-            Stmt::Set(s) => {
+            Stmt::Set(s)
                 if Self::is_var_access(&s.target, "content")
-                    && self.is_any_scope_var_content(&s.expr)
-                {
-                    self.flags.saw_assignment = true;
-                }
+                    && self.is_any_scope_var_content(&s.expr) =>
+            {
+                self.flags.saw_assignment = true;
             }
             Stmt::Macro(m) => {
                 let mut has_type_check = false;
@@ -204,13 +203,12 @@ impl<'a> Detector<'a> {
         }
 
         match expr {
-            Expr::GetItem(gi) => {
+            Expr::GetItem(gi)
                 if (matches!(&gi.expr, Expr::Var(v) if v.id == "content")
                     || self.is_any_scope_var_content(&gi.expr))
-                    && Self::is_numeric_const(&gi.subscript_expr)
-                {
-                    self.flags.saw_structure = true;
-                }
+                    && Self::is_numeric_const(&gi.subscript_expr) =>
+            {
+                self.flags.saw_structure = true;
             }
             Expr::Filter(f) => {
                 if f.name == "length" {
