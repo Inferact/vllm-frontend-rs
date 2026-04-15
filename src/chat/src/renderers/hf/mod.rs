@@ -11,6 +11,7 @@ use crate::error::Result;
 use crate::request::{ChatContent, ChatMessage, ChatRequest};
 use crate::{AssistantContentBlock, AssistantMessageExt, ChatTool, Error};
 
+pub mod error;
 pub mod template;
 
 /// Hugging Face chat-template renderer backed by the local Jinja chat-template state.

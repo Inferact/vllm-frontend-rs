@@ -7,18 +7,20 @@
 use std::collections::HashMap;
 use std::fs;
 
-use anyhow::{Result, anyhow};
 use minijinja::machinery::ast::{Expr, Stmt};
 use minijinja::machinery::{WhitespaceConfig, parse};
 use minijinja::syntax::SyntaxConfig;
 use minijinja::value::Kwargs;
 use minijinja::{Environment, Error as MinijinjaError, ErrorKind, Value};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::ser::PrettyFormatter;
 use serde_json::{self, Value as JsonValue};
 use vllm_text::backends::hf::HfSpecialTokens;
 
+use super::error::TemplateError;
 use crate::renderers::hf::{TemplateMessage, TemplateTool};
+
+type Result<T> = std::result::Result<T, TemplateError>;
 
 /// Chat template content format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -28,20 +30,6 @@ pub enum ChatTemplateContentFormat {
     String,
     /// Content is a list of structured parts (OpenAI format).
     OpenAi,
-}
-
-impl std::fmt::Display for ChatTemplateContentFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::String => write!(f, "string"),
-            Self::OpenAi => write!(f, "openai"),
-        }
-    }
-}
-
-/// Detect the content format expected by a Jinja2 chat template.
-pub fn detect_chat_template_content_format(template: &str) -> ChatTemplateContentFormat {
-    detect_format_with_ast(template)
 }
 
 /// Flags tracking which OpenAI-style patterns we've seen.
@@ -300,6 +288,11 @@ fn detect_format_with_ast(template: &str) -> ChatTemplateContentFormat {
     }
 }
 
+/// Detect the content format expected by a Jinja2 chat template.
+pub fn detect_chat_template_content_format(template: &str) -> ChatTemplateContentFormat {
+    detect_format_with_ast(template)
+}
+
 /// Custom `tojson` filter compatible with HuggingFace transformers' implementation.
 fn tojson_filter(value: Value, kwargs: Kwargs) -> std::result::Result<Value, MinijinjaError> {
     let _ensure_ascii: Option<bool> = kwargs.get("ensure_ascii")?;
@@ -392,8 +385,7 @@ fn build_environment(template: String) -> Result<Environment<'static>> {
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
 
-    env.add_template_owned("chat".to_owned(), template)
-        .map_err(|e| anyhow!("Failed to add template: {e}"))?;
+    env.add_template_owned("chat".to_owned(), template)?;
 
     env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
     env.add_filter("tojson", tojson_filter);
@@ -416,25 +408,25 @@ pub(super) struct TemplateContext<'a> {
 
 /// Load chat template from a file (`.jinja` or `.json` containing Jinja).
 pub fn load_chat_template_from_file(template_path: &str) -> Result<Option<String>> {
-    let content = fs::read_to_string(template_path)
-        .map_err(|e| anyhow!("Failed to read chat template file: {e}"))?;
+    let content = fs::read_to_string(template_path).map_err(TemplateError::ReadTemplateFile)?;
 
     if template_path.ends_with(".json") {
-        let json_value: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| anyhow!("Failed to parse chat_template.json: {e}"))?;
-
-        if let Some(template_str) = json_value.as_str() {
-            return Ok(Some(template_str.to_string()));
-        } else if let Some(obj) = json_value.as_object()
-            && let Some(template_value) = obj.get("chat_template")
-            && let Some(template_str) = template_value.as_str()
-        {
-            return Ok(Some(template_str.to_string()));
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ChatTemplateFile {
+            String(String),
+            Object { chat_template: String },
         }
 
-        return Err(anyhow!(
-            "chat_template.json does not contain a valid template",
-        ));
+        let json_value =
+            serde_json::from_str(&content).map_err(TemplateError::ParseTemplateJson)?;
+        let json_template =
+            serde_json::from_value(json_value).map_err(|_| TemplateError::InvalidTemplateJson)?;
+
+        return Ok(Some(match json_template {
+            ChatTemplateFile::String(template) => template,
+            ChatTemplateFile::Object { chat_template } => chat_template,
+        }));
     }
 
     let template = content.trim().replace("\\n", "\n");
@@ -446,14 +438,6 @@ pub(super) struct CompiledChatTemplate {
     /// Cached, fully-configured environment for one compiled template.
     env: Environment<'static>,
     content_format: ChatTemplateContentFormat,
-}
-
-impl std::fmt::Debug for CompiledChatTemplate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledChatTemplate")
-            .field("content_format", &self.content_format)
-            .finish()
-    }
 }
 
 impl CompiledChatTemplate {
@@ -469,13 +453,8 @@ impl CompiledChatTemplate {
 
     /// Apply the compiled template to the given context and return the rendered prompt.
     pub fn apply(&self, ctx: TemplateContext<'_>) -> Result<String> {
-        let tmpl = self
-            .env
-            .get_template("chat")
-            .map_err(|e| anyhow!("Failed to get template: {e}"))?;
-
-        tmpl.render(ctx)
-            .map_err(|e| anyhow!("Failed to render template: {e}"))
+        let tmpl = self.env.get_template("chat")?;
+        tmpl.render(ctx).map_err(TemplateError::from)
     }
 
     pub fn content_format(&self) -> ChatTemplateContentFormat {
@@ -504,9 +483,9 @@ mod tests {
     fn test_chat_template_state_invalid_template() {
         let result = CompiledChatTemplate::new("{% invalid".to_string());
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.err().unwrap().to_string();
         assert!(
-            err.contains("Failed to add template"),
+            err.contains("failed to render jinja template"),
             "Error should explain parse failure, got: {err}"
         );
     }
