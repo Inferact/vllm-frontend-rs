@@ -1,46 +1,33 @@
 use serde::Serialize;
 use serde_json::Value;
-use smg_tokenizer::SpecialTokens;
-use smg_tokenizer::chat_template::{
-    ChatTemplateContentFormat, ChatTemplateParams, ChatTemplateState,
-};
 use thiserror_ext::AsReport as _;
 use tracing::trace;
+use vllm_text::backends::hf::HfSpecialTokens;
 
+use self::jinja::{ChatTemplateContentFormat, ChatTemplateParams, CompiledChatTemplate};
 use super::{ChatRenderer, RenderedPrompt};
 use crate::error::Result;
 use crate::request::{ChatContent, ChatMessage, ChatRequest};
 use crate::{AssistantMessageExt, Error};
 
-/// Hugging Face chat-template renderer backed by smg's [`ChatTemplateState`].
+pub mod jinja;
+
+/// Hugging Face chat-template renderer backed by the local Jinja chat-template state.
 pub struct HfChatRenderer {
     default_template: Option<CompiledChatTemplate>,
-    special_tokens: Option<SpecialTokens>,
-}
-
-/// One compiled chat template that is guaranteed to contain template content.
-struct CompiledChatTemplate {
-    state: ChatTemplateState,
-}
-
-impl CompiledChatTemplate {
-    fn new(template: String) -> Result<Self> {
-        Ok(Self {
-            state: ChatTemplateState::new(Some(template))
-                .map_err(|error| Error::ChatTemplate(error.to_report_string()))?,
-        })
-    }
-
-    fn content_format(&self) -> ChatTemplateContentFormat {
-        self.state.content_format()
-    }
+    special_tokens: Option<HfSpecialTokens>,
 }
 
 impl HfChatRenderer {
     /// Create a renderer from the given template string.
-    pub fn new(template: Option<String>, special_tokens: Option<SpecialTokens>) -> Result<Self> {
+    pub fn new(template: Option<String>, special_tokens: Option<HfSpecialTokens>) -> Result<Self> {
         Ok(Self {
-            default_template: template.map(CompiledChatTemplate::new).transpose()?,
+            default_template: template
+                .map(|template| {
+                    CompiledChatTemplate::new(template)
+                        .map_err(|error| Error::ChatTemplate(error.to_report_string()))
+                })
+                .transpose()?,
             special_tokens,
         })
     }
@@ -55,7 +42,10 @@ impl HfChatRenderer {
             .chat_options
             .chat_template
             .as_ref()
-            .map(|template| CompiledChatTemplate::new(template.clone()))
+            .map(|template| {
+                CompiledChatTemplate::new(template.clone())
+                    .map_err(|error| Error::ChatTemplate(error.to_report_string()))
+            })
             .transpose()?;
         let template = override_template
             .as_ref()
@@ -91,7 +81,6 @@ impl HfChatRenderer {
         };
 
         let prompt = effective_template
-            .state
             .apply(
                 &messages,
                 ChatTemplateParams {
@@ -250,7 +239,7 @@ fn template_content_to_json(
 mod tests {
     use expect_test::expect;
     use serde_json::Value;
-    use smg_tokenizer::SpecialTokens;
+    use vllm_text::backends::hf::{HfSpecialTokens, NamedSpecialToken};
 
     use super::HfChatRenderer;
     use crate::request::{
@@ -258,8 +247,8 @@ mod tests {
     };
     use crate::{AssistantContentBlock, ChatRenderer, Error, Result};
 
-    const QWEN3_0_6B_TEMPLATE: &str = include_str!("../../tests/templates/qwen3.jinja");
-    const QWEN3_5_0_8B_TEMPLATE: &str = include_str!("../../tests/templates/qwen35.jinja");
+    const QWEN3_0_6B_TEMPLATE: &str = include_str!("../../../tests/templates/qwen3.jinja");
+    const QWEN3_5_0_8B_TEMPLATE: &str = include_str!("../../../tests/templates/qwen35.jinja");
 
     fn sample_request(messages: Vec<ChatMessage>) -> ChatRequest {
         ChatRequest {
@@ -399,8 +388,8 @@ mod tests {
     #[test]
     fn chat_template_injects_special_tokens_into_context() {
         let request = sample_request(vec![ChatMessage::text(ChatRole::User, "hello")]);
-        let special_tokens = SpecialTokens {
-            bos_token: Some("<bos>".to_string()),
+        let special_tokens = HfSpecialTokens {
+            bos_token: Some(NamedSpecialToken::Text("<bos>".to_string())),
             ..Default::default()
         };
 
