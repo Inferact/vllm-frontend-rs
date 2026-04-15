@@ -23,17 +23,36 @@ pub struct HuggingFaceTokenizer {
 
 impl HuggingFaceTokenizer {
     fn from_hf_backend(tokenizer: HfTokenizer) -> Self {
-        let special_token_ids = collect_special_token_ids(&tokenizer);
+        let special_token_ids = {
+            let mut ids: Vec<u32> = tokenizer
+                .get_added_tokens_decoder()
+                .iter()
+                .filter(|(_id, token)| token.special)
+                .map(|(id, _token)| *id)
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            Arc::from(ids)
+        };
         Self {
             backend: Backend::Hf(Box::new(tokenizer)),
             special_token_ids,
         }
     }
 
-    fn from_fastokens_backend(
-        tokenizer: FastokensTokenizer,
-        special_token_ids: Arc<[u32]>,
-    ) -> Self {
+    fn from_fastokens_backend(tokenizer: FastokensTokenizer) -> Self {
+        let special_token_ids = {
+            let mut ids: Vec<u32> = tokenizer
+                .added_tokens()
+                .into_iter()
+                .flat_map(|added_tokens| added_tokens.iter())
+                .filter(|token| token.special)
+                .map(|token| token.id)
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            Arc::from(ids)
+        };
         Self {
             backend: Backend::Fastokens(Box::new(tokenizer)),
             special_token_ids,
@@ -41,28 +60,12 @@ impl HuggingFaceTokenizer {
     }
 
     /// Load from `tokenizer.json` with `fastokens`.
-    ///
-    /// This always loads HuggingFace's `tokenizers` first so we can inspect the
-    /// complete added-token metadata, then optionally upgrades the execution backend
-    /// to `fastokens` for better performance.
-    // TODO: once `fastokens` supports added-token metadata, we can simplify this by loading
-    // directly with `fastokens` and only falling back to `tokenizers` if loading fails (e.g. due to
-    // unsupported tokenizer features).
     pub fn new_fastokens(path: &Path) -> Result<Self> {
-        info!(
-            path = %path.display(),
-            "loading tokenizer metadata with huggingface tokenizers"
-        );
-        let hf_tokenizer = HfTokenizer::from_file(path).map_err(|error| {
-            Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
-        })?;
-        let special_token_ids = collect_special_token_ids(&hf_tokenizer);
-
         info!(path = %path.display(), "loading tokenizer with fastokens");
         let t = FastokensTokenizer::from_file(path).map_err(|error| {
             Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
         })?;
-        Ok(Self::from_fastokens_backend(t, special_token_ids))
+        Ok(Self::from_fastokens_backend(t))
     }
 
     /// Load from `tokenizer.json` with Hugging Face `tokenizers`.
@@ -76,43 +79,18 @@ impl HuggingFaceTokenizer {
 
     /// Load from `tokenizer.json` via fastokens or HuggingFace tokenizers.
     pub fn new(path: &Path) -> Result<Self> {
-        info!(
-            path = %path.display(),
-            "loading tokenizer metadata with huggingface tokenizers"
-        );
-        let hf_tokenizer = HfTokenizer::from_file(path).map_err(|error| {
-            Error::Tokenizer(format!("failed to load tokenizer: {}", error.as_report()))
-        })?;
-
-        match FastokensTokenizer::from_file(path) {
-            Ok(tokenizer) => {
-                info!(path = %path.display(), "upgrading tokenizer backend to fastokens");
-                let special_token_ids = collect_special_token_ids(&hf_tokenizer);
-                Ok(Self::from_fastokens_backend(tokenizer, special_token_ids))
-            }
+        match Self::new_fastokens(path) {
+            Ok(tokenizer) => Ok(tokenizer),
             Err(error) => {
                 warn!(
                     path = %path.display(),
                     error = %error.as_report(),
                     "failed to load tokenizer with fastokens; falling back to HuggingFace tokenizers"
                 );
-                Ok(Self::from_hf_backend(hf_tokenizer))
+                Self::new_hf(path)
             }
         }
     }
-}
-
-fn collect_special_token_ids(tokenizer: &HfTokenizer) -> Arc<[u32]> {
-    let mut ids: Vec<u32> = tokenizer
-        .get_added_tokens_decoder()
-        .iter()
-        .filter(|(_id, token)| token.special)
-        .map(|(id, _token)| *id)
-        .collect();
-
-    ids.sort_unstable();
-    ids.dedup();
-    Arc::from(ids)
 }
 
 impl Tokenizer for HuggingFaceTokenizer {
@@ -206,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn new_fastokens_preserves_special_ids_from_hf_metadata() {
+    fn new_fastokens_preserves_special_ids_from_fastokens_metadata() {
         let mut tokenizer = tiny_bpe_tokenizer();
         tokenizer.add_special_tokens(&[AddedToken::from("<|im_end|>", true)]);
 
