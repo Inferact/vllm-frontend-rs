@@ -1,11 +1,9 @@
-use std::fmt::Write as _;
-use std::io;
-
 use minijinja::value::{Kwargs, ViaDeserialize};
 use minijinja::{Error as MinijinjaError, ErrorKind, Value};
-use serde::{Deserialize, Serialize};
-use serde_json::ser::Formatter;
+use serde::Deserialize;
 use serde_json::{self, Value as JsonValue};
+use serde_json_fmt::{JsonFormat, JsonSyntaxError};
+use thiserror_ext::AsReport;
 
 /// Hugging Face-compatible `tojson` filter for chat templates.
 ///
@@ -23,13 +21,13 @@ pub(super) fn hf_tojson_filter(
         kwargs
             .get::<Option<ViaDeserialize<IndentArg>>>("indent")?
             .map(|value| value.0),
-    )?;
+    );
     let separators = parse_separators(
         kwargs
             .get::<Option<ViaDeserialize<SeparatorsArg>>>("separators")?
             .map(|value| value.0),
         indent.is_some(),
-    )?;
+    );
     let sort_keys = kwargs.get::<Option<bool>>("sort_keys")?.unwrap_or(false);
 
     kwargs.assert_all_used()?;
@@ -42,47 +40,23 @@ pub(super) fn hf_tojson_filter(
     })?;
 
     let json_str = {
-        let sorted_json;
         let value_to_serialize = if sort_keys {
-            sorted_json = sort_json_keys(&json_value);
-            &sorted_json
+            &sort_json_keys(&json_value)
         } else {
             &json_value
         };
 
-        serialize_with_formatter(
-            value_to_serialize,
-            HfJsonFormatter::new(indent, separators.0, separators.1),
-        )?
-    };
-
-    let json_str = if ensure_ascii {
-        escape_json_non_ascii(&json_str)
-    } else {
-        json_str
+        build_json_format(indent, separators.0, separators.1, ensure_ascii)?
+            .format_to_string(value_to_serialize)
+            .map_err(|e| {
+                MinijinjaError::new(
+                    ErrorKind::InvalidOperation,
+                    format!("Failed to serialize JSON: {}", e.as_report()),
+                )
+            })?
     };
 
     Ok(Value::from_safe_string(json_str))
-}
-
-fn serialize_with_formatter<T: Serialize>(
-    value: &T,
-    formatter: HfJsonFormatter,
-) -> std::result::Result<String, MinijinjaError> {
-    let mut buf = Vec::new();
-    let mut serializer = serde_json::Serializer::with_formatter(&mut buf, formatter);
-    value.serialize(&mut serializer).map_err(|e| {
-        MinijinjaError::new(
-            ErrorKind::InvalidOperation,
-            format!("Failed to serialize JSON: {e}"),
-        )
-    })?;
-    String::from_utf8(buf).map_err(|e| {
-        MinijinjaError::new(
-            ErrorKind::InvalidOperation,
-            format!("Invalid UTF-8 in JSON output: {e}"),
-        )
-    })
 }
 
 #[derive(Deserialize)]
@@ -94,217 +68,63 @@ enum IndentArg {
     String(String),
 }
 
-fn parse_indent(value: Option<IndentArg>) -> std::result::Result<Option<Vec<u8>>, MinijinjaError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
-    match value {
-        IndentArg::Bool(indent) => Ok(Some(if indent { vec![b' '] } else { Vec::new() })),
-        IndentArg::Integer(indent) => Ok(Some(if indent > 0 {
-            vec![b' '; indent as usize]
+fn parse_indent(value: Option<IndentArg>) -> Option<String> {
+    match value? {
+        IndentArg::Bool(indent) => Some(if indent {
+            " ".to_owned()
         } else {
-            Vec::new()
-        })),
-        IndentArg::String(indent) => Ok(Some(indent.into_bytes())),
+            String::new()
+        }),
+        IndentArg::Integer(indent) => Some(if indent > 0 {
+            " ".repeat(indent as usize)
+        } else {
+            String::new()
+        }),
+        IndentArg::String(indent) => Some(indent),
     }
 }
 
 #[derive(Deserialize)]
 struct SeparatorsArg((String, String));
 
-fn parse_separators(
-    value: Option<SeparatorsArg>,
-    pretty: bool,
-) -> std::result::Result<(Vec<u8>, Vec<u8>), MinijinjaError> {
-    let default_item_separator = if pretty {
-        b",".to_vec()
-    } else {
-        b", ".to_vec()
-    };
-    let default_key_separator = b": ".to_vec();
+fn parse_separators(value: Option<SeparatorsArg>, pretty: bool) -> (String, String) {
+    let Some(SeparatorsArg((item_separator, key_separator))) = value else {
+        let default_item_separator = if pretty { "," } else { ", " };
+        let default_key_separator = ": ";
 
-    let Some(value) = value else {
-        return Ok((default_item_separator, default_key_separator));
+        return (
+            default_item_separator.to_owned(),
+            default_key_separator.to_owned(),
+        );
     };
 
-    let SeparatorsArg((item_separator, key_separator)) = value;
-
-    Ok((item_separator.into_bytes(), key_separator.into_bytes()))
+    (item_separator, key_separator)
 }
 
-fn escape_json_non_ascii(json: &str) -> String {
-    let mut escaped = String::with_capacity(json.len());
-
-    for ch in json.chars() {
-        if ch.is_ascii() {
-            escaped.push(ch);
-        } else {
-            // Match Python's `ensure_ascii=True` behavior by escaping via UTF-16
-            // code units, including surrogate pairs for non-BMP characters.
-            let mut units = [0; 2];
-            for code_unit in ch.encode_utf16(&mut units).iter() {
-                let _ = write!(escaped, "\\u{code_unit:04x}");
-            }
-        }
-    }
-
-    escaped
+fn build_json_format(
+    indent: Option<String>,
+    item_separator: String,
+    key_separator: String,
+    ensure_ascii: bool,
+) -> std::result::Result<JsonFormat, MinijinjaError> {
+    JsonFormat::new()
+        .indent(indent)
+        .map_err(map_json_syntax_error("indent"))?
+        .comma(item_separator)
+        .map_err(map_json_syntax_error("separators (item)"))?
+        .colon(key_separator)
+        .map_err(map_json_syntax_error("separators (key)"))
+        .map(|format| format.ascii(ensure_ascii))
 }
 
-/// Formatter that mirrors the subset of `json.dumps` spacing behavior used by
-/// HF chat templates, including custom separators in both compact and pretty
-/// modes.
-struct HfJsonFormatter {
-    current_indent: usize,
-    has_value: bool,
-    indent: Option<Vec<u8>>,
-    item_separator: Vec<u8>,
-    key_separator: Vec<u8>,
-}
-
-impl HfJsonFormatter {
-    fn new(indent: Option<Vec<u8>>, item_separator: Vec<u8>, key_separator: Vec<u8>) -> Self {
-        Self {
-            current_indent: 0,
-            has_value: false,
-            indent,
-            item_separator,
-            key_separator,
-        }
-    }
-
-    fn is_pretty(&self) -> bool {
-        self.indent.is_some()
-    }
-
-    fn write_indent<W>(&self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if let Some(indent) = &self.indent {
-            for _ in 0..self.current_indent {
-                writer.write_all(indent)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Formatter for HfJsonFormatter {
-    fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.current_indent += 1;
-            self.has_value = false;
-        }
-        writer.write_all(b"[")
-    }
-
-    fn end_array<W>(&mut self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.current_indent -= 1;
-            if self.has_value {
-                writer.write_all(b"\n")?;
-                self.write_indent(writer)?;
-            }
-        }
-        writer.write_all(b"]")
-    }
-
-    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            if first {
-                writer.write_all(b"\n")?;
-            } else {
-                writer.write_all(&self.item_separator)?;
-                writer.write_all(b"\n")?;
-            }
-            self.write_indent(writer)
-        } else if first {
-            Ok(())
-        } else {
-            writer.write_all(&self.item_separator)
-        }
-    }
-
-    fn end_array_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.has_value = true;
-        }
-        Ok(())
-    }
-
-    fn begin_object<W>(&mut self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.current_indent += 1;
-            self.has_value = false;
-        }
-        writer.write_all(b"{")
-    }
-
-    fn end_object<W>(&mut self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.current_indent -= 1;
-            if self.has_value {
-                writer.write_all(b"\n")?;
-                self.write_indent(writer)?;
-            }
-        }
-        writer.write_all(b"}")
-    }
-
-    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            if first {
-                writer.write_all(b"\n")?;
-            } else {
-                writer.write_all(&self.item_separator)?;
-                writer.write_all(b"\n")?;
-            }
-            self.write_indent(writer)
-        } else if first {
-            Ok(())
-        } else {
-            writer.write_all(&self.item_separator)
-        }
-    }
-
-    fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        writer.write_all(&self.key_separator)
-    }
-
-    fn end_object_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
-    where
-        W: ?Sized + io::Write,
-    {
-        if self.is_pretty() {
-            self.has_value = true;
-        }
-        Ok(())
+fn map_json_syntax_error(
+    field: &'static str,
+) -> impl FnOnce(JsonSyntaxError) -> MinijinjaError + Copy {
+    move |error| {
+        MinijinjaError::new(
+            ErrorKind::InvalidOperation,
+            format!("invalid {field} value for tojson: {error}"),
+        )
     }
 }
 
