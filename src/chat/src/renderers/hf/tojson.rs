@@ -143,7 +143,7 @@ fn escape_json_non_ascii(json: &str) -> String {
             // Match Python's `ensure_ascii=True` behavior by escaping via UTF-16
             // code units, including surrogate pairs for non-BMP characters.
             let mut units = [0; 2];
-            for code_unit in ch.encode_utf16(&mut units).iter().copied() {
+            for code_unit in ch.encode_utf16(&mut units).iter() {
                 let _ = write!(escaped, "\\u{code_unit:04x}");
             }
         }
