@@ -5,14 +5,18 @@ use thiserror_ext::AsReport as _;
 use tracing::trace;
 use vllm_text::backends::hf::HfSpecialTokens;
 
-use self::template::{ChatTemplateContentFormat, CompiledChatTemplate, TemplateContext};
+use self::format::ChatTemplateContentFormat;
+use self::template::{CompiledChatTemplate, TemplateContext};
 use super::{ChatRenderer, RenderedPrompt};
 use crate::error::Result;
 use crate::request::{ChatContent, ChatMessage, ChatRequest};
 use crate::{AssistantContentBlock, AssistantMessageExt, ChatTool, Error};
 
-pub mod error;
-pub mod template;
+mod error;
+mod format;
+mod template;
+
+pub use template::load_chat_template;
 
 /// Hugging Face chat-template renderer backed by the local Jinja chat-template state.
 pub struct HfChatRenderer {

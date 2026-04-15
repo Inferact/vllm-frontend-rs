@@ -11,8 +11,7 @@ use crate::backend::{ChatBackend, DynChatBackend};
 use crate::backends::LoadedModelBackends;
 use crate::error::{Error, Result};
 use crate::renderers::DynChatRenderer;
-use crate::renderers::hf::HfChatRenderer;
-use crate::renderers::hf::template::load_chat_template_from_file;
+use crate::renderers::hf::{HfChatRenderer, load_chat_template};
 
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
@@ -39,12 +38,8 @@ impl HfChatBackend {
         // If independent chat template file(s) exist and contain non-empty content, they take
         // priority over template entries in the tokenizer config
         if let Some(chat_template_path) = files.chat_template_path.as_deref() {
-            let file_template = load_chat_template_from_file(
-                chat_template_path
-                    .to_str()
-                    .expect("chat template path should be valid UTF-8"),
-            )
-            .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
+            let file_template = load_chat_template(chat_template_path)
+                .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
 
             if file_template.as_ref().is_some_and(|t| !t.trim().is_empty()) {
                 info!(
