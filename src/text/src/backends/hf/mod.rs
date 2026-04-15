@@ -15,6 +15,14 @@ use crate::backend::{SamplingHints, TextBackend};
 use crate::error::Result;
 use crate::tokenizers::{DynTokenizer, HuggingFaceTokenizer, TekkenTokenizer, TiktokenTokenizer};
 
+fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
+    match tokenizer {
+        TokenizerSource::HuggingFace(path) => Ok(Arc::new(HuggingFaceTokenizer::new(path)?)),
+        TokenizerSource::Tiktoken(path) => Ok(Arc::new(TiktokenTokenizer::new(path)?)),
+        TokenizerSource::Tekken(path) => Ok(Arc::new(TekkenTokenizer::new(path)?)),
+    }
+}
+
 /// [`TextBackend`] implementation built on Hugging Face model files.
 pub struct HfTextBackend {
     model_id: String,
@@ -78,14 +86,6 @@ impl HfTextBackend {
     /// Expose the resolved model files for use by the chat backend to load the chat template.
     pub fn resolved_model_files(&self) -> &ResolvedModelFiles {
         &self.files
-    }
-}
-
-fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
-    match tokenizer {
-        TokenizerSource::HuggingFace(path) => Ok(Arc::new(HuggingFaceTokenizer::new(path)?)),
-        TokenizerSource::Tiktoken(path) => Ok(Arc::new(TiktokenTokenizer::new(path)?)),
-        TokenizerSource::Tekken(path) => Ok(Arc::new(TekkenTokenizer::new(path)?)),
     }
 }
 
