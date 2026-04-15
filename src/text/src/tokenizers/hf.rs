@@ -10,12 +10,16 @@ use crate::Error;
 use crate::error::Result;
 use crate::tokenizers::Tokenizer;
 
-/// Tokenizer from `tokenizer.json` in HuggingFace format.
 enum Backend {
     Hf(Box<HfTokenizer>),
     Fastokens(Box<FastokensTokenizer>),
 }
 
+/// Tokenizer from `tokenizer.json` in HuggingFace format.
+///
+/// This tries to load with `fastokens` first for better performance, then falls back to
+/// HuggingFace's `tokenizers` if the former fails (e.g. due to unsupported tokenizer features or
+/// file formats).
 pub struct HuggingFaceTokenizer {
     backend: Backend,
     special_token_ids: Arc<[u32]>,
