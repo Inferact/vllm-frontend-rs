@@ -15,6 +15,7 @@ use crate::{AssistantContentBlock, AssistantMessageExt, ChatTool, Error};
 mod error;
 mod format;
 mod template;
+mod tojson;
 
 pub use template::load_chat_template;
 
