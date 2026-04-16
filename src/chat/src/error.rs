@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::ReasoningError;
+use crate::parser::available_parser_hint;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -50,11 +51,3 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-fn available_parser_hint(available_names: &[String]) -> String {
-    if available_names.is_empty() {
-        String::new()
-    } else {
-        format!(" (choose from: {})", available_names.join(", "))
-    }
-}
