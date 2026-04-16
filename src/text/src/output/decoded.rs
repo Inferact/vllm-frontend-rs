@@ -226,6 +226,7 @@ pub async fn decoded_text_event_stream(
         if let Some(reason) = finish_reason {
             // Flush any remaining buffered text.
             let (last_chunk, mut text) = decoder.flush(truncate_output_to)?;
+            let text_len = text.len();
             let full_text = tracing::enabled!(Level::TRACE).then(|| text.clone());
 
             if intermediate {
@@ -240,8 +241,6 @@ pub async fn decoded_text_event_stream(
                 logprobs = decoded_logprobs;
                 text = delta.unwrap_or_default();
             }
-
-            let text_len = text.len();
 
             debug!(
                 finish_reason = ?reason,
