@@ -77,6 +77,21 @@ pub fn load_chat_template(template_path: &Path) -> Result<Option<String>> {
     Ok(Some(template))
 }
 
+/// Resolve a configured chat template value into a template string.
+pub fn resolve_chat_template(chat_template: &str) -> Result<String> {
+    let path = Path::new(chat_template);
+    if path.exists() {
+        return load_chat_template(path).map(|template| template.unwrap_or_default());
+    }
+
+    const JINJA_CHARS: [char; 3] = ['{', '}', '\n'];
+    if chat_template.chars().any(|c| JINJA_CHARS.contains(&c)) {
+        return Ok(chat_template.to_string());
+    }
+
+    Err(TemplateError::MissingTemplatePath)
+}
+
 /// One compiled chat template with its Jinja environment and detected content format.
 pub(super) struct CompiledChatTemplate {
     /// Cached, fully-configured environment for one compiled template.
@@ -232,6 +247,31 @@ mod tests {
         let template = load_chat_template(&path).unwrap();
 
         assert_eq!(template.as_deref(), Some("{{ messages }}"));
+    }
+
+    #[test]
+    fn test_resolve_chat_template_from_inline_literal() {
+        let template = resolve_chat_template("{{ messages }}").unwrap();
+
+        assert_eq!(template, "{{ messages }}");
+    }
+
+    #[test]
+    fn test_resolve_chat_template_from_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("chat_template.jinja");
+        fs::write(&path, "{{ messages }}").unwrap();
+
+        let template = resolve_chat_template(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(template, "{{ messages }}");
+    }
+
+    #[test]
+    fn test_resolve_chat_template_rejects_missing_path_like_value() {
+        let error = resolve_chat_template("missing_template.jinja").unwrap_err();
+
+        assert!(matches!(error, TemplateError::MissingTemplatePath));
     }
 
     #[test]

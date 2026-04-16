@@ -403,11 +403,6 @@ pub struct ServerUnsupportedArgs {
     #[arg(long)]
     pub lora_modules: Option<Unsupported>,
 
-    /// The file path to the chat template, or the template in single-line form
-    /// for the specified model.
-    #[arg(long)]
-    pub chat_template: Option<Unsupported>,
-
     /// Whether to trust the chat template provided in the request. If False,
     /// the server will always use the chat template specified by `--chat-template`
     /// or the ones from tokenizer.
@@ -418,14 +413,6 @@ pub struct ServerUnsupportedArgs {
         num_args = 0..=1
     )]
     pub trust_request_chat_template: Option<Unsupported>,
-
-    /// Default keyword arguments to pass to the chat template renderer.
-    /// These will be merged with request-level chat_template_kwargs,
-    /// with request values taking precedence. Useful for setting default
-    /// behavior for reasoning models. Example: '{"enable_thinking": false}'
-    /// to disable thinking mode by default for Qwen3/DeepSeek models.
-    #[arg(long)]
-    pub default_chat_template_kwargs: Option<Unsupported>,
 
     /// The role name to return if `request.add_generation_prompt=true`.
     #[arg(long)]

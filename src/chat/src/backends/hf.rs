@@ -11,7 +11,7 @@ use crate::backend::{ChatBackend, DynChatBackend};
 use crate::backends::{LoadModelBackendsOptions, LoadedModelBackends};
 use crate::error::{Error, Result};
 use crate::renderers::DynChatRenderer;
-use crate::renderers::hf::{HfChatRenderer, load_chat_template};
+use crate::renderers::hf::{HfChatRenderer, load_chat_template, resolve_chat_template};
 
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
@@ -39,9 +39,15 @@ impl HfChatBackend {
         let mut template = chat_template;
         let special_tokens = (!special_tokens.is_empty()).then_some(special_tokens);
 
-        // If independent chat template file(s) exist and contain non-empty content, they take
-        // priority over template entries in the tokenizer config
-        if let Some(chat_template_path) = files.chat_template_path.as_deref() {
+        if let Some(configured_template) = options.chat_template.as_deref() {
+            template = Some(
+                resolve_chat_template(configured_template)
+                    .map_err(|error| Error::ChatTemplate(error.to_report_string()))?,
+            );
+            info!("using configured chat template override");
+        } else if let Some(chat_template_path) = files.chat_template_path.as_deref() {
+            // If independent chat template file(s) exist and contain non-empty content, they take
+            // priority over template entries in the tokenizer config
             let file_template = load_chat_template(chat_template_path)
                 .map_err(|error| Error::ChatTemplate(error.to_report_string()))?;
 
@@ -60,6 +66,7 @@ impl HfChatBackend {
         }
         let chat_renderer: DynChatRenderer = Arc::new(HfChatRenderer::new(
             template,
+            options.default_chat_template_kwargs,
             options.chat_template_content_format,
             special_tokens,
         )?);

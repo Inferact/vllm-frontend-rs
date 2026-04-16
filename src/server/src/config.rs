@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
+use serde_json::Value;
 use vllm_chat::{ChatTemplateContentFormatOption, ParserSelection};
 use vllm_engine_core_client::{CoordinatorMode as EngineCoreCoordinatorMode, TransportMode};
 
@@ -38,6 +41,10 @@ pub struct Config {
     pub tool_call_parser: ParserSelection,
     /// Reasoning parser selection.
     pub reasoning_parser: ParserSelection,
+    /// Server-default chat template override, as a file path or inline template.
+    pub chat_template: Option<String>,
+    /// Server-default keyword arguments merged into every chat-template render.
+    pub default_chat_template_kwargs: Option<HashMap<String, Value>>,
     /// How to serialize `message.content` for chat-template rendering.
     pub chat_template_content_format: ChatTemplateContentFormatOption,
     /// Log a summary line for each completed request.
