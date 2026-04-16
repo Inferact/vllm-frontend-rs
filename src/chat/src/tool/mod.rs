@@ -128,7 +128,7 @@ impl ToolParserFactory {
             .register_parser::<MinimaxM2ToolParser>(names::MINIMAX_M2)
             .register_parser::<MistralToolParser>(names::MISTRAL)
             .register_parser::<PythonicToolParser>(names::PYTHONIC)
-            .register_parser::<Qwen3XMLToolParser>(names::QWEN3_XML)
+            .register_parser::<Qwen3XmlToolParser>(names::QWEN3_XML)
             .register_parser::<Qwen3CoderToolParser>(names::QWEN3_CODER)
             .register_parser::<Step3ToolParser>(names::STEP3);
 
