@@ -1,5 +1,5 @@
 use anyhow::Result;
-use vllm_chat::ParserSelection;
+use vllm_chat::{ChatTemplateContentFormatOption, ParserSelection};
 use vllm_engine_core_client::{CoordinatorMode as EngineCoreCoordinatorMode, TransportMode};
 
 /// How the HTTP server obtains its listening socket.
@@ -38,6 +38,8 @@ pub struct Config {
     pub tool_call_parser: ParserSelection,
     /// Reasoning parser selection.
     pub reasoning_parser: ParserSelection,
+    /// How to serialize `message.content` for chat-template rendering.
+    pub chat_template_content_format: ChatTemplateContentFormatOption,
     /// Log a summary line for each completed request.
     pub enable_log_requests: bool,
     /// When `true`, suppress periodic stats logging (throughput, queue depth, cache usage).

@@ -8,7 +8,7 @@ use vllm_text::backends::hf::{
 };
 
 use crate::backend::{ChatBackend, DynChatBackend};
-use crate::backends::LoadedModelBackends;
+use crate::backends::{LoadModelBackendsOptions, LoadedModelBackends};
 use crate::error::{Error, Result};
 use crate::renderers::DynChatRenderer;
 use crate::renderers::hf::{HfChatRenderer, load_chat_template};
@@ -22,11 +22,15 @@ impl HfChatBackend {
     /// Load the chat backend with the given model id.
     pub async fn from_model(model_id: &str) -> Result<Self> {
         let files = ResolvedModelFiles::new(model_id).await?;
-        Self::from_resolved_model_files(files, model_id.to_string())
+        Self::from_resolved_model_files(files, model_id.to_string(), Default::default())
     }
 
     /// Load the chat backend from resolved Hugging Face model files.
-    pub fn from_resolved_model_files(files: ResolvedModelFiles, model_id: String) -> Result<Self> {
+    pub fn from_resolved_model_files(
+        files: ResolvedModelFiles,
+        model_id: String,
+        options: LoadModelBackendsOptions,
+    ) -> Result<Self> {
         let HfTokenizerConfig {
             special_tokens,
             chat_template,
@@ -54,8 +58,11 @@ impl HfChatBackend {
                 );
             }
         }
-        let chat_renderer: DynChatRenderer =
-            Arc::new(HfChatRenderer::new(template, special_tokens)?);
+        let chat_renderer: DynChatRenderer = Arc::new(HfChatRenderer::new(
+            template,
+            options.chat_template_content_format,
+            special_tokens,
+        )?);
 
         info!(
             model_id,
@@ -72,7 +79,10 @@ impl ChatBackend for HfChatBackend {
 }
 
 /// Load the Hugging Face text and chat backends for the given model id.
-pub(super) async fn load_model_backends(model_id: &str) -> Result<LoadedModelBackends> {
+pub(super) async fn load_model_backends(
+    model_id: &str,
+    options: LoadModelBackendsOptions,
+) -> Result<LoadedModelBackends> {
     let files = ResolvedModelFiles::new(model_id).await?;
     let text_backend: DynTextBackend = Arc::new(HfTextBackend::from_resolved_model_files(
         files.clone(),
@@ -81,6 +91,7 @@ pub(super) async fn load_model_backends(model_id: &str) -> Result<LoadedModelBac
     let chat_backend: DynChatBackend = Arc::new(HfChatBackend::from_resolved_model_files(
         files,
         model_id.to_string(),
+        options,
     )?);
 
     Ok(LoadedModelBackends {

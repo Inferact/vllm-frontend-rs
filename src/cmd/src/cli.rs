@@ -17,7 +17,9 @@ use serde::Deserialize;
 use thiserror_ext::AsReport as _;
 use uuid::Uuid;
 use vllm_engine_core_client::TransportMode;
-use vllm_server::{Config, CoordinatorMode, HttpListenerMode, ParserSelection};
+use vllm_server::{
+    ChatTemplateContentFormatOption, Config, CoordinatorMode, HttpListenerMode, ParserSelection,
+};
 
 use crate::cli::unsupported::UnsupportedArgs;
 use crate::managed_engine::ManagedEngineConfig;
@@ -105,6 +107,16 @@ pub struct SharedRuntimeArgs {
     #[arg(long)]
     pub max_model_len: Option<u32>,
 
+    /// The format to render message content within a chat template.
+    ///
+    /// * "auto" detects the format from the template
+    /// * "string" renders content as a string. Example: `"Hello World"`
+    /// * "openai" renders content as a list of dictionaries, similar to OpenAI schema. Example:
+    ///   `[{"type": "text", "text": "Hello world!"}]`
+    #[arg(long, default_value_t)]
+    #[serde(default)]
+    pub chat_template_content_format: ChatTemplateContentFormatOption,
+
     /// Log a summary line for each completed request, including prompt/output token counts
     /// and finish reason.
     #[arg(long)]
@@ -156,6 +168,7 @@ impl SharedRuntimeArgs {
             listener_mode: HttpListenerMode::InheritedFd { fd: listen_fd },
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
+            chat_template_content_format: self.chat_template_content_format,
             enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
         }
@@ -187,6 +200,7 @@ impl SharedRuntimeArgs {
             listener_mode: HttpListenerMode::Bind { host, port },
             tool_call_parser: self.tool_call_parser,
             reasoning_parser: self.reasoning_parser,
+            chat_template_content_format: self.chat_template_content_format,
             enable_log_requests: self.enable_log_requests,
             disable_log_stats: self.disable_log_stats,
         }

@@ -5,7 +5,9 @@ use thiserror_ext::AsReport as _;
 use tracing::trace;
 use vllm_text::backends::hf::HfSpecialTokens;
 
-use self::format::ChatTemplateContentFormat;
+use self::format::{
+    ChatTemplateContentFormat, ChatTemplateContentFormatOption as ContentFormatOption,
+};
 use self::template::{CompiledChatTemplate, TemplateContext};
 use super::{ChatRenderer, RenderedPrompt};
 use crate::error::Result;
@@ -19,22 +21,30 @@ mod tojson;
 
 pub use template::load_chat_template;
 
+pub use self::format::ChatTemplateContentFormatOption;
+
 /// Hugging Face chat-template renderer backed by the local Jinja chat-template state.
 pub struct HfChatRenderer {
     default_template: Option<CompiledChatTemplate>,
+    content_format: ContentFormatOption,
     special_tokens: Option<HfSpecialTokens>,
 }
 
 impl HfChatRenderer {
     /// Create a renderer from the given template string.
-    pub fn new(template: Option<String>, special_tokens: Option<HfSpecialTokens>) -> Result<Self> {
+    pub fn new(
+        template: Option<String>,
+        content_format: ContentFormatOption,
+        special_tokens: Option<HfSpecialTokens>,
+    ) -> Result<Self> {
         Ok(Self {
             default_template: template
                 .map(|template| {
-                    CompiledChatTemplate::new(template)
+                    CompiledChatTemplate::new(template, content_format)
                         .map_err(|error| Error::ChatTemplate(error.to_report_string()))
                 })
                 .transpose()?,
+            content_format,
             special_tokens,
         })
     }
@@ -50,7 +60,7 @@ impl HfChatRenderer {
             .chat_template
             .as_ref()
             .map(|template| {
-                CompiledChatTemplate::new(template.clone())
+                CompiledChatTemplate::new(template.clone(), self.content_format)
                     .map_err(|error| Error::ChatTemplate(error.to_report_string()))
             })
             .transpose()?;
@@ -269,7 +279,7 @@ mod tests {
     use serde_json::Value;
     use vllm_text::backends::hf::{HfSpecialTokens, NamedSpecialToken};
 
-    use super::HfChatRenderer;
+    use super::{ChatTemplateContentFormatOption, HfChatRenderer};
     use crate::request::{
         ChatContentPart, ChatMessage, ChatRequest, ChatRole, ChatTool, ChatToolChoice,
     };
@@ -287,9 +297,13 @@ mod tests {
     }
 
     fn render(template: Option<&str>, request: &ChatRequest) -> Result<String> {
-        Ok(HfChatRenderer::new(template.map(str::to_owned), None)?
-            .render(request)?
-            .prompt)
+        Ok(HfChatRenderer::new(
+            template.map(str::to_owned),
+            ChatTemplateContentFormatOption::Auto,
+            None,
+        )?
+        .render(request)?
+        .prompt)
     }
 
     #[test]
@@ -423,6 +437,7 @@ mod tests {
 
         let rendered = HfChatRenderer::new(
             Some("{{ bos_token }}|{{ bos_token is defined }}".to_string()),
+            ChatTemplateContentFormatOption::Auto,
             Some(special_tokens),
         )
         .unwrap()
@@ -450,6 +465,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(rendered, "inner|outer");
+    }
+
+    #[test]
+    fn chat_template_forces_string_content_format_when_configured() {
+        let request = sample_request(vec![ChatMessage::user(vec![
+            ChatContentPart::text("hello"),
+            ChatContentPart::text(" world"),
+        ])]);
+
+        let rendered = HfChatRenderer::new(
+            Some(
+                "{%- if messages[0].content is string -%}{{ messages[0].content }}{%- else -%}{%- for item in messages[0].content %}{{ item.text }}|{%- endfor -%}{%- endif -%}".to_string(),
+            ),
+            ChatTemplateContentFormatOption::String,
+            None,
+        )
+        .unwrap()
+        .render(&request)
+        .unwrap()
+        .prompt;
+
+        assert_eq!(rendered, "hello world");
+    }
+
+    #[test]
+    fn chat_template_forces_openai_content_format_when_configured() {
+        let request = sample_request(vec![ChatMessage::user(vec![
+            ChatContentPart::text("hello"),
+            ChatContentPart::text(" world"),
+        ])]);
+
+        let rendered = HfChatRenderer::new(
+            Some("{{ messages[0].content[0].text }}{{ messages[0].content[1].text }}".to_string()),
+            ChatTemplateContentFormatOption::OpenAi,
+            None,
+        )
+        .unwrap()
+        .render(&request)
+        .unwrap()
+        .prompt;
+
+        assert_eq!(rendered, "hello world");
     }
 
     #[test]
