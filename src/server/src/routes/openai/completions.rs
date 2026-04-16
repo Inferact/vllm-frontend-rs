@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
 use thiserror_ext::AsReport as _;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 use vllm_text::{DecodedTextEvent, FinishReason, TextOutputStream, TextOutputStreamExt as _};
 
 use super::utils::logprobs::{
@@ -388,6 +388,7 @@ async fn completion_sse_stream(stream: impl Stream<Item = Result<CompletionSseCh
 /// Serialize one OpenAI chunk payload into one SSE `data:` event.
 fn to_sse_event(chunk: &CompletionSseChunk) -> Event {
     let payload = serde_json::to_string(chunk).expect("completion chunk must serialize to JSON");
+    trace!(payload, "completion emitting chunk");
     Event::default().data(payload)
 }
 
@@ -395,11 +396,13 @@ fn to_sse_event(chunk: &CompletionSseChunk) -> Event {
 fn to_error_sse_event(error: &ApiError) -> Event {
     let payload = serde_json::to_string(&error.to_error_response())
         .expect("ErrorResponse must serialize to JSON");
+    trace!(payload, "completion emitting error");
     Event::default().data(payload)
 }
 
 /// Build the terminal OpenAI SSE sentinel event.
 fn done_sse_event() -> Event {
+    trace!("completion emitting done");
     Event::default().data("[DONE]")
 }
 

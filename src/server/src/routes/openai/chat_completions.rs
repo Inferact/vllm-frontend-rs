@@ -15,7 +15,7 @@ use futures::{Stream, StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
 use serde_json::Value;
 use thiserror_ext::AsReport as _;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 use vllm_chat::{
     AssistantBlockKind, AssistantMessageExt as _, ChatEvent, ChatEventStream, ChatEventStreamTrait,
     CollectedAssistantMessage, FinishReason,
@@ -558,6 +558,7 @@ async fn chat_completion_sse_stream(
 fn to_sse_event(chunk: &ChatCompletionStreamResponse) -> Event {
     let payload =
         serde_json::to_string(chunk).expect("ChatCompletionStreamResponse must serialize to JSON");
+    trace!(payload, "chat completion emitting chunk");
     Event::default().data(payload)
 }
 
@@ -565,11 +566,13 @@ fn to_sse_event(chunk: &ChatCompletionStreamResponse) -> Event {
 fn to_error_sse_event(error: &ApiError) -> Event {
     let payload = serde_json::to_string(&error.to_error_response())
         .expect("ErrorResponse must serialize to JSON");
+    trace!(payload, "chat completion emitting error");
     Event::default().data(payload)
 }
 
 /// Build the terminal OpenAI SSE sentinel event.
 fn done_sse_event() -> Event {
+    trace!("chat completion emitting done");
     Event::default().data("[DONE]")
 }
 
