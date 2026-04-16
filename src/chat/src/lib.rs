@@ -43,17 +43,12 @@ mod request;
 mod stream;
 mod tool;
 
-use tool_parser::ParserFactory as ExternalToolParserFactory;
 use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;
 use vllm_text::{Prompt, TextLlm, TextRequest};
 
-use crate::tool::ExternalToolParserAdaptor;
-
-fn available_tool_parser_names(tool_parser_factory: &ExternalToolParserFactory) -> Vec<String> {
-    let mut available_names = tool_parser_factory.list_parsers();
-    available_names.sort_unstable();
-    available_names
+fn available_tool_parser_names(tool_parser_factory: &ToolParserFactory) -> Vec<String> {
+    tool_parser_factory.list()
 }
 
 fn available_reasoning_parser_names(
@@ -67,9 +62,9 @@ pub fn validate_parser_overrides(
     tool_call_parser: &ParserSelection,
     reasoning_parser: &ParserSelection,
 ) -> Result<()> {
-    let tool_parser_factory = ExternalToolParserFactory::new();
+    let tool_parser_factory = ToolParserFactory::new();
     if let ParserSelection::Explicit(name) = tool_call_parser
-        && !tool_parser_factory.registry().has_parser(name)
+        && !tool_parser_factory.contains(name)
     {
         let available_names = available_tool_parser_names(&tool_parser_factory);
         return Err(Error::ToolParserUnavailableByName {
@@ -100,7 +95,7 @@ pub struct ChatLlm {
     text: TextLlm,
     backend: DynChatBackend,
     reasoning_parser_factory: ReasoningParserFactory,
-    tool_parser_factory: ExternalToolParserFactory,
+    tool_parser_factory: ToolParserFactory,
     /// Tool-call parser selection.
     tool_call_parser: ParserSelection,
     /// Reasoning parser selection.
@@ -114,7 +109,7 @@ impl ChatLlm {
             text,
             backend,
             reasoning_parser_factory: ReasoningParserFactory::new(),
-            tool_parser_factory: ExternalToolParserFactory::new(),
+            tool_parser_factory: ToolParserFactory::new(),
             tool_call_parser: ParserSelection::Auto,
             reasoning_parser: ParserSelection::Auto,
         }
@@ -211,31 +206,40 @@ impl ChatLlm {
     }
 
     fn resolve_tool_parser(&self, tools: &[ChatTool]) -> Result<Option<Box<dyn ToolParser>>> {
-        let registry = self.tool_parser_factory.registry();
-
-        let parser = match &self.tool_call_parser {
-            ParserSelection::Auto => {
-                let model_id = self.text.model_id();
-                registry.create_for_model(model_id).ok_or_else(|| {
-                    Error::ToolParserUnavailableForModel {
-                        model_id: model_id.to_string(),
-                    }
-                })
-            }
+        let parser_name = match &self.tool_call_parser {
+            ParserSelection::Auto => self
+                .tool_parser_factory
+                .resolve_name_for_model(self.text.model_id()),
             ParserSelection::None => return Ok(None),
             ParserSelection::Explicit(name) => {
-                registry
-                    .create_parser(name)
-                    .ok_or_else(|| Error::ToolParserUnavailableByName {
+                if !self.tool_parser_factory.contains(name) {
+                    return Err(Error::ToolParserUnavailableByName {
                         name: name.clone(),
                         available_names: available_tool_parser_names(&self.tool_parser_factory),
-                    })
+                    });
+                }
+                Some(name.as_str())
             }
-        }?;
+        };
 
-        Ok(Some(Box::new(ExternalToolParserAdaptor::new(
-            parser, tools,
-        ))))
+        TOOL_PARSER_LOG_ONCE.call_once(|| match parser_name {
+            Some(name) => info!(name, "using tool-call parser"),
+            None => info!("tool-call parsing disabled"),
+        });
+
+        let Some(parser_name) = parser_name else {
+            return Ok(None);
+        };
+
+        let parser = self
+            .tool_parser_factory
+            .create(parser_name, tools)
+            .map_err(|error| Error::ToolParserInitialization {
+                name: parser_name.to_string(),
+                error,
+            })?;
+
+        Ok(Some(parser))
     }
 
     fn resolve_reasoning_parser(
@@ -260,12 +264,14 @@ impl ChatLlm {
             }
         };
 
+        REASONING_PARSER_LOG_ONCE.call_once(|| match parser_name {
+            Some(name) => info!(name, "using reasoning parser"),
+            None => info!("reasoning parser disabled"),
+        });
+
         let Some(parser_name) = parser_name else {
             return Ok(None);
         };
-        LOG_ONCE.call_once(|| {
-            info!(parser_name, "using reasoning parser");
-        });
 
         let parser = self
             .reasoning_parser_factory
@@ -286,7 +292,8 @@ impl ChatLlm {
     }
 }
 
-static LOG_ONCE: std::sync::Once = std::sync::Once::new();
+static TOOL_PARSER_LOG_ONCE: std::sync::Once = std::sync::Once::new();
+static REASONING_PARSER_LOG_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(test)]
 mod tests {

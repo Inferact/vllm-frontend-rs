@@ -18,7 +18,13 @@ use crate::request::ChatTool;
 /// Result alias for tool parser operations.
 pub type Result<T> = std::result::Result<T, ToolParserError>;
 
-pub(crate) use external::ExternalToolParserAdaptor;
+pub use external::*;
+
+/// Canonical public names for registered tool parsers.
+pub mod names {
+    pub const JSON: &str = "json";
+    pub const QWEN: &str = "qwen";
+}
 
 /// One tool-call update emitted while parsing assistant text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +98,17 @@ pub type ToolParserFactory = ParserFactory<ToolParserCreator>;
 impl ToolParserFactory {
     /// Create the default registry with built-in parser names and model mappings.
     pub fn new() -> Self {
-        Self::default()
+        let mut factory = Self::default();
+
+        factory
+            .register_parser::<JsonParser>(names::JSON)
+            .register_parser::<QwenParser>(names::QWEN);
+
+        factory
+            .register_pattern("json", names::JSON)
+            .register_pattern("qwen", names::QWEN);
+
+        factory
     }
 
     /// Register one parser type that exposes a static `create()` constructor.

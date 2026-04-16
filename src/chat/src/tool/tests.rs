@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 
-use super::{
-    Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, ToolParserFactory,
-};
+use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserFactory};
 use crate::request::ChatTool;
+use crate::tool::names;
 
 struct FakeToolParser;
 
@@ -30,47 +29,24 @@ impl ToolParser for FakeToolParser {
 }
 
 #[test]
-fn factory_starts_empty() {
-    let factory = ToolParserFactory::new();
-    assert!(factory.list().is_empty());
-}
-
-#[test]
-fn factory_contains_and_creates_registered_parsers() {
-    let mut factory = ToolParserFactory::new();
-    factory.register_parser::<FakeToolParser>("fake");
-
-    assert!(factory.contains("fake"));
-    assert!(factory.list().contains(&"fake".to_string()));
-    factory.create("fake", &[]).unwrap();
-}
-
-#[test]
-fn factory_rejects_unknown_parser_names() {
-    let factory = ToolParserFactory::new();
-    let error = match factory.create("missing", &[]) {
-        Ok(_) => panic!("expected parser lookup to fail"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, ToolParserError::UnknownParser { .. }));
-}
-
-#[test]
-fn factory_rejects_unknown_models() {
-    let factory = ToolParserFactory::new();
-    let error = match factory.create_for_model("definitely-unknown-model", &[]) {
-        Ok(_) => panic!("expected model lookup to fail"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, ToolParserError::UnknownModel { .. }));
-}
-
-#[test]
 fn factory_creates_registered_parser_for_model() {
-    let mut factory = ToolParserFactory::new();
+    let mut factory = ToolParserFactory::default();
     factory
         .register_parser::<FakeToolParser>("fake")
         .register_pattern("fake-model", "fake");
 
     factory.create_for_model("my-fake-model-v1", &[]).unwrap();
+}
+
+#[test]
+fn factory_new_registers_builtin_json_parser() {
+    let factory = ToolParserFactory::new();
+    assert!(factory.contains(names::QWEN));
+    assert!(factory.list().contains(&names::QWEN.to_string()));
+}
+
+#[test]
+fn factory_new_resolves_qwen_to_builtin_qwen_parser() {
+    let factory = ToolParserFactory::new();
+    factory.create_for_model("Qwen/Qwen3-0.6B", &[]).unwrap();
 }

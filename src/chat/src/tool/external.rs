@@ -5,29 +5,23 @@ use super::{Result, ToolCallDelta, ToolParseResult};
 use crate::ToolParser;
 use crate::request::ChatTool;
 
-/// Adaptor that exposes the external `tool-parser` trait object through the
-/// local [`ToolParser`] interface.
-pub(crate) struct ExternalToolParserAdaptor {
-    pub(crate) inner: Box<dyn tool_parser::ToolParser>,
+/// Adaptor that exposes the external `tool-parser` through the local [`ToolParser`] interface.
+pub(crate) struct ExternalToolParserAdaptor<P> {
+    pub(crate) inner: P,
     tools: Vec<OpenAiTool>,
 }
 
-impl ExternalToolParserAdaptor {
-    pub(crate) fn new(inner: Box<dyn tool_parser::ToolParser>, tools: &[ChatTool]) -> Self {
+impl<P> ExternalToolParserAdaptor<P> {
+    pub(crate) fn new(inner: P, tools: &[ChatTool]) -> Self {
         let tools = tools.iter().map(ChatTool::to_openai_tool).collect();
         Self { inner, tools }
     }
 }
 
-#[async_trait]
-impl ToolParser for ExternalToolParserAdaptor {
-    fn create(_tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
-    where
-        Self: Sized + 'static,
-    {
-        unreachable!("external tool parser adaptor is constructed from an existing parser")
-    }
-
+impl<P> ExternalToolParserAdaptor<P>
+where
+    P: tool_parser::ToolParser,
+{
     async fn parse_complete(&self, output: &str) -> Result<ToolParseResult> {
         self.inner
             .parse_complete(output)
@@ -89,3 +83,41 @@ fn convert_parse_result(result: tool_parser::types::StreamingParseResult) -> Too
             .collect(),
     }
 }
+
+macro_rules! def_external_tool_parser {
+    ($name:ident) => {
+        def_external_tool_parser!($name, new);
+    };
+
+    ($name:ident, $new_method:ident) => {
+        #[doc = concat!(
+          "Adaptor exposing the external [`tool_parser::", stringify!($name), "`] through the local [`ToolParser`] interface."
+        )]
+        pub struct $name(ExternalToolParserAdaptor<tool_parser::$name>);
+
+        #[async_trait]
+        impl ToolParser for $name {
+            fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>> {
+                Ok(Box::new(Self(ExternalToolParserAdaptor::new(
+                    tool_parser::$name::$new_method(),
+                    tools,
+                ))))
+            }
+
+            async fn parse_complete(&self, output: &str) -> Result<ToolParseResult> {
+                self.0.parse_complete(output).await
+            }
+
+            async fn parse_incremental(&mut self, chunk: &str) -> Result<ToolParseResult> {
+                self.0.parse_incremental(chunk).await
+            }
+
+            fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
+                self.0.get_unstreamed_tool_args()
+            }
+        }
+    };
+}
+
+def_external_tool_parser!(JsonParser);
+def_external_tool_parser!(QwenParser);
