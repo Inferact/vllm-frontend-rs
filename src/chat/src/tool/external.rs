@@ -85,21 +85,21 @@ fn convert_parse_result(result: tool_parser::types::StreamingParseResult) -> Too
 }
 
 macro_rules! def_external_tool_parser {
-    ($name:ident) => {
-        def_external_tool_parser!($name, new);
+    ($name:ident, $external:ident) => {
+        def_external_tool_parser!($name, $external, new);
     };
 
-    ($name:ident, $new_method:ident) => {
+    ($name:ident, $external:ident, $new_method:ident) => {
         #[doc = concat!(
-          "Adaptor exposing the external [`tool_parser::", stringify!($name), "`] through the local [`ToolParser`] interface."
+          "Adaptor exposing the external [`tool_parser::parsers::", stringify!($external), "`] through the local [`ToolParser`] interface."
         )]
-        pub struct $name(ExternalToolParserAdaptor<tool_parser::$name>);
+        pub struct $name(ExternalToolParserAdaptor<tool_parser::parsers::$external>);
 
         #[async_trait]
         impl ToolParser for $name {
             fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>> {
                 Ok(Box::new(Self(ExternalToolParserAdaptor::new(
-                    tool_parser::$name::$new_method(),
+                    <tool_parser::parsers::$external>::$new_method(),
                     tools,
                 ))))
             }
@@ -119,5 +119,17 @@ macro_rules! def_external_tool_parser {
     };
 }
 
-def_external_tool_parser!(JsonParser);
-def_external_tool_parser!(QwenParser);
+def_external_tool_parser!(CohereToolParser, CohereParser);
+def_external_tool_parser!(DeepSeekV31ToolParser, DeepSeek31Parser);
+def_external_tool_parser!(DeepSeekV3ToolParser, DeepSeekParser);
+def_external_tool_parser!(Glm45MoeToolParser, Glm4MoeParser, glm45);
+def_external_tool_parser!(Glm47MoeToolParser, Glm4MoeParser, glm47);
+def_external_tool_parser!(JsonToolParser, JsonParser);
+def_external_tool_parser!(KimiK2ToolParser, KimiK2Parser);
+def_external_tool_parser!(Llama3JsonToolParser, LlamaParser);
+def_external_tool_parser!(MinimaxM2ToolParser, MinimaxM2Parser);
+def_external_tool_parser!(MistralToolParser, MistralParser);
+def_external_tool_parser!(PythonicToolParser, PythonicParser);
+def_external_tool_parser!(Qwen3CoderToolParser, QwenCoderParser);
+def_external_tool_parser!(Qwen3XMLToolParser, QwenParser);
+def_external_tool_parser!(Step3ToolParser, Step3Parser);
