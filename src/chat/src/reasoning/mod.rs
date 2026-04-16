@@ -30,7 +30,7 @@ pub(crate) use self::delimited::DelimitedReasoningParser;
 pub use self::gemma4::Gemma4ReasoningParser;
 pub use self::kimi::KimiReasoningParser;
 pub use self::qwen3::Qwen3ReasoningParser;
-use crate::parser::ParserFactory;
+use crate::parser::{ParserFactory, available_parser_hint};
 use crate::request::ChatRequest;
 
 /// Canonical public names for registered reasoning parsers.
@@ -146,15 +146,6 @@ pub enum ReasoningError {
     UnknownModel { model_id: String },
     #[error("tokenizer is missing reasoning delimiter token `{token}`")]
     MissingToken { token: String },
-}
-
-/// Format the available-parser suffix used in user-facing error messages.
-fn available_parser_hint(available_names: &[String]) -> String {
-    if available_names.is_empty() {
-        String::new()
-    } else {
-        format!(" (choose from: {})", available_names.join(", "))
-    }
 }
 
 /// Constructor signature for one registered reasoning parser implementation.
