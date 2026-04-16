@@ -29,11 +29,11 @@ pub struct PreparedRequest {
 pub(crate) fn prepare_completion_request(
     request: CompletionRequest,
     configured_model: &str,
-    request_context: ResolvedRequestContext,
+    ctx: ResolvedRequestContext,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
-    let request_id = format!("cmpl-{}", request_context.request_id);
+    let request_id = format!("cmpl-{}", ctx.request_id);
 
     let logprobs = match request.logprobs {
         Some(logprobs) => Some(i32::try_from(logprobs).map_err(|_| {
@@ -99,7 +99,7 @@ pub(crate) fn prepare_completion_request(
         priority: request.priority.unwrap_or(0),
         cache_salt: request.cache_salt,
         add_special_tokens: request.add_special_tokens,
-        data_parallel_rank: request_context.data_parallel_rank,
+        data_parallel_rank: ctx.data_parallel_rank,
     };
 
     Ok(PreparedRequest {

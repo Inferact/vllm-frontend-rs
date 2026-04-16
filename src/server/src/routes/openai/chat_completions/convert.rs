@@ -40,11 +40,11 @@ pub struct PreparedRequest {
 pub(crate) fn prepare_chat_request(
     request: ChatCompletionRequest,
     configured_model: &str,
-    request_context: ResolvedRequestContext,
+    ctx: ResolvedRequestContext,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
-    let request_id = format!("chatcmpl-{}", request_context.request_id);
+    let request_id = format!("chatcmpl-{}", ctx.request_id);
     let echo = request
         .echo
         .then(|| extract_last_assistant_content(&request.messages))
@@ -120,7 +120,7 @@ pub(crate) fn prepare_chat_request(
         documents: request.documents,
         cache_salt: request.cache_salt,
         add_special_tokens: request.add_special_tokens,
-        data_parallel_rank: request_context.data_parallel_rank,
+        data_parallel_rank: ctx.data_parallel_rank,
     };
 
     Ok(PreparedRequest {

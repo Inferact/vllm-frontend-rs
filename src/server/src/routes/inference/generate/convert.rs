@@ -18,7 +18,7 @@ pub struct PreparedRequest {
 pub fn prepare_generate_request(
     request: GenerateRequest,
     configured_model: &str,
-    request_context: ResolvedRequestContext,
+    ctx: ResolvedRequestContext,
 ) -> Result<PreparedRequest, ApiError> {
     validate::validate_request_compat(&request, configured_model)?;
 
@@ -31,7 +31,7 @@ pub fn prepare_generate_request(
     );
 
     let text_request = TextRequest {
-        request_id: request_context.request_id.clone(),
+        request_id: ctx.request_id.clone(),
         prompt: Prompt::TokenIds(request.token_ids),
         sampling_params,
         decode_options: TextDecodeOptions::default(),
@@ -39,11 +39,11 @@ pub fn prepare_generate_request(
         priority: request.priority,
         cache_salt: request.cache_salt,
         add_special_tokens: false,
-        data_parallel_rank: request_context.data_parallel_rank,
+        data_parallel_rank: ctx.data_parallel_rank,
     };
 
     Ok(PreparedRequest {
-        request_id: request_context.request_id,
+        request_id: ctx.request_id,
         text_request,
         include_logprobs,
         include_prompt_logprobs,
