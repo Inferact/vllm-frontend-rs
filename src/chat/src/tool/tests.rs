@@ -107,8 +107,24 @@ fn factory_new_resolves_external_default_patterns() {
         Some(names::LLAMA3_JSON)
     );
     assert_eq!(
+        factory.resolve_name_for_model("meta-llama/Llama-3.1-8B-Instruct"),
+        Some(names::LLAMA3_JSON)
+    );
+    assert_eq!(
+        factory.resolve_name_for_model("deepseek-ai/DeepSeek-R1-0528"),
+        Some(names::DEEPSEEK_V3)
+    );
+    assert_eq!(
         factory.resolve_name_for_model("deepseek-ai/DeepSeek-V3.1"),
         Some(names::DEEPSEEK_V31)
+    );
+    assert_eq!(
+        factory.resolve_name_for_model("zai-org/GLM-5-32B-Chat"),
+        Some(names::GLM47)
+    );
+    assert_eq!(
+        factory.resolve_name_for_model("zai-org/GLM-5.1-32B-Instruct"),
+        Some(names::GLM47)
     );
     assert_eq!(
         factory.resolve_name_for_model("glm-4.7"),
