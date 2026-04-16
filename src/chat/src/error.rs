@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::ReasoningError;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("chat request must contain at least one message")]
@@ -30,8 +32,12 @@ pub enum Error {
         name: String,
         available_names: Vec<String>,
     },
-    #[error("failed to initialize reasoning parser `{name}`: {message}")]
-    ReasoningParserInitialization { name: String, message: String },
+    #[error("failed to initialize reasoning parser `{name}`")]
+    ReasoningParserInitialization {
+        name: String,
+        #[source]
+        error: ReasoningError,
+    },
     #[error(
         "this model's maximum context length is {max_model_len} tokens, \
          but the prompt contains {prompt_len} input tokens"
