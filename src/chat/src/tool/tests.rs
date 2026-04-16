@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 
 use super::{
-    OpenAiTool, Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError,
-    ToolParserFactory,
+    Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, ToolParserFactory,
 };
+use crate::request::ChatTool;
 
 struct FakeToolParser;
 
 #[async_trait]
 impl ToolParser for FakeToolParser {
-    fn create() -> super::Result<Box<dyn ToolParser>>
+    fn create(_tools: &[ChatTool]) -> super::Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {
@@ -20,11 +20,7 @@ impl ToolParser for FakeToolParser {
         Ok(ToolParseResult::default())
     }
 
-    async fn parse_incremental(
-        &mut self,
-        _chunk: &str,
-        _tools: &[OpenAiTool],
-    ) -> Result<ToolParseResult> {
+    async fn parse_incremental(&mut self, _chunk: &str) -> Result<ToolParseResult> {
         Ok(ToolParseResult::default())
     }
 
@@ -46,13 +42,13 @@ fn factory_contains_and_creates_registered_parsers() {
 
     assert!(factory.contains("fake"));
     assert!(factory.list().contains(&"fake".to_string()));
-    factory.create("fake").unwrap();
+    factory.create("fake", &[]).unwrap();
 }
 
 #[test]
 fn factory_rejects_unknown_parser_names() {
     let factory = ToolParserFactory::new();
-    let error = match factory.create("missing") {
+    let error = match factory.create("missing", &[]) {
         Ok(_) => panic!("expected parser lookup to fail"),
         Err(error) => error,
     };
@@ -62,7 +58,7 @@ fn factory_rejects_unknown_parser_names() {
 #[test]
 fn factory_rejects_unknown_models() {
     let factory = ToolParserFactory::new();
-    let error = match factory.create_for_model("definitely-unknown-model") {
+    let error = match factory.create_for_model("definitely-unknown-model", &[]) {
         Ok(_) => panic!("expected model lookup to fail"),
         Err(error) => error,
     };
@@ -76,5 +72,5 @@ fn factory_creates_registered_parser_for_model() {
         .register_parser::<FakeToolParser>("fake")
         .register_pattern("fake-model", "fake");
 
-    factory.create_for_model("my-fake-model-v1").unwrap();
+    factory.create_for_model("my-fake-model-v1", &[]).unwrap();
 }

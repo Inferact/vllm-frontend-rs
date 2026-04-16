@@ -3,22 +3,25 @@ use openai_protocol::common::Tool as OpenAiTool;
 
 use super::{Result, ToolCallDelta, ToolParseResult};
 use crate::ToolParser;
+use crate::request::ChatTool;
 
 /// Adaptor that exposes the external `tool-parser` trait object through the
 /// local [`ToolParser`] interface.
 pub(crate) struct ExternalToolParserAdaptor {
     pub(crate) inner: Box<dyn tool_parser::ToolParser>,
+    tools: Vec<OpenAiTool>,
 }
 
 impl ExternalToolParserAdaptor {
-    pub(crate) fn new(inner: Box<dyn tool_parser::ToolParser>) -> Self {
-        Self { inner }
+    pub(crate) fn new(inner: Box<dyn tool_parser::ToolParser>, tools: &[ChatTool]) -> Self {
+        let tools = tools.iter().map(ChatTool::to_openai_tool).collect();
+        Self { inner, tools }
     }
 }
 
 #[async_trait]
 impl ToolParser for ExternalToolParserAdaptor {
-    fn create() -> Result<Box<dyn ToolParser>>
+    fn create(_tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {
@@ -29,28 +32,33 @@ impl ToolParser for ExternalToolParserAdaptor {
         self.inner
             .parse_complete(output)
             .await
-            .map(|(normal_text, tool_calls)| ToolParseResult {
-                normal_text,
-                calls: tool_calls
+            .map(|(normal_text, tool_calls)| {
+                // The external `parse_complete()` path does not receive tools and may therefore
+                // return calls with invalid names. Filter them here against the request-scoped tool
+                // set captured at parser creation time.
+                let calls = tool_calls
                     .into_iter()
+                    .filter(|tool_call| {
+                        self.tools
+                            .iter()
+                            .any(|tool| tool.function.name == tool_call.function.name)
+                    })
                     .enumerate()
                     .map(|(tool_index, tool_call)| ToolCallDelta {
                         tool_index,
                         name: Some(tool_call.function.name),
                         arguments: tool_call.function.arguments,
                     })
-                    .collect(),
+                    .collect();
+
+                ToolParseResult { normal_text, calls }
             })
             .map_err(Into::into)
     }
 
-    async fn parse_incremental(
-        &mut self,
-        chunk: &str,
-        tools: &[OpenAiTool],
-    ) -> Result<ToolParseResult> {
+    async fn parse_incremental(&mut self, chunk: &str) -> Result<ToolParseResult> {
         self.inner
-            .parse_incremental(chunk, tools)
+            .parse_incremental(chunk, &self.tools)
             .await
             .map(convert_parse_result)
             .map_err(Into::into)

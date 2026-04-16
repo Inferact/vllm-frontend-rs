@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, btree_map};
 
 use futures::{StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
-use openai_protocol::common::Tool as OpenAiTool;
 use thiserror_ext::AsReport;
 use tracing::warn;
 use uuid::Uuid;
@@ -35,19 +34,16 @@ struct ToolState {
     parser: Box<dyn ToolParser>,
     /// Whether tool parsing has already failed for this stream.
     parser_failed: bool,
-    /// Northbound tool definitions made available to the parser.
-    tools: Vec<OpenAiTool>,
     /// Open tool calls keyed by the parser's tool index.
     open_calls: BTreeMap<usize, OpenToolCallState>,
 }
 
 impl ToolState {
     /// Create one fresh tool-parsing state for a new streamed response.
-    fn new(tools: Vec<OpenAiTool>, parser: Box<dyn ToolParser>) -> Self {
+    fn new(parser: Box<dyn ToolParser>) -> Self {
         Self {
             parser,
             parser_failed: false,
-            tools,
             open_calls: BTreeMap::new(),
         }
     }
@@ -69,7 +65,7 @@ impl ToolState {
             return events;
         }
 
-        let parse_result = self.parser.parse_incremental(&delta, &self.tools).await;
+        let parse_result = self.parser.parse_incremental(&delta).await;
 
         match parse_result {
             Ok(result) => {
@@ -295,7 +291,6 @@ async fn final_only_tool_event_stream(
 pub(crate) async fn tool_event_stream(
     stream: impl ContentEventStream,
     intermediate: bool,
-    parser_tools: Vec<OpenAiTool>,
     parser: Option<Box<dyn ToolParser>>,
 ) {
     // Without a parser, pass through the input stream unchanged.
@@ -318,7 +313,7 @@ pub(crate) async fn tool_event_stream(
     }
 
     pin_mut!(stream);
-    let mut state = ToolState::new(parser_tools, parser);
+    let mut state = ToolState::new(parser);
 
     while let Some(event) = stream.next().await.transpose()? {
         match event {
@@ -379,7 +374,6 @@ pub(crate) async fn tool_event_stream(
 mod tests {
 
     use futures::{StreamExt as _, stream};
-    use openai_protocol::common::Tool as OpenAiTool;
     use vllm_llm::FinishReason;
     use vllm_text::{DecodedLogprobs, DecodedPositionLogprobs, DecodedTokenLogprob};
 
@@ -387,6 +381,7 @@ mod tests {
     use super::super::{AssistantEvent, ContentEvent};
     use super::tool_event_stream;
     use crate::event::{AssistantBlockKind, AssistantMessageExt as _};
+    use crate::request::ChatTool;
     use crate::stream::ChatEventStream;
     use crate::tool::{Result, ToolCallDelta, ToolParseResult, ToolParser};
 
@@ -396,7 +391,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolParser for FailingParser {
-        fn create() -> crate::tool::Result<Box<dyn ToolParser>>
+        fn create(_tools: &[ChatTool]) -> crate::tool::Result<Box<dyn ToolParser>>
         where
             Self: Sized + 'static,
         {
@@ -407,11 +402,7 @@ mod tests {
             Ok(ToolParseResult::default())
         }
 
-        async fn parse_incremental(
-            &mut self,
-            _chunk: &str,
-            _tools: &[OpenAiTool],
-        ) -> Result<ToolParseResult> {
+        async fn parse_incremental(&mut self, _chunk: &str) -> Result<ToolParseResult> {
             if self.fail_next {
                 self.fail_next = false;
                 return Err(
@@ -425,21 +416,6 @@ mod tests {
         fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
             None
         }
-    }
-
-    fn tool_parser_tools() -> Vec<openai_protocol::common::Tool> {
-        vec![openai_protocol::common::Tool {
-            tool_type: "function".to_string(),
-            function: openai_protocol::common::Function {
-                name: "get_weather".to_string(),
-                description: Some("Get weather".to_string()),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                }),
-                strict: None,
-            },
-        }]
     }
 
     #[tokio::test]
@@ -468,7 +444,6 @@ mod tests {
         let collected = tool_event_stream(
             events,
             true,
-            tool_parser_tools(),
             Some(Box::new(FailingParser { fail_next: true })),
         )
         .collect::<Vec<_>>()
@@ -546,7 +521,6 @@ mod tests {
         let events = tool_event_stream(
             events,
             false,
-            tool_parser_tools(),
             Some(Box::new(FailingParser { fail_next: false })),
         )
         .collect::<Vec<_>>()

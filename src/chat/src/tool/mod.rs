@@ -10,10 +10,10 @@
 mod external;
 
 use async_trait::async_trait;
-use openai_protocol::common::Tool as OpenAiTool;
 use thiserror::Error;
 
 use crate::parser::{ParserFactory, available_parser_hint};
+use crate::request::ChatTool;
 
 /// Result alias for tool parser operations.
 pub type Result<T> = std::result::Result<T, ToolParserError>;
@@ -44,7 +44,7 @@ pub struct ToolParseResult {
 #[async_trait]
 pub trait ToolParser: Send {
     /// Construct a boxed parser instance for one request stream.
-    fn create() -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static;
 
@@ -57,11 +57,7 @@ pub trait ToolParser: Send {
     async fn parse_complete(&self, output: &str) -> Result<ToolParseResult>;
 
     /// Parse tool calls incrementally from one assistant text chunk.
-    async fn parse_incremental(
-        &mut self,
-        chunk: &str,
-        tools: &[OpenAiTool],
-    ) -> Result<ToolParseResult>;
+    async fn parse_incremental(&mut self, chunk: &str) -> Result<ToolParseResult>;
 
     /// Return tool arguments that were buffered until end-of-stream.
     fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
@@ -88,7 +84,7 @@ pub enum ToolParserError {
 }
 
 /// Constructor signature for one registered tool parser implementation.
-type ToolParserCreator = fn() -> Result<Box<dyn ToolParser>>;
+type ToolParserCreator = fn(&[ChatTool]) -> Result<Box<dyn ToolParser>>;
 
 /// Registry and model matcher for tool parsers.
 pub type ToolParserFactory = ParserFactory<ToolParserCreator>;
@@ -108,24 +104,28 @@ impl ToolParserFactory {
     }
 
     /// Construct a parser from an exact name.
-    pub fn create(&self, name: &str) -> Result<Box<dyn ToolParser>> {
+    pub fn create(&self, name: &str, tools: &[ChatTool]) -> Result<Box<dyn ToolParser>> {
         let creator = self
             .creator(name)
             .ok_or_else(|| ToolParserError::UnknownParser {
                 name: name.to_string(),
                 available_names: self.list(),
             })?;
-        creator()
+        creator(tools)
     }
 
     /// Resolve a parser from model ID and then construct it.
-    pub fn create_for_model(&self, model_id: &str) -> Result<Box<dyn ToolParser>> {
+    pub fn create_for_model(
+        &self,
+        model_id: &str,
+        tools: &[ChatTool],
+    ) -> Result<Box<dyn ToolParser>> {
         let name =
             self.resolve_name_for_model(model_id)
                 .ok_or_else(|| ToolParserError::UnknownModel {
                     model_id: model_id.to_string(),
                 })?;
-        self.create(name)
+        self.create(name, tools)
     }
 }
 

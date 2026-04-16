@@ -198,25 +198,19 @@ impl ChatLlm {
         let tool_parsing_enabled =
             matches!(request.tool_choice, ChatToolChoice::Auto) && !request.tools.is_empty();
         let tool_parser = if tool_parsing_enabled {
-            self.resolve_tool_parser()?
+            self.resolve_tool_parser(&request.tools)?
         } else {
             None
-        };
-        let parser_tools = if tool_parsing_enabled {
-            request.tools.iter().map(ChatTool::to_openai_tool).collect()
-        } else {
-            Vec::new()
         };
         let reasoning_parser = self.resolve_reasoning_parser(request)?;
 
         Ok(output::OutputProcessors {
             reasoning_parser,
-            parser_tools,
             tool_parser,
         })
     }
 
-    fn resolve_tool_parser(&self) -> Result<Option<Box<dyn ToolParser>>> {
+    fn resolve_tool_parser(&self, tools: &[ChatTool]) -> Result<Option<Box<dyn ToolParser>>> {
         let registry = self.tool_parser_factory.registry();
 
         let parser = match &self.tool_call_parser {
@@ -239,7 +233,9 @@ impl ChatLlm {
             }
         }?;
 
-        Ok(Some(Box::new(ExternalToolParserAdaptor::new(parser))))
+        Ok(Some(Box::new(ExternalToolParserAdaptor::new(
+            parser, tools,
+        ))))
     }
 
     fn resolve_reasoning_parser(
