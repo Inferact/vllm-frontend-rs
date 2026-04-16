@@ -244,18 +244,13 @@ pub async fn decoded_text_event_stream(
             let text_len = text.len();
 
             debug!(
-                %request_id,
                 finish_reason = ?reason,
                 text_length_bytes = text_len,
                 output_token_count = output_token_count,
                 "request finished with terminal output"
             );
             if let Some(full_text) = full_text {
-                trace!(
-                    %request_id,
-                    full_text,
-                    "request finished with terminal decoded text"
-                );
+                trace!(full_text, "request finished with terminal decoded text");
             }
 
             // Intentionally drop the stream with explicit cause, so that the engine core can
