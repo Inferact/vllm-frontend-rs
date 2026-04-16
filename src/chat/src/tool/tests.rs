@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use super::{
-    OpenAiTool, ParserResult, StreamingParseResult, ToolCall, ToolCallItem, ToolParser,
-    ToolParserError, ToolParserFactory,
+    OpenAiTool, Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError,
+    ToolParserFactory,
 };
 
 struct FakeToolParser;
@@ -16,19 +16,19 @@ impl ToolParser for FakeToolParser {
         Ok(Box::new(Self))
     }
 
-    async fn parse_complete(&self, _output: &str) -> ParserResult<(String, Vec<ToolCall>)> {
-        Ok((String::new(), Vec::new()))
+    async fn parse_complete(&self, _output: &str) -> Result<ToolParseResult> {
+        Ok(ToolParseResult::default())
     }
 
     async fn parse_incremental(
         &mut self,
         _chunk: &str,
         _tools: &[OpenAiTool],
-    ) -> ParserResult<StreamingParseResult> {
-        Ok(StreamingParseResult::default())
+    ) -> Result<ToolParseResult> {
+        Ok(ToolParseResult::default())
     }
 
-    fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallItem>> {
+    fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
         None
     }
 }

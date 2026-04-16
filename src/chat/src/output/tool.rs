@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::{AssistantEvent, ContentEvent, ContentEventStream};
 use crate::error::Error;
 use crate::event::{AssistantBlockKind, AssistantToolCall};
-use crate::tool::{ToolCallItem, ToolParser};
+use crate::tool::{ToolCallDelta, ToolParseResult, ToolParser};
 
 /// One currently open tool call being assembled from streaming parser output.
 struct OpenToolCallState {
@@ -105,8 +105,8 @@ impl ToolState {
         events
     }
 
-    /// Apply one batch of incremental tool-call items emitted by the parser.
-    fn process_tool_items(&mut self, items: Vec<ToolCallItem>, events: &mut Vec<AssistantEvent>) {
+    /// Apply one batch of parsed tool-call deltas emitted by the parser.
+    fn process_tool_items(&mut self, items: Vec<ToolCallDelta>, events: &mut Vec<AssistantEvent>) {
         for item in items {
             if let Some(name) = item.name {
                 // The parser is now advancing a specific tool index, so any
@@ -124,18 +124,18 @@ impl ToolState {
                 }
             }
 
-            if item.parameters.is_empty() {
+            if item.arguments.is_empty() {
                 // No arguments delta to apply.
                 continue;
             }
             let Some(open_call) = self.open_calls.get_mut(&item.tool_index) else {
                 continue;
             };
-            open_call.arguments.push_str(&item.parameters);
+            open_call.arguments.push_str(&item.arguments);
 
             events.push(AssistantEvent::ToolCallArgumentsDelta {
                 id: open_call.id.clone(),
-                delta: item.parameters,
+                delta: item.arguments,
             });
         }
     }
@@ -240,22 +240,27 @@ async fn final_only_tool_event_stream(
                 kv_transfer_params,
             } => {
                 match parser.parse_complete(&final_text).await {
-                    Ok((normal_text, tool_calls)) => {
+                    Ok(ToolParseResult { normal_text, calls }) => {
                         if !normal_text.is_empty() {
                             yield AssistantEvent::TextDelta {
                                 kind: AssistantBlockKind::Text,
                                 delta: normal_text,
                             };
                         }
-                        for tool_call in tool_calls {
-                            let function = tool_call.function;
+                        // `parse_complete` currently returns one complete delta
+                        // per tool call, so we can finalize each call directly
+                        // without reusing the streaming state machine here.
+                        for tool_call in calls {
+                            let Some(name) = tool_call.name else {
+                                continue;
+                            };
                             // It's okay to only emit `ToolCallEnd` without a preceding
                             // `ToolCallStart` or `ToolCallArgumentsDelta`.
                             yield AssistantEvent::ToolCallEnd {
                                 call: AssistantToolCall {
                                     id: generate_tool_call_id(),
-                                    name: function.name,
-                                    arguments: function.arguments,
+                                    name,
+                                    arguments: tool_call.arguments,
                                 },
                             };
                         }
@@ -375,7 +380,6 @@ mod tests {
 
     use futures::{StreamExt as _, stream};
     use openai_protocol::common::Tool as OpenAiTool;
-    use tool_parser::errors::ParserError;
     use vllm_llm::FinishReason;
     use vllm_text::{DecodedLogprobs, DecodedPositionLogprobs, DecodedTokenLogprob};
 
@@ -384,7 +388,7 @@ mod tests {
     use super::tool_event_stream;
     use crate::event::{AssistantBlockKind, AssistantMessageExt as _};
     use crate::stream::ChatEventStream;
-    use crate::tool::{ParserResult, StreamingParseResult, ToolCall, ToolCallItem, ToolParser};
+    use crate::tool::{Result, ToolCallDelta, ToolParseResult, ToolParser};
 
     struct FailingParser {
         fail_next: bool,
@@ -399,24 +403,26 @@ mod tests {
             Ok(Box::new(Self { fail_next: false }))
         }
 
-        async fn parse_complete(&self, _output: &str) -> ParserResult<(String, Vec<ToolCall>)> {
-            Ok((String::new(), Vec::new()))
+        async fn parse_complete(&self, _output: &str) -> Result<ToolParseResult> {
+            Ok(ToolParseResult::default())
         }
 
         async fn parse_incremental(
             &mut self,
             _chunk: &str,
             _tools: &[OpenAiTool],
-        ) -> ParserResult<StreamingParseResult> {
+        ) -> Result<ToolParseResult> {
             if self.fail_next {
                 self.fail_next = false;
-                return Err(ParserError::ParsingFailed("boom".to_string()));
+                return Err(
+                    tool_parser::errors::ParserError::ParsingFailed("boom".to_string()).into(),
+                );
             }
 
-            Ok(StreamingParseResult::default())
+            Ok(ToolParseResult::default())
         }
 
-        fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallItem>> {
+        fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
             None
         }
     }
