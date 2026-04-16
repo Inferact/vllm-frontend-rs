@@ -11,13 +11,13 @@ use futures::{StreamExt as _, pin_mut};
 use futures_async_stream::try_stream;
 use openai_protocol::common::Tool as OpenAiTool;
 use thiserror_ext::AsReport;
-use tool_parser::ToolParser;
 use tracing::warn;
 use uuid::Uuid;
 
 use super::{AssistantEvent, ContentEvent, ContentEventStream};
 use crate::error::Error;
 use crate::event::{AssistantBlockKind, AssistantToolCall};
+use crate::tool::{ToolCallItem, ToolParser};
 
 /// One currently open tool call being assembled from streaming parser output.
 struct OpenToolCallState {
@@ -106,11 +106,7 @@ impl ToolState {
     }
 
     /// Apply one batch of incremental tool-call items emitted by the parser.
-    fn process_tool_items(
-        &mut self,
-        items: Vec<tool_parser::types::ToolCallItem>,
-        events: &mut Vec<AssistantEvent>,
-    ) {
+    fn process_tool_items(&mut self, items: Vec<ToolCallItem>, events: &mut Vec<AssistantEvent>) {
         for item in items {
             if let Some(name) = item.name {
                 // The parser is now advancing a specific tool index, so any
@@ -377,12 +373,9 @@ pub(crate) async fn tool_event_stream(
 #[cfg(test)]
 mod tests {
 
-    use async_trait::async_trait;
     use futures::{StreamExt as _, stream};
-    use openai_protocol::common::Tool;
-    use tool_parser::ToolParser;
-    use tool_parser::errors::{ParserError, ParserResult};
-    use tool_parser::types::{StreamingParseResult, ToolCall, ToolCallItem};
+    use openai_protocol::common::Tool as OpenAiTool;
+    use tool_parser::errors::ParserError;
     use vllm_llm::FinishReason;
     use vllm_text::{DecodedLogprobs, DecodedPositionLogprobs, DecodedTokenLogprob};
 
@@ -391,13 +384,21 @@ mod tests {
     use super::tool_event_stream;
     use crate::event::{AssistantBlockKind, AssistantMessageExt as _};
     use crate::stream::ChatEventStream;
+    use crate::tool::{ParserResult, StreamingParseResult, ToolCall, ToolCallItem, ToolParser};
 
     struct FailingParser {
         fail_next: bool,
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl ToolParser for FailingParser {
+        fn create() -> crate::tool::Result<Box<dyn ToolParser>>
+        where
+            Self: Sized + 'static,
+        {
+            Ok(Box::new(Self { fail_next: false }))
+        }
+
         async fn parse_complete(&self, _output: &str) -> ParserResult<(String, Vec<ToolCall>)> {
             Ok((String::new(), Vec::new()))
         }
@@ -405,7 +406,7 @@ mod tests {
         async fn parse_incremental(
             &mut self,
             _chunk: &str,
-            _tools: &[Tool],
+            _tools: &[OpenAiTool],
         ) -> ParserResult<StreamingParseResult> {
             if self.fail_next {
                 self.fail_next = false;
@@ -413,10 +414,6 @@ mod tests {
             }
 
             Ok(StreamingParseResult::default())
-        }
-
-        fn has_tool_markers(&self, _text: &str) -> bool {
-            false
         }
 
         fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallItem>> {

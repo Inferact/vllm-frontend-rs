@@ -9,7 +9,6 @@ use std::sync::Arc;
 use futures::Stream;
 use openai_protocol::common::Tool as OpenAiTool;
 use subenum::subenum;
-use tool_parser::ToolParser;
 use vllm_text::output::{DecodedLogprobs, DecodedPromptLogprobs, DecodedTextEvent};
 
 use self::reasoning::reasoning_event_stream;
@@ -19,6 +18,7 @@ use crate::error::Result;
 use crate::event::{AssistantBlockKind, AssistantToolCall, ChatEvent};
 use crate::output::structured::structured_chat_event_stream;
 use crate::reasoning::ReasoningParser;
+use crate::tool::ToolParser;
 
 /// Internal assistant event before final assembly.
 ///

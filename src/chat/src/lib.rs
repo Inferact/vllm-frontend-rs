@@ -27,6 +27,7 @@ pub use request::{
     ChatToolChoice, SamplingParams,
 };
 pub use stream::{ChatEventStream, ChatEventStreamTrait, CollectedAssistantMessage};
+pub use tool::{ToolParser, ToolParserError, ToolParserFactory};
 use tracing::info;
 pub use vllm_llm::FinishReason;
 
@@ -40,13 +41,16 @@ mod reasoning;
 mod renderers;
 mod request;
 mod stream;
+mod tool;
 
-use tool_parser::{ParserFactory as ToolParserFactory, ToolParser};
+use tool_parser::ParserFactory as ExternalToolParserFactory;
 use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;
 use vllm_text::{Prompt, TextLlm, TextRequest};
 
-fn available_tool_parser_names(tool_parser_factory: &ToolParserFactory) -> Vec<String> {
+use crate::tool::ExternalToolParserAdaptor;
+
+fn available_tool_parser_names(tool_parser_factory: &ExternalToolParserFactory) -> Vec<String> {
     let mut available_names = tool_parser_factory.list_parsers();
     available_names.sort_unstable();
     available_names
@@ -63,7 +67,7 @@ pub fn validate_parser_overrides(
     tool_call_parser: &ParserSelection,
     reasoning_parser: &ParserSelection,
 ) -> Result<()> {
-    let tool_parser_factory = ToolParserFactory::new();
+    let tool_parser_factory = ExternalToolParserFactory::new();
     if let ParserSelection::Explicit(name) = tool_call_parser
         && !tool_parser_factory.registry().has_parser(name)
     {
@@ -96,7 +100,7 @@ pub struct ChatLlm {
     text: TextLlm,
     backend: DynChatBackend,
     reasoning_parser_factory: ReasoningParserFactory,
-    tool_parser_factory: ToolParserFactory,
+    tool_parser_factory: ExternalToolParserFactory,
     /// Tool-call parser selection.
     tool_call_parser: ParserSelection,
     /// Reasoning parser selection.
@@ -110,7 +114,7 @@ impl ChatLlm {
             text,
             backend,
             reasoning_parser_factory: ReasoningParserFactory::new(),
-            tool_parser_factory: ToolParserFactory::new(),
+            tool_parser_factory: ExternalToolParserFactory::new(),
             tool_call_parser: ParserSelection::Auto,
             reasoning_parser: ParserSelection::Auto,
         }
@@ -235,7 +239,7 @@ impl ChatLlm {
             }
         }?;
 
-        Ok(Some(parser))
+        Ok(Some(Box::new(ExternalToolParserAdaptor::new(parser))))
     }
 
     fn resolve_reasoning_parser(
