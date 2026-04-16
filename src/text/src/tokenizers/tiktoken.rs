@@ -445,6 +445,7 @@ mod tests {
     use std::path::PathBuf;
 
     use base64::Engine as _;
+    use expect_test::expect;
     use tempfile::TempDir;
 
     use super::{
@@ -784,6 +785,15 @@ class TikTokenTokenizer:
         let tool_section_id = backend
             .token_to_id("<|tool_calls_section_begin|>")
             .expect("resolve tool call section marker");
+
+        expect![[r#"
+            (
+                163606,
+                163607,
+                163595,
+            )
+        "#]]
+        .assert_debug_eq(&(think_id, end_think_id, tool_section_id));
 
         assert_eq!(backend.decode(&[think_id], true).unwrap(), "<think>");
         assert_eq!(backend.decode(&[end_think_id], true).unwrap(), "</think>");
