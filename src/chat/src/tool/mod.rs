@@ -126,6 +126,7 @@ impl ToolParserFactory {
             .register_pattern("mixtral-", names::MISTRAL)
             .register_pattern("qwen3-coder", names::QWEN3_CODER)
             .register_pattern("qwen2.5-coder", names::QWEN3_CODER)
+            .register_pattern("qwen3.5", names::QWEN3_CODER)
             .register_pattern("qwen", names::QWEN3_XML)
             .register_pattern("llama-4", names::LLAMA4_PYTHONIC)
             .register_pattern("llama-3.2", names::LLAMA3_JSON)

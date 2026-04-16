@@ -87,6 +87,10 @@ fn factory_new_resolves_external_default_patterns() {
     let factory = ToolParserFactory::new();
 
     assert_eq!(
+        factory.resolve_name_for_model("Qwen/Qwen3.5-0.8B"),
+        Some(names::QWEN3_CODER)
+    );
+    assert_eq!(
         factory.resolve_name_for_model("Qwen/Qwen3-0.6B"),
         Some(names::QWEN3_XML)
     );
