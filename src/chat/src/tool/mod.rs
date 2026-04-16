@@ -12,7 +12,7 @@ mod external;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::parser::{ParserFactory, available_parser_hint};
+use crate::parser::ParserFactory;
 use crate::request::ChatTool;
 
 /// Result alias for tool parser operations.
@@ -88,17 +88,6 @@ pub trait ToolParser: Send {
 /// Errors produced while creating or running tool parsers.
 #[derive(Debug, Error)]
 pub enum ToolParserError {
-    #[error(
-        "tool call parser `{name}` is not registered{}",
-        available_parser_hint(.available_names)
-    )]
-    UnknownParser {
-        name: String,
-        available_names: Vec<String>,
-    },
-    #[error("tool parsing is not available for model `{model_id}`")]
-    UnknownModel { model_id: String },
-
     #[error(transparent)]
     External(#[from] tool_parser::errors::ParserError),
 }
@@ -169,14 +158,20 @@ impl ToolParserFactory {
     }
 
     /// Construct a parser from an exact name.
-    pub fn create(&self, name: &str, tools: &[ChatTool]) -> Result<Box<dyn ToolParser>> {
+    pub fn create(&self, name: &str, tools: &[ChatTool]) -> crate::Result<Box<dyn ToolParser>> {
         let creator = self
             .creator(name)
-            .ok_or_else(|| ToolParserError::UnknownParser {
+            .ok_or_else(|| crate::Error::ParserUnavailableByName {
+                kind: "tool",
                 name: name.to_string(),
                 available_names: self.list(),
             })?;
-        creator(tools)
+
+        creator(tools).map_err(|error| crate::Error::ParserInitialization {
+            kind: "tool",
+            name: name.to_string(),
+            error: error.into(),
+        })
     }
 
     /// Resolve a parser from model ID and then construct it.
@@ -184,12 +179,13 @@ impl ToolParserFactory {
         &self,
         model_id: &str,
         tools: &[ChatTool],
-    ) -> Result<Box<dyn ToolParser>> {
-        let name =
-            self.resolve_name_for_model(model_id)
-                .ok_or_else(|| ToolParserError::UnknownModel {
-                    model_id: model_id.to_string(),
-                })?;
+    ) -> crate::Result<Box<dyn ToolParser>> {
+        let name = self.resolve_name_for_model(model_id).ok_or_else(|| {
+            crate::Error::ParserUnavailableForModel {
+                kind: "tool",
+                model_id: model_id.to_string(),
+            }
+        })?;
         self.create(name, tools)
     }
 }
