@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Deserialize;
 use thiserror_ext::AsReport as _;
 use tiktoken_rs::CoreBPE;
 use tracing::{info, warn};
@@ -37,6 +38,34 @@ struct AddedToken {
     /// HuggingFace's `AddedToken` default — so only tokens explicitly marked special are
     /// stripped during normal decode (where `skip_special_tokens` itself defaults to true).
     special: bool,
+}
+
+/// Minimal subset of model `config.json` needed by the tiktoken loader.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TiktokenModelConfig {
+    model_type: Option<String>,
+    vocab_size: Option<u32>,
+    text_config: Option<Box<TiktokenModelConfig>>,
+}
+
+impl TiktokenModelConfig {
+    /// Read `model_type` from a model `config.json` value, falling back to a single-level nested
+    /// `text_config.model_type` for composite (e.g. multimodal) configs that keep text metadata
+    /// under a `text_config` object.
+    fn effective_model_type(&self) -> Option<&str> {
+        self.model_type
+            .as_deref()
+            .or_else(|| self.text_config.as_deref()?.effective_model_type())
+    }
+
+    /// Read `vocab_size` from a model `config.json` value, falling back to a single-level nested
+    /// `text_config.vocab_size` for composite (e.g. multimodal) configs that keep text metadata
+    /// under a `text_config` object — matching the same shape `ModelConfig` parses.
+    fn effective_vocab_size(&self) -> Option<u32> {
+        self.vocab_size
+            .or_else(|| self.text_config.as_deref()?.effective_vocab_size())
+    }
 }
 
 /// Tiktoken tokenizer from `tiktoken.model` or `*.tiktoken` BPE files.
@@ -131,14 +160,14 @@ impl TiktokenTokenizer {
 
         // Read `config.json` once so both `vocab_size` and model-specific tokenizer behavior can
         // be derived from the same source of truth.
-        let model_config: Option<serde_json::Value> = parent_dir
+        let model_config: Option<TiktokenModelConfig> = parent_dir
             .map(|dir| dir.join("config.json"))
             .filter(|p| p.exists())
             .and_then(|config_path| {
                 let content = std::fs::read_to_string(&config_path).ok()?;
                 serde_json::from_str(&content).ok()
             });
-        let vocab_size_from_config = model_config.as_ref().and_then(read_vocab_size);
+        let vocab_size_from_config = model_config.as_ref().and_then(|c| c.effective_vocab_size());
 
         // Build the full special-tokens encoder by populating the reserved range that follows
         // the BPE vocabulary. The Python reference does this in `tokenization_kimi.py`:
@@ -296,25 +325,13 @@ impl Tokenizer for TiktokenTokenizer {
     }
 }
 
-/// Read `vocab_size` from a model `config.json` value, falling back to a single-level nested
-/// `text_config.vocab_size` for composite (e.g. multimodal) configs that keep text metadata
-/// under a `text_config` object — matching the same shape `ModelConfig` parses.
-fn read_vocab_size(config: &serde_json::Value) -> Option<u32> {
-    let direct = config.get("vocab_size").and_then(|v| v.as_u64());
-    let nested = config
-        .get("text_config")
-        .and_then(|tc| tc.get("vocab_size"))
-        .and_then(|v| v.as_u64());
-    direct.or(nested).and_then(|n| u32::try_from(n).ok())
-}
-
 /// Select the BPE regex pattern for a tiktoken model based on `config.json`.
 ///
 /// Most tiktoken models use the `cl100k_base` regex. Kimi models ship a custom regex in their
 /// Python tokenizer implementation; we mirror the explicit `model_type` switch used by Dynamo
 /// instead of heuristically parsing Python source files.
-fn detect_bpe_pattern(config: &serde_json::Value) -> &'static str {
-    let model_type = config.get("model_type").and_then(|v| v.as_str());
+fn detect_bpe_pattern(config: &TiktokenModelConfig) -> &'static str {
+    let model_type = config.effective_model_type();
 
     match model_type {
         Some("kimi" | "kimi_k2" | "kimi_k25" | "deepseek_v3") => KIMI_PATTERN,
@@ -364,9 +381,18 @@ mod tests {
     use base64::Engine as _;
     use tempfile::TempDir;
 
-    use super::{CL100K_BASE_PATTERN, KIMI_PATTERN, TiktokenTokenizer, detect_bpe_pattern};
+    use super::{
+        CL100K_BASE_PATTERN, KIMI_PATTERN, TiktokenModelConfig, TiktokenTokenizer,
+        detect_bpe_pattern,
+    };
     use crate::backends::hf::{ResolvedModelFiles, TokenizerSource};
     use crate::tokenizers::Tokenizer;
+
+    macro_rules! config_json {
+        ($($json:tt)+) => {
+            serde_json::from_value::<TiktokenModelConfig>(serde_json::json!($($json)+)).unwrap()
+        };
+    }
 
     /// Write a minimal `*.tiktoken` BPE file (one token per byte 0..=255) into `dir` and
     /// return its path. The single-byte vocab is enough to exercise the multi-byte / streaming
@@ -556,15 +582,43 @@ mod tests {
 
     #[test]
     fn tiktoken_detects_kimi_pattern_from_model_type() {
-        let kimi = serde_json::json!({ "model_type": "kimi_k25" });
-        let baseten_kimi = serde_json::json!({ "model_type": "deepseek_v3" });
-        let generic = serde_json::json!({ "model_type": "gpt2" });
-        let missing = serde_json::json!({});
+        let kimi = config_json!({ "model_type": "kimi_k25" });
+        let baseten_kimi = config_json!({ "model_type": "deepseek_v3" });
+        let nested_kimi = config_json!({
+            "model_type": "composite_wrapper",
+            "text_config": { "model_type": "kimi_k2" }
+        });
+        let generic = config_json!({ "model_type": "gpt2" });
+        let nested_generic = config_json!({
+            "model_type": "composite_wrapper",
+            "text_config": { "model_type": "gpt2" }
+        });
+        let missing = config_json!({ "text_config": {} });
 
         assert_eq!(detect_bpe_pattern(&kimi), KIMI_PATTERN);
         assert_eq!(detect_bpe_pattern(&baseten_kimi), KIMI_PATTERN);
+        assert_eq!(detect_bpe_pattern(&nested_kimi), CL100K_BASE_PATTERN);
         assert_eq!(detect_bpe_pattern(&generic), CL100K_BASE_PATTERN);
+        assert_eq!(detect_bpe_pattern(&nested_generic), CL100K_BASE_PATTERN);
         assert_eq!(detect_bpe_pattern(&missing), CL100K_BASE_PATTERN);
+    }
+
+    #[test]
+    fn tiktoken_reads_model_type_from_text_config_when_top_level_missing() {
+        let nested_only = config_json!({
+            "text_config": { "model_type": "kimi_k2" }
+        });
+        let direct_and_nested = config_json!({
+            "model_type": "kimi_k25",
+            "text_config": { "model_type": "kimi_k2" }
+        });
+        let missing = config_json!({
+            "text_config": {}
+        });
+
+        assert_eq!(nested_only.effective_model_type(), Some("kimi_k2"));
+        assert_eq!(direct_and_nested.effective_model_type(), Some("kimi_k25"));
+        assert_eq!(missing.effective_model_type(), None);
     }
 
     /// Reserved token ids in `[num_base_tokens, num_base_tokens + 256)` must decode to their
