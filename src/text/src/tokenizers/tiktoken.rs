@@ -30,6 +30,7 @@ const KIMI_PATTERN: &str = r"[\p{Han}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{
 const FALLBACK_NUM_RESERVED_SPECIAL_TOKENS: u32 = 256;
 
 /// Parsed entry from `tokenizer_config.json`'s `added_tokens_decoder`.
+#[derive(Debug, Clone, Deserialize)]
 struct AddedToken {
     content: String,
     /// HuggingFace `added_tokens_decoder` entries can be marked `"special": true|false`.
@@ -37,7 +38,18 @@ struct AddedToken {
     /// `skip_special_tokens = true`. Defaults to `false` when the field is omitted, matching
     /// HuggingFace's `AddedToken` default — so only tokens explicitly marked special are
     /// stripped during normal decode (where `skip_special_tokens` itself defaults to true).
+    #[serde(default)]
     special: bool,
+}
+
+/// Minimal subset of `tokenizer_config.json` needed by the tiktoken loader.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TiktokenTokenizerConfig {
+    /// Format:
+    /// `{ "added_tokens_decoder": { "163584": { "content": "[BOS]", "special": true }, ... } }`
+    #[serde(default)]
+    added_tokens_decoder: FxHashMap<u32, AddedToken>,
 }
 
 /// Minimal subset of model `config.json` needed by the tiktoken loader.
@@ -148,14 +160,14 @@ impl TiktokenTokenizer {
 
         // Read added/special tokens (id → {name, special}) from tokenizer_config.json in the
         // same dir.
-        let added_tokens_by_id: FxHashMap<u32, AddedToken> = parent_dir
+        let added_tokens_by_id = parent_dir
             .map(|dir| dir.join("tokenizer_config.json"))
             .filter(|p| p.exists())
             .and_then(|config_path| {
-                let config_content = std::fs::read_to_string(&config_path).ok()?;
-                let config: serde_json::Value = serde_json::from_str(&config_content).ok()?;
-                parse_added_tokens_from_config(&config)
+                let content = std::fs::read_to_string(&config_path).ok()?;
+                serde_json::from_str(&content).ok()
             })
+            .map(|config: TiktokenTokenizerConfig| config.added_tokens_decoder)
             .unwrap_or_default();
 
         // Read `config.json` once so both `vocab_size` and model-specific tokenizer behavior can
@@ -339,40 +351,6 @@ fn detect_bpe_pattern(config: &TiktokenModelConfig) -> &'static str {
     }
 }
 
-/// Parse `added_tokens_decoder` from `tokenizer_config.json` into an id → `AddedToken` map.
-///
-/// Format: `{ "added_tokens_decoder": { "163584": { "content": "[BOS]", "special": true }, ... } }`
-///
-/// The `"special"` flag is honoured by `decode` when `skip_special_tokens = true`. Entries that
-/// omit the flag default to `special = false`, matching HuggingFace's `AddedToken` default.
-fn parse_added_tokens_from_config(
-    config: &serde_json::Value,
-) -> Option<FxHashMap<u32, AddedToken>> {
-    let added = config
-        .get("added_tokens_decoder")
-        .and_then(|v| v.as_object())?;
-    let mut tokens = FxHashMap::default();
-    for (id_str, token_info) in added {
-        if let (Ok(id), Some(content)) = (
-            id_str.parse::<u32>(),
-            token_info.get("content").and_then(|v| v.as_str()),
-        ) {
-            let special = token_info
-                .get("special")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            tokens.insert(
-                id,
-                AddedToken {
-                    content: content.to_string(),
-                    special,
-                },
-            );
-        }
-    }
-    Some(tokens)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -383,7 +361,7 @@ mod tests {
 
     use super::{
         CL100K_BASE_PATTERN, KIMI_PATTERN, TiktokenModelConfig, TiktokenTokenizer,
-        detect_bpe_pattern,
+        TiktokenTokenizerConfig, detect_bpe_pattern,
     };
     use crate::backends::hf::{ResolvedModelFiles, TokenizerSource};
     use crate::tokenizers::Tokenizer;
@@ -619,6 +597,31 @@ mod tests {
         assert_eq!(nested_only.effective_model_type(), Some("kimi_k2"));
         assert_eq!(direct_and_nested.effective_model_type(), Some("kimi_k25"));
         assert_eq!(missing.effective_model_type(), None);
+    }
+
+    #[test]
+    fn tiktoken_tokenizer_config_models_added_tokens_decoder() {
+        let config: TiktokenTokenizerConfig = serde_json::from_value(serde_json::json!({
+            "added_tokens_decoder": {
+                "257": { "content": "<think>" },
+                "258": { "content": "</think>", "special": true }
+            }
+        }))
+        .unwrap();
+
+        let added_tokens = config.added_tokens_decoder;
+        assert_eq!(added_tokens.len(), 2);
+        assert_eq!(
+            added_tokens.get(&257).map(|t| t.content.as_str()),
+            Some("<think>")
+        );
+        assert_eq!(added_tokens.get(&257).map(|t| t.special), Some(false));
+        assert_eq!(
+            added_tokens
+                .get(&258)
+                .map(|t| (t.content.as_str(), t.special)),
+            Some(("</think>", true))
+        );
     }
 
     /// Reserved token ids in `[num_base_tokens, num_base_tokens + 256)` must decode to their
