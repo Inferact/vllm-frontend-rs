@@ -139,12 +139,14 @@ impl VllmEventFormatter {
         full_path: bool,
         ansi: bool,
     ) -> fmt::Result {
-        let Some(mut file) = file else {
+        let Some(file) = file else {
             return Ok(());
         };
-        if !full_path {
-            file = file.rsplit_once('/').map_or(file, |(_, name)| name)
-        }
+        let file = if full_path {
+            file
+        } else {
+            shorten_file_path(file)
+        };
         if ansi {
             writer.write_str(GREY)?;
         }
@@ -222,6 +224,34 @@ where
     }
 }
 
+fn shorten_file_path(file: &str) -> &str {
+    let Some((_, name)) = file.rsplit_once('/') else {
+        return file;
+    };
+
+    // Common suffixes of file paths that are too ambiguous to shorten.
+    // If matched, include one more path component for additional context.
+    const AMBIGUOUS_SUFFIXES: &[&str] = &["src/lib.rs", "src/main.rs", "mod.rs"];
+
+    let Some((prefix, suffix)) = AMBIGUOUS_SUFFIXES
+        .iter()
+        .find_map(|&suffix| file.strip_suffix(suffix).map(|prefix| (prefix, suffix)))
+    else {
+        return name;
+    };
+
+    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+    let Some(extra_component) = (!prefix.is_empty()).then(|| {
+        prefix
+            .rsplit_once('/')
+            .map_or(prefix, |(_, component)| component)
+    }) else {
+        return suffix;
+    };
+
+    &file[file.len() - extra_component.len() - 1 - suffix.len()..]
+}
+
 fn write_colored(
     writer: &mut Writer<'_>,
     ansi: bool,
@@ -278,5 +308,19 @@ mod tests {
         let filter = build_targets_filter(Some("bogus"), None);
 
         assert_eq!(filter.to_string(), "info");
+    }
+
+    #[test]
+    fn location_path_uses_filename_for_non_ambiguous_files() {
+        assert_eq!(shorten_file_path("src/cmd/src/logging.rs"), "logging.rs");
+        assert_eq!(shorten_file_path("src/chat/lib.rs"), "lib.rs");
+        assert_eq!(shorten_file_path("src/chat/main.rs"), "main.rs");
+    }
+
+    #[test]
+    fn location_path_keeps_more_context_for_common_entrypoint_filenames() {
+        assert_eq!(shorten_file_path("src/chat/src/lib.rs"), "chat/src/lib.rs");
+        assert_eq!(shorten_file_path("src/cmd/src/main.rs"), "cmd/src/main.rs");
+        assert_eq!(shorten_file_path("src/chat/src/tool/mod.rs"), "tool/mod.rs");
     }
 }
