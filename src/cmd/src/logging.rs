@@ -224,32 +224,35 @@ where
     }
 }
 
+/// Shorten a source file path for log output while preserving enough context for
+/// common Rust entrypoint and module filenames.
+///
+/// - For `mod.rs`, keep the parent directory as `parent/mod.rs`.
+/// - For `src/lib.rs` and `src/main.rs`, keep one additional component as `crate/src/lib.rs` or
+///   `crate/src/main.rs` when available.
+/// - Other files are displayed as just the basename.
 fn shorten_file_path(file: &str) -> &str {
-    let Some((_, name)) = file.rsplit_once('/') else {
+    let mut parts = file.rsplit('/');
+    let name = parts.next().unwrap_or(file);
+    let parent = parts.next();
+    let grandparent = parts.next();
+
+    let Some(parent) = parent else {
         return file;
     };
 
-    // Common suffixes of file paths that are too ambiguous to shorten.
-    // If matched, include one more path component for additional context.
-    const AMBIGUOUS_SUFFIXES: &[&str] = &["src/lib.rs", "src/main.rs", "mod.rs"];
+    if name == "mod.rs" {
+        return &file[file.len() - parent.len() - 1 - name.len()..];
+    }
 
-    let Some((prefix, suffix)) = AMBIGUOUS_SUFFIXES
-        .iter()
-        .find_map(|&suffix| file.strip_suffix(suffix).map(|prefix| (prefix, suffix)))
-    else {
+    if !matches!(name, "lib.rs" | "main.rs") || parent != "src" {
         return name;
+    }
+    let Some(grandparent) = grandparent else {
+        return file;
     };
 
-    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
-    let Some(extra_component) = (!prefix.is_empty()).then(|| {
-        prefix
-            .rsplit_once('/')
-            .map_or(prefix, |(_, component)| component)
-    }) else {
-        return suffix;
-    };
-
-    &file[file.len() - extra_component.len() - 1 - suffix.len()..]
+    &file[file.len() - grandparent.len() - 1 - parent.len() - 1 - name.len()..]
 }
 
 fn write_colored(
@@ -315,12 +318,15 @@ mod tests {
         assert_eq!(shorten_file_path("src/cmd/src/logging.rs"), "logging.rs");
         assert_eq!(shorten_file_path("src/chat/lib.rs"), "lib.rs");
         assert_eq!(shorten_file_path("src/chat/main.rs"), "main.rs");
+        assert_eq!(shorten_file_path("src/chat/src/xmod.rs"), "xmod.rs");
     }
 
     #[test]
     fn location_path_keeps_more_context_for_common_entrypoint_filenames() {
+        assert_eq!(shorten_file_path("src/lib.rs"), "src/lib.rs");
         assert_eq!(shorten_file_path("src/chat/src/lib.rs"), "chat/src/lib.rs");
         assert_eq!(shorten_file_path("src/cmd/src/main.rs"), "cmd/src/main.rs");
+        assert_eq!(shorten_file_path("mod.rs"), "mod.rs");
         assert_eq!(shorten_file_path("src/chat/src/tool/mod.rs"), "tool/mod.rs");
     }
 }
