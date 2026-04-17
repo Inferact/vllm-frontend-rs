@@ -32,47 +32,45 @@ where
     // to handle decoded text in arbitrary chunk sizes, as optimizations like speculative decoding
     // or batching may still make the chunk "too long" to be correctly parsed in one `push()` call.
     fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
-        poll_external(self.inner.parse_complete(output))
-            .map(|(normal_text, tool_calls)| {
-                // The external `parse_complete()` path does not receive tools and may therefore
-                // return calls with invalid names. Filter them here against the request-scoped tool
-                // set captured at parser creation time.
-                let calls = tool_calls
-                    .into_iter()
-                    .filter(|tool_call| {
-                        self.tools
-                            .iter()
-                            .any(|tool| tool.function.name == tool_call.function.name)
-                    })
-                    .enumerate()
-                    .map(|(tool_index, tool_call)| ToolCallDelta {
-                        tool_index,
-                        name: Some(tool_call.function.name),
-                        arguments: tool_call.function.arguments,
-                    })
-                    .collect();
+        let (normal_text, calls) = poll_external(self.inner.parse_complete(output))?;
 
-                ToolParseResult { normal_text, calls }
+        // The external `parse_complete()` path does not receive tools and may therefore
+        // return calls with invalid names. Filter them here against the request-scoped tool
+        // set captured at parser creation time.
+        let calls = calls
+            .into_iter()
+            .filter(|tool_call| {
+                self.tools
+                    .iter()
+                    .any(|tool| tool.function.name == tool_call.function.name)
             })
-            .map_err(Into::into)
+            .enumerate()
+            .map(|(tool_index, tool_call)| ToolCallDelta {
+                tool_index,
+                name: Some(tool_call.function.name),
+                arguments: tool_call.function.arguments,
+            })
+            .collect();
+
+        Ok(ToolParseResult { normal_text, calls })
     }
 
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
-        poll_external(self.inner.parse_incremental(chunk, &self.tools))
-            .map(convert_parse_result)
-            .map_err(Into::into)
+        poll_external(self.inner.parse_incremental(chunk, &self.tools)).map(convert_parse_result)
     }
 
     fn finish(&mut self) -> Result<ToolParseResult> {
+        let calls = self
+            .inner
+            .get_unstreamed_tool_args()
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert_tool_call_item)
+            .collect();
+
         Ok(ToolParseResult {
             normal_text: String::new(),
-            calls: self
-                .inner
-                .get_unstreamed_tool_args()
-                .unwrap_or_default()
-                .into_iter()
-                .map(convert_tool_call_item)
-                .collect(),
+            calls,
         })
     }
 }
