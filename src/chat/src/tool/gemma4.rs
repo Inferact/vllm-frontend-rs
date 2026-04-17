@@ -11,6 +11,9 @@ const CALL_PREFIX: &str = "call:";
 
 /// Tool parser for Google Gemma4 models.
 ///
+/// Original Python implementation:
+/// <https://github.com/vllm-project/vllm/blob/bf45e6d0a558da2b8d7b60efb07b4aa394f3b60b/vllm/tool_parsers/gemma4_tool_parser.py>
+///
 /// Handles the Gemma4 function call format:
 ///
 /// `<|tool_call>call:func_name{key:<|"|>value<|"|>}<tool_call|>`
