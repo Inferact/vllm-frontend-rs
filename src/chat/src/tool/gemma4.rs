@@ -315,9 +315,7 @@ fn scan_tool_tail(input: &str) -> ToolTailState {
                 object_depth -= 1;
             }
             ']' => {
-                if array_depth > 0 {
-                    array_depth -= 1;
-                }
+                array_depth = array_depth.saturating_sub(1);
             }
             _ => {}
         }

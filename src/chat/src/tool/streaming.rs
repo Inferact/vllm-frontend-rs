@@ -14,21 +14,11 @@ pub(crate) struct StreamingToolState {
     active_tool: Option<ActiveToolState>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct ActiveToolState {
     tool_index: usize,
     name_sent: bool,
     streamed_arguments: String,
-}
-
-impl Default for ActiveToolState {
-    fn default() -> Self {
-        Self {
-            tool_index: 0,
-            name_sent: false,
-            streamed_arguments: String::new(),
-        }
-    }
 }
 
 impl StreamingToolState {
