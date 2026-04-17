@@ -14,6 +14,11 @@ use crate::error::Result;
 /// Default regex pattern used when loading tiktoken from a BPE file. This is the same
 /// `cl100k_base` pattern that HuggingFace transformers uses as its default in
 /// `TikTokenConverter`.
+///
+/// The `.tiktoken` file format does not include a regex pattern — each model's pattern is
+/// defined in its Python tokenizer source (e.g. `tokenization_kimi.py`). Some models use a
+/// different regex (e.g. Kimi K2 adds `\p{Han}` for CJK grouping), which can affect token
+/// boundaries but not encode/decode correctness.
 const CL100K_BASE_PATTERN: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 
 /// Fallback number of reserved special-token slots to assume when the model's `config.json`
