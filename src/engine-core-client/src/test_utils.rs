@@ -11,6 +11,10 @@ use zeromq::{DealerSocket, PushSocket, SocketOptions, SubSocket, ZmqMessage};
 
 use crate::EngineId;
 use crate::protocol::handshake::{EngineCoreReadyResponse, HandshakeInitMessage, ReadyMessage};
+use crate::protocol::{
+    EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
+    EngineCoreRequestType, Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob,
+};
 
 /// Per-test IPC endpoint namespace backed by a unique temporary directory.
 ///
@@ -266,6 +270,259 @@ pub async fn setup_mock_engine(
 ) -> (DealerSocket, PushSocket) {
     let (_, dealer, push) = setup_mock_engine_with_init(engine_handshake, engine_id).await;
     (dealer, push)
+}
+
+/// Reusable per-request script for [`ScriptedFakeEngine`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptedFakeEngineScenario {
+    output_token_ids: Vec<u32>,
+    chunk_size: usize,
+    chunk_cadence: Duration,
+    finish_reason: EngineCoreFinishReason,
+    include_logprobs: bool,
+}
+
+impl ScriptedFakeEngineScenario {
+    /// Build a new scenario from a token-ID sequence.
+    pub fn new(output_token_ids: impl Into<Vec<u32>>) -> Self {
+        Self {
+            output_token_ids: output_token_ids.into(),
+            chunk_size: usize::MAX,
+            chunk_cadence: Duration::ZERO,
+            finish_reason: EngineCoreFinishReason::Stop,
+            include_logprobs: false,
+        }
+    }
+
+    /// Split the output stream into chunks of this many tokens.
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        assert!(chunk_size > 0, "chunk_size must be greater than zero");
+        self.chunk_size = chunk_size;
+        self
+    }
+
+    /// Sleep for the given duration between emitted chunks.
+    pub fn with_chunk_cadence(mut self, chunk_cadence: Duration) -> Self {
+        self.chunk_cadence = chunk_cadence;
+        self
+    }
+
+    /// Override the terminal finish reason reported on the last chunk.
+    pub fn with_finish_reason(mut self, finish_reason: EngineCoreFinishReason) -> Self {
+        self.finish_reason = finish_reason;
+        self
+    }
+
+    /// Attach synthetic per-token logprobs to each emitted chunk.
+    pub fn with_logprobs(mut self, include_logprobs: bool) -> Self {
+        self.include_logprobs = include_logprobs;
+        self
+    }
+
+    fn chunk_token_ids(&self) -> Vec<Vec<u32>> {
+        let token_ids = self.output_token_ids.clone();
+        if token_ids.is_empty() {
+            return vec![Vec::new()];
+        }
+
+        let chunk_size = self.chunk_size.max(1);
+        token_ids
+            .chunks(chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect()
+    }
+}
+
+/// Long-lived mock engine that replays one scenario for every incoming request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptedFakeEngine {
+    scenario: ScriptedFakeEngineScenario,
+    engine_index: u32,
+}
+
+impl ScriptedFakeEngine {
+    /// Build a scripted fake engine from a reusable response scenario.
+    pub fn new(scenario: ScriptedFakeEngineScenario) -> Self {
+        Self {
+            scenario,
+            engine_index: 0,
+        }
+    }
+
+    /// Override the engine index stamped onto emitted outputs.
+    pub fn with_engine_index(mut self, engine_index: u32) -> Self {
+        self.engine_index = engine_index;
+        self
+    }
+
+    /// Spawn the fake engine on the standard handshake path and keep it alive until shutdown.
+    pub fn spawn(
+        self,
+        engine_handshake: String,
+        engine_id: impl Into<EngineId>,
+    ) -> ScriptedFakeEngineHandle {
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        let engine_id = engine_id.into();
+        let join_handle = tokio::spawn(async move {
+            let Self {
+                scenario,
+                engine_index,
+            } = self;
+            let (mut dealer, mut push) = setup_mock_engine(engine_handshake, engine_id).await;
+
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    recv = dealer.recv() => {
+                        let Ok(message) = recv else {
+                            break;
+                        };
+                        let frames = message.into_vec();
+                        if frames.is_empty() {
+                            continue;
+                        }
+
+                        match frames[0].as_ref() {
+                            kind if kind == EngineCoreRequestType::Add.to_frame().as_ref() => {
+                                if frames.len() < 2 {
+                                    continue;
+                                }
+                                let request: EngineCoreRequest = rmp_serde::from_slice(&frames[1])
+                                    .expect("decode scripted fake-engine add request");
+                                serve_scripted_request(
+                                    &mut push,
+                                    &scenario,
+                                    engine_index,
+                                    &request.request_id,
+                                )
+                                .await;
+                            }
+                            kind if kind == EngineCoreRequestType::Abort.to_frame().as_ref() => {}
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        });
+
+        ScriptedFakeEngineHandle {
+            shutdown_tx: Some(shutdown_tx),
+            join_handle: Some(join_handle),
+        }
+    }
+}
+
+/// RAII-style handle for a running [`ScriptedFakeEngine`].
+pub struct ScriptedFakeEngineHandle {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ScriptedFakeEngineHandle {
+    /// Request shutdown and wait for the fake engine task to stop.
+    pub async fn shutdown(mut self) -> Result<(), tokio::task::JoinError> {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        match self.join_handle.take() {
+            Some(join_handle) => join_handle.await,
+            None => Ok(()),
+        }
+    }
+
+    /// Abort the task immediately without waiting for graceful shutdown.
+    pub fn abort(&mut self) {
+        if let Some(join_handle) = &self.join_handle {
+            join_handle.abort();
+        }
+    }
+}
+
+impl Drop for ScriptedFakeEngineHandle {
+    fn drop(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(join_handle) = &self.join_handle {
+            join_handle.abort();
+        }
+    }
+}
+
+async fn serve_scripted_request(
+    push: &mut PushSocket,
+    scenario: &ScriptedFakeEngineScenario,
+    engine_index: u32,
+    request_id: &str,
+) {
+    let chunks = scenario.chunk_token_ids();
+    let total_chunks = chunks.len();
+    for (index, token_ids) in chunks.into_iter().enumerate() {
+        let is_last = index + 1 == total_chunks;
+        let outputs = EngineCoreOutputs {
+            engine_index,
+            outputs: vec![EngineCoreOutput {
+                request_id: request_id.to_string(),
+                new_token_ids: token_ids.clone(),
+                new_logprobs: scenario
+                    .include_logprobs
+                    .then(|| MaybeWireLogprobs::Direct(synthetic_logprobs(&token_ids))),
+                new_prompt_logprobs_tensors: None,
+                pooling_output: None,
+                finish_reason: is_last.then_some(scenario.finish_reason),
+                stop_reason: None,
+                events: None,
+                kv_transfer_params: None,
+                trace_headers: None,
+                num_cached_tokens: 0,
+                num_external_computed_tokens: 0,
+                routed_experts: None,
+                num_nans_in_logits: 0,
+            }],
+            scheduler_stats: None,
+            timestamp: 0.0,
+            utility_output: None,
+            finished_requests: None,
+            wave_complete: None,
+            start_wave: None,
+        };
+
+        push.send(ZmqMessage::from(
+            rmp_serde::to_vec_named(&outputs).expect("encode scripted fake-engine outputs"),
+        ))
+        .await
+        .expect("send scripted fake-engine outputs");
+
+        if !is_last && !scenario.chunk_cadence.is_zero() {
+            tokio::time::sleep(scenario.chunk_cadence).await;
+        }
+    }
+}
+
+fn synthetic_logprobs(token_ids: &[u32]) -> Logprobs {
+    Logprobs {
+        positions: token_ids
+            .iter()
+            .enumerate()
+            .map(|(index, &token_id)| {
+                let alternate_token_id = token_ids.get(index + 1).copied().unwrap_or(token_id);
+                PositionLogprobs {
+                    entries: vec![
+                        TokenLogprob {
+                            token_id,
+                            logprob: -0.1,
+                            rank: 1,
+                        },
+                        TokenLogprob {
+                            token_id: alternate_token_id,
+                            logprob: -0.2,
+                            rank: 2,
+                        },
+                    ],
+                }
+            })
+            .collect(),
+    }
 }
 
 /// Spawn a mock engine task and keep its sockets alive until the returned
