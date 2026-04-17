@@ -158,7 +158,14 @@ impl TiktokenTokenizer {
         //   1. `vocab_size` from config.json if present (the accurate, per-model answer),
         //   2. otherwise `num_base_tokens + 256` (the Kimi/Llama 3 default convention),
         //   3. extended further to cover any explicit `added_tokens_decoder` id beyond either.
-        let num_base_tokens = encoder.len() as u32;
+        //
+        // Note: `*.tiktoken` ranks are token ids, and they are not guaranteed to be contiguous.
+        // We therefore define the base-vocab boundary as `max_rank + 1`, not `encoder.len()`.
+        let num_base_tokens = encoder
+            .values()
+            .copied()
+            .max()
+            .map_or(0, |max_rank| max_rank.saturating_add(1));
         let max_added_id = added_tokens_by_id.keys().copied().max().unwrap_or(0);
         let reserved_end = vocab_size_from_config
             .unwrap_or_else(|| num_base_tokens.saturating_add(FALLBACK_NUM_RESERVED_SPECIAL_TOKENS))
@@ -362,6 +369,26 @@ mod tests {
         path
     }
 
+    /// Write a synthetic `*.tiktoken` file whose base-vocab ranks are sparse/non-contiguous.
+    ///
+    /// This reproduces the important edge case for `num_base_tokens`: it must be derived from
+    /// `max_rank + 1`, not `encoder.len()`, otherwise high-rank base tokens get misclassified as
+    /// reserved/special ids.
+    fn write_sparse_rank_bpe_file(dir: &std::path::Path) -> PathBuf {
+        let mut content = String::new();
+        for byte in 0u8..=255 {
+            let b64 = base64::engine::general_purpose::STANDARD.encode([byte]);
+            content.push_str(&format!("{b64} {}\n", byte as u32));
+        }
+
+        let high_rank_token = base64::engine::general_purpose::STANDARD.encode(b"SPARSE");
+        content.push_str(&format!("{high_rank_token} 1000\n"));
+
+        let path = dir.join("sparse-rank.tiktoken");
+        fs::write(&path, content).expect("write sparse-rank tiktoken file");
+        path
+    }
+
     /// Build a `TiktokenTokenizer` from the synthetic BPE file with no sibling config files,
     /// so the constructor takes the `FALLBACK_NUM_RESERVED_SPECIAL_TOKENS` (256) path.
     fn tiktoken_backend() -> (TiktokenTokenizer, TempDir) {
@@ -420,6 +447,27 @@ mod tests {
         let out_of_range_placeholder = format!("<|reserved_token_{out_of_range_id}|>");
         assert_eq!(backend.decode(&[out_of_range_id], false).unwrap(), "");
         assert_eq!(backend.token_to_id(&out_of_range_placeholder), None);
+    }
+
+    /// Sparse/non-contiguous BPE ranks must still count as base-vocab ids.
+    ///
+    /// Regression shape:
+    /// - base vocabulary contains ids 0..=255 and also a normal BPE token at id 1000
+    /// - if `num_base_tokens` were computed as `encoder.len()` (257), id 1000 would be
+    ///   misclassified as special/reserved and disappear under `skip_special_tokens = true`
+    #[test]
+    fn tiktoken_sparse_base_ranks_are_not_misclassified_as_special() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let bpe_path = write_sparse_rank_bpe_file(dir.path());
+        fs::write(dir.path().join("config.json"), r#"{"vocab_size": 1002}"#)
+            .expect("write config.json");
+        let backend = TiktokenTokenizer::new(&bpe_path).expect("load tiktoken backend");
+
+        let sparse_id = backend.token_to_id("SPARSE");
+        assert_eq!(sparse_id, Some(1000));
+        assert!(!backend.is_special_id(1000));
+        assert_eq!(backend.decode(&[1000], false).unwrap(), "SPARSE");
+        assert_eq!(backend.decode(&[1000], true).unwrap(), "SPARSE");
     }
 
     /// `skip_special_tokens` must:
