@@ -22,7 +22,14 @@ impl<P> ExternalToolParserAdaptor<P>
 where
     P: tool_parser::ToolParser,
 {
-    async fn parse_complete(&self, output: &str) -> Result<ToolParseResult> {
+    /// Delagating to the external `parse_complete()`.
+    ///
+    /// We don't rely on the default `push()+finish()` lifecycle, because some external parsers may
+    /// not correctly handle the full text passed to incremental `push()` interface.
+    // TODO: instead of working around like this, we should make incremental `push()` robust enough
+    // to handle decoded text in arbitrary chunk sizes, as optimizations like speculative decoding
+    // or batching may still make the chunk "too long" to be correctly parsed in one `push()` call.
+    async fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
         self.inner
             .parse_complete(output)
             .await
@@ -50,7 +57,7 @@ where
             .map_err(Into::into)
     }
 
-    async fn parse_incremental(&mut self, chunk: &str) -> Result<ToolParseResult> {
+    async fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
         self.inner
             .parse_incremental(chunk, &self.tools)
             .await
@@ -58,10 +65,17 @@ where
             .map_err(Into::into)
     }
 
-    fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
-        self.inner
-            .get_unstreamed_tool_args()
-            .map(|items| items.into_iter().map(convert_tool_call_item).collect())
+    async fn finish(&mut self) -> Result<ToolParseResult> {
+        Ok(ToolParseResult {
+            normal_text: String::new(),
+            calls: self
+                .inner
+                .get_unstreamed_tool_args()
+                .unwrap_or_default()
+                .into_iter()
+                .map(convert_tool_call_item)
+                .collect(),
+        })
     }
 }
 
@@ -104,16 +118,16 @@ macro_rules! def_external_tool_parser {
                 ))))
             }
 
-            async fn parse_complete(&self, output: &str) -> Result<ToolParseResult> {
+            async fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
                 self.0.parse_complete(output).await
             }
 
-            async fn parse_incremental(&mut self, chunk: &str) -> Result<ToolParseResult> {
-                self.0.parse_incremental(chunk).await
+            async fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
+                self.0.push(chunk).await
             }
 
-            fn get_unstreamed_tool_args(&self) -> Option<Vec<ToolCallDelta>> {
-                self.0.get_unstreamed_tool_args()
+            async fn finish(&mut self) -> Result<ToolParseResult> {
+                self.0.finish().await
             }
         }
     };
