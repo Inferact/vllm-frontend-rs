@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+
+use futures::FutureExt as _;
 use openai_protocol::common::Tool as OpenAiTool;
 
 use super::{Result, ToolCallDelta, ToolParseResult};
@@ -29,10 +31,8 @@ where
     // TODO: instead of working around like this, we should make incremental `push()` robust enough
     // to handle decoded text in arbitrary chunk sizes, as optimizations like speculative decoding
     // or batching may still make the chunk "too long" to be correctly parsed in one `push()` call.
-    async fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
-        self.inner
-            .parse_complete(output)
-            .await
+    fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
+        poll_external(self.inner.parse_complete(output))
             .map(|(normal_text, tool_calls)| {
                 // The external `parse_complete()` path does not receive tools and may therefore
                 // return calls with invalid names. Filter them here against the request-scoped tool
@@ -57,15 +57,13 @@ where
             .map_err(Into::into)
     }
 
-    async fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
-        self.inner
-            .parse_incremental(chunk, &self.tools)
-            .await
+    fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
+        poll_external(self.inner.parse_incremental(chunk, &self.tools))
             .map(convert_parse_result)
             .map_err(Into::into)
     }
 
-    async fn finish(&mut self) -> Result<ToolParseResult> {
+    fn finish(&mut self) -> Result<ToolParseResult> {
         Ok(ToolParseResult {
             normal_text: String::new(),
             calls: self
@@ -77,6 +75,25 @@ where
                 .collect(),
         })
     }
+}
+
+/// Bridge the external async trait into our synchronous local trait.
+///
+/// This is intentionally a temporary compatibility layer: the current external parser
+/// implementations are CPU-only and their async fns do not actually suspend. As long as that
+/// dependency behavior stays unchanged, `now_or_never()` is a robust adaptation strategy and we
+/// don't have to spawn a thread to `block_on()` the future.
+fn poll_external<T>(
+    future: impl Future<Output = tool_parser::errors::ParserResult<T>>,
+) -> Result<T> {
+    future
+        .now_or_never()
+        .ok_or_else(|| {
+            tool_parser::errors::ParserError::ParsingFailed(
+                "external tool parser future unexpectedly yielded".to_string(),
+            )
+        })?
+        .map_err(Into::into)
 }
 
 fn convert_tool_call_item(item: tool_parser::types::ToolCallItem) -> ToolCallDelta {
@@ -109,7 +126,6 @@ macro_rules! def_external_tool_parser {
         )]
         pub struct $name(ExternalToolParserAdaptor<tool_parser::parsers::$external>);
 
-        #[async_trait]
         impl ToolParser for $name {
             fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>> {
                 Ok(Box::new(Self(ExternalToolParserAdaptor::new(
@@ -118,16 +134,16 @@ macro_rules! def_external_tool_parser {
                 ))))
             }
 
-            async fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
-                self.0.parse_complete(output).await
+            fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
+                self.0.parse_complete(output)
             }
 
-            async fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
-                self.0.push(chunk).await
+            fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
+                self.0.push(chunk)
             }
 
-            async fn finish(&mut self) -> Result<ToolParseResult> {
-                self.0.finish().await
+            fn finish(&mut self) -> Result<ToolParseResult> {
+                self.0.finish()
             }
         }
     };

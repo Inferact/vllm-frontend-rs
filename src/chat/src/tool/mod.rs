@@ -11,7 +11,6 @@ mod external;
 
 use std::collections::{BTreeMap, btree_map};
 
-use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::parser::ParserFactory;
@@ -106,7 +105,6 @@ impl ToolParseResult {
 }
 
 /// Incremental parser that extracts tool calls from assistant output.
-#[async_trait]
 pub trait ToolParser: Send {
     /// Construct a boxed parser instance for one request stream.
     fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
@@ -122,10 +120,10 @@ pub trait ToolParser: Send {
     }
 
     /// Feed one decoded text delta into the parser.
-    async fn push(&mut self, chunk: &str) -> Result<ToolParseResult>;
+    fn push(&mut self, chunk: &str) -> Result<ToolParseResult>;
 
     /// Flush any buffered partial state at end of stream.
-    async fn finish(&mut self) -> Result<ToolParseResult> {
+    fn finish(&mut self) -> Result<ToolParseResult> {
         Ok(ToolParseResult::default())
     }
 
@@ -135,9 +133,9 @@ pub trait ToolParser: Send {
     /// feeding the full output through `push()` and then calling `finish()`.
     /// This keeps one source of truth for robust parsers whose incremental
     /// state machine is equivalent across arbitrary chunking.
-    async fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
-        let mut result = self.push(output).await?;
-        result.append(self.finish().await?);
+    fn parse_complete(&mut self, output: &str) -> Result<ToolParseResult> {
+        let mut result = self.push(output)?;
+        result.append(self.finish()?);
         Ok(result.coalesce_calls())
     }
 }

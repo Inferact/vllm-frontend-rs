@@ -50,7 +50,7 @@ impl ToolState {
 
     /// Convert one semantic assistant text delta into zero or more tool-aware
     /// internal events.
-    async fn process_text_delta(
+    fn process_text_delta(
         &mut self,
         kind: AssistantBlockKind,
         delta: String,
@@ -65,7 +65,7 @@ impl ToolState {
             return events;
         }
 
-        let parse_result = self.parser.push(&delta).await;
+        let parse_result = self.parser.push(&delta);
 
         match parse_result {
             Ok(result) => self.process_parse_result(kind, result, &mut events),
@@ -169,7 +169,7 @@ impl ToolState {
     }
 
     /// Flush parser state at end-of-stream and close any remaining open calls.
-    async fn finish(&mut self) -> Vec<AssistantEvent> {
+    fn finish(&mut self) -> Vec<AssistantEvent> {
         let mut events = Vec::new();
 
         if self.parser_failed {
@@ -177,7 +177,7 @@ impl ToolState {
             return events;
         }
 
-        match self.parser.finish().await {
+        match self.parser.finish() {
             Ok(result) => self.process_parse_result(AssistantBlockKind::Text, result, &mut events),
             Err(error) => {
                 warn!(
@@ -266,7 +266,7 @@ async fn final_only_tool_event_stream(
                 finish_reason,
                 kv_transfer_params,
             } => {
-                match parser.parse_complete(&final_text).await {
+                match parser.parse_complete(&final_text) {
                     Ok(ToolParseResult { normal_text, calls }) => {
                         if !normal_text.is_empty() {
                             yield AssistantEvent::TextDelta {
@@ -358,7 +358,7 @@ pub(crate) async fn tool_event_stream(
                 }
             }
             ContentEvent::TextDelta { kind, delta } => {
-                for next in state.process_text_delta(kind, delta).await {
+                for next in state.process_text_delta(kind, delta) {
                     yield next;
                 }
             }
@@ -377,7 +377,7 @@ pub(crate) async fn tool_event_stream(
                 finish_reason,
                 kv_transfer_params,
             } => {
-                for next in state.finish().await {
+                for next in state.finish() {
                     yield next;
                 }
 
@@ -411,7 +411,6 @@ mod tests {
         fail_next: bool,
     }
 
-    #[async_trait::async_trait]
     impl ToolParser for FailingParser {
         fn create(_tools: &[ChatTool]) -> crate::tool::Result<Box<dyn ToolParser>>
         where
@@ -420,7 +419,7 @@ mod tests {
             Ok(Box::new(Self { fail_next: false }))
         }
 
-        async fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
+        fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
             if self.fail_next {
                 self.fail_next = false;
                 return Err(

@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserFactory};
 use crate::Error;
 use crate::request::{ChatRequest, ChatTool};
@@ -7,7 +5,6 @@ use crate::tool::names;
 
 struct FakeToolParser;
 
-#[async_trait]
 impl ToolParser for FakeToolParser {
     fn create(_tools: &[ChatTool]) -> super::Result<Box<dyn ToolParser>>
     where
@@ -21,7 +18,7 @@ impl ToolParser for FakeToolParser {
         Ok(())
     }
 
-    async fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
+    fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
         Ok(ToolParseResult::default())
     }
 }
@@ -133,11 +130,10 @@ fn factory_new_resolves_external_default_patterns() {
     );
 }
 
-#[tokio::test]
-async fn default_parse_complete_delegates_through_push_and_finish() {
+#[test]
+fn default_parse_complete_delegates_through_push_and_finish() {
     struct StreamingParser;
 
-    #[async_trait]
     impl ToolParser for StreamingParser {
         fn create(_tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
         where
@@ -146,7 +142,7 @@ async fn default_parse_complete_delegates_through_push_and_finish() {
             Ok(Box::new(Self))
         }
 
-        async fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
+        fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
             Ok(ToolParseResult {
                 normal_text: "prefix ".to_string(),
                 calls: vec![
@@ -169,7 +165,7 @@ async fn default_parse_complete_delegates_through_push_and_finish() {
             })
         }
 
-        async fn finish(&mut self) -> Result<ToolParseResult> {
+        fn finish(&mut self) -> Result<ToolParseResult> {
             Ok(ToolParseResult {
                 normal_text: "suffix".to_string(),
                 calls: vec![
@@ -189,7 +185,7 @@ async fn default_parse_complete_delegates_through_push_and_finish() {
     }
 
     let mut parser = StreamingParser;
-    let result = parser.parse_complete("ignored").await.unwrap();
+    let result = parser.parse_complete("ignored").unwrap();
     assert_eq!(result.normal_text, "prefix suffix");
     assert_eq!(
         result.calls,
