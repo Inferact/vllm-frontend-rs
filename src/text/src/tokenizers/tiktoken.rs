@@ -14,11 +14,6 @@ use crate::error::Result;
 /// Default regex pattern used when loading tiktoken from a BPE file. This is the same
 /// `cl100k_base` pattern that HuggingFace transformers uses as its default in
 /// `TikTokenConverter`.
-///
-/// The `.tiktoken` file format does not include a regex pattern — each model's pattern is
-/// defined in its Python tokenizer source (e.g. `tokenization_kimi.py`). Some models use a
-/// different regex (e.g. Kimi K2 adds `\p{Han}` for CJK grouping), which can affect token
-/// boundaries but not encode/decode correctness.
 const CL100K_BASE_PATTERN: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 
 /// Fallback number of reserved special-token slots to assume when the model's `config.json`
@@ -184,17 +179,15 @@ impl TiktokenTokenizer {
             special_tokens_encoder.insert(name, id);
         }
 
-        let pat_str = parent_dir
-            .and_then(extract_pat_str_from_dir)
-            .unwrap_or_else(|| CL100K_BASE_PATTERN.to_string());
-
         let special_token_ids_by_text = special_tokens_encoder.clone();
-        let bpe = CoreBPE::new(encoder, special_tokens_encoder, &pat_str).map_err(|error| {
-            Error::Tokenizer(format!(
-                "failed to create tiktoken tokenizer from {}: {error}",
-                path.display()
-            ))
-        })?;
+        let bpe = CoreBPE::new(encoder, special_tokens_encoder, CL100K_BASE_PATTERN).map_err(
+            |error| {
+                Error::Tokenizer(format!(
+                    "failed to create tiktoken tokenizer from {}: {error}",
+                    path.display()
+                ))
+            },
+        )?;
 
         Ok(Self {
             inner: bpe,
@@ -338,119 +331,15 @@ fn parse_added_tokens_from_config(
     Some(tokens)
 }
 
-/// Try to extract `pat_str` from Python tokenizer source files in the tokenizer directory.
-fn extract_pat_str_from_dir(dir: &Path) -> Option<String> {
-    discover_python_tokenizer_sources(dir)
-        .into_iter()
-        .find_map(|path| {
-            let source = std::fs::read_to_string(path).ok()?;
-            extract_pat_str_from_source(&source)
-        })
-}
-
-/// Discover likely Python tokenizer source files adjacent to a tiktoken model.
-fn discover_python_tokenizer_sources(dir: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths: Vec<_> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name == "tokenizer.py"
-                        || (name.starts_with("tokenization_") && name.ends_with(".py"))
-                })
-        })
-        .collect();
-    paths.sort();
-    paths
-}
-
-/// Parse `pat_str` from Python tokenizer source code.
-fn extract_pat_str_from_source(source: &str) -> Option<String> {
-    if let Some(pat_start) = source.find("pat_str") {
-        let after = &source[pat_start..];
-
-        // Common Kimi/Qwen pattern: `pat_str = "|".join([r"...", r"...", ...])`
-        if let Some(join_pos) = after.find(".join(") {
-            let after_join = &after[join_pos + ".join(".len()..];
-            if let Some(bracket_start) = after_join.find('[') {
-                let inside = &after_join[bracket_start + 1..];
-                let mut fragments = Vec::new();
-                let mut remaining = inside;
-
-                while let Some((fragment, rest)) = extract_next_python_string(remaining) {
-                    fragments.push(fragment);
-                    remaining = rest;
-                    if remaining.trim_start().starts_with(']') {
-                        break;
-                    }
-                }
-
-                if !fragments.is_empty() {
-                    return Some(fragments.join("|"));
-                }
-            }
-        }
-
-        // Fallback: `pat_str = r"..."`
-        if let Some(eq_pos) = after.find('=') {
-            let after_eq = after[eq_pos + 1..].trim_start();
-            if let Some((pattern, _)) = extract_next_python_string(after_eq) {
-                return Some(pattern);
-            }
-        }
-    }
-
-    None
-}
-
-/// Extract the next Python string literal from `s`, returning its contents and remaining input.
-fn extract_next_python_string(s: &str) -> Option<(String, &str)> {
-    let s = s.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
-
-    if let Some(inner) = s.strip_prefix("r\"\"\"") {
-        let end = inner.find("\"\"\"")?;
-        return Some((inner[..end].to_string(), &inner[end + 3..]));
-    }
-    if let Some(inner) = s.strip_prefix("r'''") {
-        let end = inner.find("'''")?;
-        return Some((inner[..end].to_string(), &inner[end + 3..]));
-    }
-    if let Some(inner) = s.strip_prefix("r\"") {
-        let end = inner.find('"')?;
-        return Some((inner[..end].to_string(), &inner[end + 1..]));
-    }
-    if let Some(inner) = s.strip_prefix("r'") {
-        let end = inner.find('\'')?;
-        return Some((inner[..end].to_string(), &inner[end + 1..]));
-    }
-    if let Some(inner) = s.strip_prefix('"') {
-        let end = inner.find('"')?;
-        return Some((inner[..end].to_string(), &inner[end + 1..]));
-    }
-    if let Some(inner) = s.strip_prefix('\'') {
-        let end = inner.find('\'')?;
-        return Some((inner[..end].to_string(), &inner[end + 1..]));
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::PathBuf;
 
     use base64::Engine as _;
-    use expect_test::expect;
     use tempfile::TempDir;
 
-    use super::{
-        TiktokenTokenizer, discover_python_tokenizer_sources, extract_pat_str_from_source,
-    };
+    use super::TiktokenTokenizer;
     use crate::backends::hf::{ResolvedModelFiles, TokenizerSource};
     use crate::tokenizers::Tokenizer;
 
@@ -692,23 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn tiktoken_extracts_pat_str_from_python_join_list() {
-        let source = r#"
-class TikTokenTokenizer:
-    pat_str = "|".join([
-        r"""[\p{Han}]+""",
-        r"""\p{N}{1,3}""",
-        r"""\s+""",
-    ])
-"#;
-
-        let pattern = extract_pat_str_from_source(source).expect("extract pat_str");
-        assert!(pattern.contains(r"[\p{Han}]+"));
-        assert!(pattern.contains(r"\p{N}{1,3}"));
-        assert!(pattern.contains(r"\s+"));
-    }
-
-    #[test]
     fn tiktoken_token_to_id_uses_added_special_token_map_directly() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let bpe_path = write_synthetic_bpe_file(dir.path());
@@ -741,22 +613,6 @@ class TikTokenTokenizer:
         assert_eq!(backend.token_to_id("<|definitely_not_registered|>"), None);
     }
 
-    #[test]
-    fn tiktoken_discovers_generic_python_tokenizer_sources() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        fs::write(dir.path().join("tokenization_kimi.py"), "").expect("write tokenization file");
-        fs::write(dir.path().join("tokenizer.py"), "").expect("write tokenizer.py");
-        fs::write(dir.path().join("configuration_kimi.py"), "").expect("write config file");
-
-        let paths = discover_python_tokenizer_sources(dir.path());
-        let names: Vec<_> = paths
-            .iter()
-            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
-            .collect();
-
-        assert_eq!(names, vec!["tokenization_kimi.py", "tokenizer.py"]);
-    }
-
     #[tokio::test]
     #[ignore = "requires network access to Hugging Face and downloads the real Kimi K2.5 tokenizer"]
     async fn tiktoken_real_kimi_k25_tokenizer_files_load_and_handle_special_tokens() {
@@ -768,15 +624,6 @@ class TikTokenTokenizer:
             TokenizerSource::Tiktoken(path) => path.clone(),
             other => panic!("expected tiktoken tokenizer source, got {other:?}"),
         };
-        let tokenizer_dir = tokenizer_path
-            .parent()
-            .expect("resolved tokenizer path should have a parent");
-
-        let python_sources = discover_python_tokenizer_sources(tokenizer_dir);
-        assert!(
-            !python_sources.is_empty(),
-            "expected tokenizer source files next to the real tiktoken model"
-        );
 
         let backend = TiktokenTokenizer::new(&tokenizer_path).expect("load real Kimi tokenizer");
 
@@ -786,15 +633,10 @@ class TikTokenTokenizer:
             .token_to_id("<|tool_calls_section_begin|>")
             .expect("resolve tool call section marker");
 
-        expect![[r#"
-            (
-                163606,
-                163607,
-                163595,
-            )
-        "#]]
-        .assert_debug_eq(&(think_id, end_think_id, tool_section_id));
-
+        assert_eq!(
+            (think_id, end_think_id, tool_section_id),
+            (163606, 163607, 163595)
+        );
         assert_eq!(backend.decode(&[think_id], true).unwrap(), "<think>");
         assert_eq!(backend.decode(&[end_think_id], true).unwrap(), "</think>");
         assert_eq!(
@@ -802,7 +644,7 @@ class TikTokenTokenizer:
             "<|tool_calls_section_begin|>"
         );
 
-        // Wrong-parser delimiter text should fail gracefully instead of crashing the tokenizer.
+        // Special-looking text that is not actually registered should fail gracefully.
         assert_eq!(backend.token_to_id("◁think▷"), None);
         assert_eq!(backend.token_to_id("<|definitely_not_registered|>"), None);
     }

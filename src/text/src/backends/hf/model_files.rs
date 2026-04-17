@@ -177,18 +177,11 @@ async fn resolve_remote_tokenizer_source(
         )));
     };
 
-    let tokenizer = resolve_tokenizer_source(tokenizer_path, tokenizer_class, None);
-
-    if matches!(tokenizer, TokenizerSource::Tiktoken(_)) {
-        // Model-specific tiktoken implementations often keep `pat_str` in an adjacent Python
-        // tokenizer file. Download likely tokenizer source files opportunistically so the loader
-        // can read the exact regex instead of falling back to cl100k.
-        for python_name in find_python_tokenizer_siblings(siblings) {
-            let _ = download_if_present(repo, model_id, siblings, python_name).await?;
-        }
-    }
-
-    Ok(tokenizer)
+    Ok(resolve_tokenizer_source(
+        tokenizer_path,
+        tokenizer_class,
+        None,
+    ))
 }
 
 fn resolve_cached_tokenizer_source(
@@ -326,19 +319,6 @@ fn find_tiktoken_sibling<'a>(siblings: &std::collections::BTreeSet<&'a str>) -> 
         .iter()
         .copied()
         .find(|name| name.ends_with(".tiktoken"))
-}
-
-/// Find likely Python tokenizer source files among repo siblings.
-fn find_python_tokenizer_siblings<'a>(
-    siblings: &std::collections::BTreeSet<&'a str>,
-) -> Vec<&'a str> {
-    siblings
-        .iter()
-        .copied()
-        .filter(|name| {
-            *name == "tokenizer.py" || name.starts_with("tokenization_") && name.ends_with(".py")
-        })
-        .collect()
 }
 
 /// Discover a tiktoken model file in a local directory.
