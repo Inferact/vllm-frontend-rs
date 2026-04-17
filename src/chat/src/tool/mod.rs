@@ -9,6 +9,7 @@
 
 mod external;
 mod gemma4;
+pub(super) mod streaming;
 
 use std::collections::{BTreeMap, btree_map};
 

@@ -1,5 +1,6 @@
 use serde_json::{Map, Number, Value};
 
+use super::streaming::StreamingToolState;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError};
 use crate::request::{ChatRequest, ChatTool};
 
@@ -30,34 +31,15 @@ const CALL_PREFIX: &str = "call:";
 /// tool parsers.
 pub struct Gemma4ToolParser {
     buffer: String,
-    next_tool_index: usize,
-    current_tool_index: Option<usize>,
-    current_tool_name_sent: bool,
-    streamed_args_for_tool: String,
+    state: StreamingToolState,
 }
 
 impl Gemma4ToolParser {
     fn new(_tools: &[ChatTool]) -> Self {
         Self {
             buffer: String::new(),
-            next_tool_index: 0,
-            current_tool_index: None,
-            current_tool_name_sent: false,
-            streamed_args_for_tool: String::new(),
+            state: StreamingToolState::default(),
         }
-    }
-
-    fn enter_tool_call(&mut self) {
-        self.current_tool_index = Some(self.next_tool_index);
-        self.next_tool_index += 1;
-        self.current_tool_name_sent = false;
-        self.streamed_args_for_tool.clear();
-    }
-
-    fn reset_current_tool_state(&mut self) {
-        self.current_tool_index = None;
-        self.current_tool_name_sent = false;
-        self.streamed_args_for_tool.clear();
     }
 
     fn process_text_mode(&mut self, result: &mut ToolParseResult) -> bool {
@@ -69,7 +51,7 @@ impl Gemma4ToolParser {
             }
 
             self.buffer.drain(..TOOL_CALL_START.len());
-            self.enter_tool_call();
+            self.state.begin_tool_call();
             return true;
         }
 
@@ -85,17 +67,17 @@ impl Gemma4ToolParser {
     }
 
     fn process_tool_mode(&mut self, result: &mut ToolParseResult) -> Result<bool> {
-        let Some(tool_index) = self.current_tool_index else {
+        let Some(tool_index) = self.state.active_tool_index() else {
             return Ok(false);
         };
         let mut progressed = false;
 
-        if !self.current_tool_name_sent {
+        if !self.state.active_tool_name_sent() {
             match parse_tool_header(&self.buffer) {
                 ToolHeader::NeedMore => return Ok(progressed),
                 ToolHeader::Invalid(message) => return Err(parse_failed(message)),
                 ToolHeader::Ready { name, consumed_len } => {
-                    self.current_tool_name_sent = true;
+                    self.state.mark_active_tool_name_sent();
                     self.buffer.drain(..consumed_len);
                     result.calls.push(ToolCallDelta {
                         tool_index,
@@ -121,7 +103,7 @@ impl Gemma4ToolParser {
 
         if let ToolTailState::Complete { consumed_len, .. } = tail_state {
             self.buffer.drain(..consumed_len);
-            self.reset_current_tool_state();
+            self.state.clear_active_tool();
             progressed = true;
         }
 
@@ -165,26 +147,27 @@ impl Gemma4ToolParser {
             current_args_json
         };
 
-        if safe_json.is_empty() || safe_json == self.streamed_args_for_tool {
+        let streamed_args = self.state.active_streamed_arguments().unwrap_or_default();
+        if safe_json.is_empty() || safe_json == streamed_args {
             return Ok(false);
         }
 
-        let diff = if self.streamed_args_for_tool.is_empty() {
+        let diff = if streamed_args.is_empty() {
             safe_json.clone()
         } else {
-            let prefix = find_common_prefix(&self.streamed_args_for_tool, &safe_json);
-            if prefix.len() < self.streamed_args_for_tool.len() {
-                self.streamed_args_for_tool = prefix;
+            let prefix = find_common_prefix(streamed_args, &safe_json);
+            if prefix.len() < streamed_args.len() {
+                self.state.set_active_streamed_arguments(prefix);
                 return Ok(false);
             }
-            safe_json[self.streamed_args_for_tool.len()..].to_string()
+            safe_json[streamed_args.len()..].to_string()
         };
 
         if diff.is_empty() {
             return Ok(false);
         }
 
-        self.streamed_args_for_tool = safe_json;
+        self.state.set_active_streamed_arguments(safe_json);
         result.calls.push(ToolCallDelta {
             tool_index,
             name: None,
@@ -215,7 +198,7 @@ impl ToolParser for Gemma4ToolParser {
         let mut result = ToolParseResult::default();
 
         loop {
-            let progressed = if self.current_tool_index.is_some() {
+            let progressed = if self.state.active_tool_index().is_some() {
                 self.process_tool_mode(&mut result)?
             } else {
                 self.process_text_mode(&mut result)
@@ -231,8 +214,8 @@ impl ToolParser for Gemma4ToolParser {
     fn finish(&mut self) -> Result<ToolParseResult> {
         let mut result = ToolParseResult::default();
 
-        if let Some(tool_index) = self.current_tool_index {
-            if self.current_tool_name_sent {
+        if let Some(tool_index) = self.state.active_tool_index() {
+            if self.state.active_tool_name_sent() {
                 match scan_tool_tail(&self.buffer) {
                     ToolTailState::Complete { args_end, .. }
                     | ToolTailState::PendingAfterBrace { args_end } => {
@@ -250,7 +233,7 @@ impl ToolParser for Gemma4ToolParser {
         }
 
         self.buffer.clear();
-        self.reset_current_tool_state();
+        self.state.reset();
         Ok(result)
     }
 }
@@ -381,11 +364,13 @@ fn parse_gemma4_value(value: &str) -> Result<Value> {
 ///
 /// Format examples:
 ///
-///     location:<|"|>Tokyo<|"|>
-///     location:<|"|>San Francisco<|"|>,unit:<|"|>celsius<|"|>
-///     count:42,flag:true
-///     nested:{inner_key:<|"|>val<|"|>}
-///     items:[<|"|>a<|"|>,<|"|>b<|"|>]
+/// ```text
+/// location:<|"|>Tokyo<|"|>
+/// location:<|"|>San Francisco<|"|>,unit:<|"|>celsius<|"|>
+/// count:42,flag:true
+/// nested:{inner_key:<|"|>val<|"|>}
+/// items:[<|"|>a<|"|>,<|"|>b<|"|>]
+/// ```
 ///
 /// When `partial` is true (streaming), bare values at end of string are
 /// omitted because they may be incomplete and type-unstable
