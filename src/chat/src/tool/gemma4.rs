@@ -758,7 +758,7 @@ mod tests {
     #[test]
     fn gemma4_parse_args_handles_scalars_and_nested_values() {
         let parsed = parse_gemma4_args(
-            "name:<|\"|>test<|\"|>,count:42,active:true,score:3.14,nested:{inner:<|\"|>value<|\"|>},items:[<|\"|>a<|\"|>,<|\"|>b<|\"|>]",
+            "name:<|\"|>test<|\"|>,count:42,active:true,score:114.514,nested:{inner:<|\"|>value<|\"|>},items:[<|\"|>a<|\"|>,<|\"|>b<|\"|>]",
             false,
         )
         .unwrap();
@@ -769,7 +769,7 @@ mod tests {
                 "name": "test",
                 "count": 42,
                 "active": true,
-                "score": 3.14,
+                "score": 114.514,
                 "nested": { "inner": "value" },
                 "items": ["a", "b"],
             })
@@ -784,8 +784,8 @@ mod tests {
 
     #[test]
     fn gemma4_parse_array_handles_bare_values() {
-        let parsed = parse_gemma4_array("42,true,3.14", false).unwrap();
-        assert_eq!(Value::Array(parsed), json!([42, true, 3.14]));
+        let parsed = parse_gemma4_array("42,true,114.514", false).unwrap();
+        assert_eq!(Value::Array(parsed), json!([42, true, 114.514]));
     }
 
     #[test]
