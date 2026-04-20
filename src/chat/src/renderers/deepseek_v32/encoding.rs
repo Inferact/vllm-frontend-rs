@@ -1,4 +1,7 @@
 //! DeepSeek V3.2 prompt renderer.
+//!
+//! Original Python implementation:
+//! <https://github.com/vllm-project/vllm/blob/bf45e6d0a558da2b8d7b60efb07b4aa394f3b60b/vllm/tokenizers/deepseek_v32_encoding.py>
 
 use std::fmt::Write as _;
 
