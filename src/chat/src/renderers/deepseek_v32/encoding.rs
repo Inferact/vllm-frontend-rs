@@ -217,6 +217,7 @@ fn render_user_message(
 
 /// Shared trailing wrapper used by both real user turns and native developer
 /// turns after their content has already been written.
+// TODO: respect `add_generation_prompt` option
 fn write_user_like_suffix(out: &mut String, opens_thinking: bool) {
     out.push_str("<｜Assistant｜>");
     if opens_thinking {
