@@ -286,6 +286,29 @@ fn historical_assistant_reasoning_is_dropped_before_final_user_turn() {
 }
 
 #[test]
+fn historical_assistant_reasoning_is_dropped_before_final_developer_turn() {
+    let request = thinking_request(vec![
+        ChatMessage::assistant_blocks(vec![
+            AssistantContentBlock::Reasoning {
+                text: "internal reasoning".to_string(),
+            },
+            AssistantContentBlock::Text {
+                text: "Visible answer.".to_string(),
+            },
+        ]),
+        ChatMessage::developer("Follow the rubric.", None),
+    ]);
+
+    let rendered = render_request(&request);
+
+    assert!(!rendered.contains("internal reasoning"));
+    assert!(rendered.contains("Visible answer.<｜end▁of▁sentence｜>"));
+    assert!(rendered.ends_with(
+        "<｜User｜>\n\n# The user's message is: Follow the rubric.<｜Assistant｜><think>"
+    ));
+}
+
+#[test]
 fn tool_results_after_last_user_resume_thinking() {
     let request = thinking_request(vec![
         ChatMessage::user("Check the weather."),
@@ -303,6 +326,51 @@ fn tool_results_after_last_user_resume_thinking() {
         "<｜User｜>Check the weather.<｜Assistant｜><think></think>\n\n<｜DSML｜function_calls>"
     ));
     assert!(rendered.ends_with("</function_results>\n\n<think>"));
+}
+
+#[test]
+fn tool_results_follow_assistant_tool_call_id_order() {
+    let request = thinking_request(vec![
+        ChatMessage::user("Check two cities."),
+        ChatMessage::assistant_blocks(vec![
+            AssistantContentBlock::ToolCall(AssistantToolCall {
+                id: "call-hangzhou".to_string(),
+                name: "weather".to_string(),
+                arguments: "{\"city\":\"Hangzhou\"}".to_string(),
+            }),
+            AssistantContentBlock::ToolCall(AssistantToolCall {
+                id: "call-beijing".to_string(),
+                name: "weather".to_string(),
+                arguments: "{\"city\":\"Beijing\"}".to_string(),
+            }),
+        ]),
+        ChatMessage::tool_response("{\"city\":\"Beijing\"}", "call-beijing"),
+        ChatMessage::tool_response("{\"city\":\"Hangzhou\"}", "call-hangzhou"),
+    ]);
+
+    let rendered = render_request(&request);
+
+    assert!(rendered.contains(
+        "<function_results>\n<result>{\"city\":\"Hangzhou\"}</result>\n<result>{\"city\":\"Beijing\"}</result>\n</function_results>"
+    ));
+}
+
+#[test]
+fn tool_results_require_matching_tool_call_ids() {
+    let request = thinking_request(vec![
+        ChatMessage::user("Check the weather."),
+        ChatMessage::assistant_blocks(vec![AssistantContentBlock::ToolCall(AssistantToolCall {
+            id: "call-weather".to_string(),
+            name: "weather".to_string(),
+            arguments: "{\"city\":\"Hangzhou\"}".to_string(),
+        })]),
+        ChatMessage::tool_response("{\"ok\":true}", "call-unknown"),
+    ]);
+
+    let error = render_result(&request).unwrap_err();
+
+    expect!["chat template error: invalid DeepSeek V3.2 tool message: unknown tool_call_id `call-unknown`"]
+        .assert_eq(&error.to_report_string());
 }
 
 #[test]

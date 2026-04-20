@@ -1,8 +1,6 @@
 //! DeepSeek V3.2 prompt renderer.
-//!
-//! Original Python implementation:
-//! <https://github.com/vllm-project/vllm/blob/bf45e6d0a558da2b8d7b60efb07b4aa394f3b60b/vllm/tokenizers/deepseek_v32_encoding.py>
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use serde::Serialize;
@@ -46,7 +44,7 @@ pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     };
     let drop_thinking = matches!(
         request.messages.last().map(ChatMessage::role),
-        Some(ChatRole::User)
+        Some(ChatRole::User | ChatRole::Developer)
     );
     let render_offset = isize::from(request.tool_parsing_enabled());
     let last_user_render_index =
@@ -128,6 +126,8 @@ fn render_message(
                 thinking_mode,
                 drop_thinking,
             ),
+            // TODO: Respect `continue_final_message` and map it to DeepSeek's
+            // prefix-style final-assistant continuation behavior.
             false,
         ),
         ChatMessage::ToolResponse { content, .. } => render_tool_message(
@@ -233,9 +233,14 @@ fn render_tool_message(
     messages: &[ChatMessage],
     message_index: usize,
     resumes_thinking: bool,
-    content: &ChatContent,
+    _content: &ChatContent,
 ) -> Result<()> {
-    let Some(prev_assistant_idx) = previous_non_tool_actual_index(messages, message_index) else {
+    let (block_start, block_end) = tool_response_block_bounds(messages, message_index);
+    if message_index != block_start {
+        return Ok(());
+    }
+
+    let Some(prev_assistant_idx) = previous_assistant_actual_index(messages, block_start) else {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: missing previous assistant message".to_string(),
         ));
@@ -251,44 +256,99 @@ fn render_tool_message(
         ));
     };
 
-    let tool_call_count = assistant_content.tool_calls().count();
-    let tool_call_order = message_index - prev_assistant_idx;
-    if tool_call_count < tool_call_order {
+    let assistant_tool_calls = assistant_content.tool_calls().collect::<Vec<_>>();
+    if assistant_tool_calls.is_empty() {
         return Err(Error::ChatTemplate(
-            "invalid DeepSeek V3.2 tool message: no matching assistant tool call".to_string(),
+            "invalid DeepSeek V3.2 tool message: previous assistant message has no tool calls"
+                .to_string(),
         ));
     }
 
-    if tool_call_order == 1 {
-        out.push_str("\n\n<function_results>");
+    let mut expected_tool_call_ids = HashSet::with_capacity(assistant_tool_calls.len());
+    for tool_call in &assistant_tool_calls {
+        if !expected_tool_call_ids.insert(tool_call.id.as_str()) {
+            return Err(Error::ChatTemplate(
+                "invalid DeepSeek V3.2 assistant tool calls: duplicate tool_call_id".to_string(),
+            ));
+        }
     }
 
-    out.push_str("\n<result>");
-    write_chat_content(out, content)?;
-    out.push_str("</result>");
+    let mut tool_results_by_id = HashMap::with_capacity(assistant_tool_calls.len());
+    for message in &messages[block_start..block_end] {
+        let ChatMessage::ToolResponse {
+            content,
+            tool_call_id,
+        } = message
+        else {
+            unreachable!("tool response block should only contain tool messages");
+        };
 
-    if tool_call_order == tool_call_count {
-        out.push_str("\n</function_results>");
-        out.push_str("\n\n");
-        if resumes_thinking {
-            out.push_str(THINKING_START_TOKEN);
-        } else {
-            out.push_str(THINKING_END_TOKEN);
+        if !expected_tool_call_ids.contains(tool_call_id.as_str()) {
+            return Err(Error::ChatTemplate(format!(
+                "invalid DeepSeek V3.2 tool message: unknown tool_call_id `{tool_call_id}`"
+            )));
         }
+
+        if tool_results_by_id
+            .insert(tool_call_id.as_str(), content)
+            .is_some()
+        {
+            return Err(Error::ChatTemplate(format!(
+                "invalid DeepSeek V3.2 tool message: duplicate tool_call_id `{tool_call_id}`"
+            )));
+        }
+    }
+
+    if tool_results_by_id.len() != assistant_tool_calls.len() {
+        return Err(Error::ChatTemplate(
+            "invalid DeepSeek V3.2 tool messages: missing tool result for assistant tool call"
+                .to_string(),
+        ));
+    }
+
+    out.push_str("\n\n<function_results>");
+    for tool_call in assistant_tool_calls {
+        let content = tool_results_by_id
+            .get(tool_call.id.as_str())
+            .expect("validated tool_call_id set should be complete");
+        out.push_str("\n<result>");
+        write_chat_content(out, content)?;
+        out.push_str("</result>");
+    }
+
+    out.push_str("\n</function_results>");
+    out.push_str("\n\n");
+    if resumes_thinking {
+        out.push_str(THINKING_START_TOKEN);
+    } else {
+        out.push_str(THINKING_END_TOKEN);
     }
 
     Ok(())
 }
 
-/// Walk backwards from a tool result to the assistant turn that emitted the
-/// corresponding tool calls, skipping any earlier sibling tool results in the
-/// same batch.
-fn previous_non_tool_actual_index(messages: &[ChatMessage], actual_index: usize) -> Option<usize> {
-    let mut current = actual_index.checked_sub(1)?;
-    while matches!(messages[current], ChatMessage::ToolResponse { .. }) {
-        current = current.checked_sub(1)?;
+/// Return the contiguous tool-response block containing `actual_index`.
+fn tool_response_block_bounds(messages: &[ChatMessage], actual_index: usize) -> (usize, usize) {
+    let mut block_start = actual_index;
+    while block_start > 0 && matches!(messages[block_start - 1], ChatMessage::ToolResponse { .. }) {
+        block_start -= 1;
     }
-    Some(current)
+
+    let mut block_end = actual_index + 1;
+    while block_end < messages.len()
+        && matches!(messages[block_end], ChatMessage::ToolResponse { .. })
+    {
+        block_end += 1;
+    }
+
+    (block_start, block_end)
+}
+
+/// Return the most recent assistant turn before `actual_index`.
+fn previous_assistant_actual_index(messages: &[ChatMessage], actual_index: usize) -> Option<usize> {
+    messages[..actual_index]
+        .iter()
+        .rposition(|message| matches!(message, ChatMessage::Assistant { .. }))
 }
 
 /// Render one assistant turn, including optional reasoning, DSML tool calls,
