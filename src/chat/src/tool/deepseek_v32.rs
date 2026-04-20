@@ -64,13 +64,13 @@ impl DeepSeekV32ToolParser {
 
     /// Extract `ToolCallDelta`s from newly completed `<invoke>` blocks.
     ///
-    /// Tracks progress via `emitted_invoke_count` so each block is extracted
-    /// exactly once across successive streaming calls.
+    /// Drains each completed invoke from the front of the buffer after
+    /// emitting it so later streaming updates do not rescan previously
+    /// processed content.
     fn extract_completed_invokes(&mut self, result: &mut ToolParseResult) -> Result<()> {
-        let completed_invokes = self
+        while let Some((name, body, consumed_len)) = self
             .invoke_complete_regex
-            .captures_iter(&self.buffer)
-            .skip(self.emitted_invoke_count)
+            .captures(&self.buffer)
             .map(|captures| {
                 let name = captures
                     .get(1)
@@ -82,11 +82,13 @@ impl DeepSeekV32ToolParser {
                     .expect("invoke regex always captures tool body")
                     .as_str()
                     .to_string();
-                (name, body)
+                let consumed_len = captures
+                    .get(0)
+                    .expect("invoke regex always captures full invoke")
+                    .end();
+                (name, body, consumed_len)
             })
-            .collect::<Vec<_>>();
-
-        for (name, body) in completed_invokes {
+        {
             let raw_params = self.parse_invoke_params(&body);
             let arguments = self.convert_params_with_schema(&name, raw_params)?;
             let arguments = serde_json::to_string(&arguments)
@@ -98,6 +100,7 @@ impl DeepSeekV32ToolParser {
                 arguments,
             });
             self.emitted_invoke_count += 1;
+            self.buffer.drain(..consumed_len);
         }
 
         Ok(())
