@@ -93,12 +93,13 @@ impl HfChatRenderer {
                 );
             }
         }
-        Ok(HfChatRenderer::new(
+
+        Self::new(
             template,
             options.default_chat_template_kwargs,
             options.chat_template_content_format,
             special_tokens,
-        )?)
+        )
     }
 
     /// Apply the chat template to one chat request, rendering the prompt string to be tokenized
