@@ -34,31 +34,28 @@ struct RenderedToolSchema<'a> {
 }
 
 /// Render one chat request into the prompt string.
-///
-/// The only extra bookkeeping beyond the typed request itself is:
-/// - whether request-level tools should behave like a synthetic leading system turn
-/// - where the last user/developer turn lands in that synthetic index space
-/// - whether historical assistant reasoning should be dropped because the final request turn is a
-///   new user question
 pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     let thinking_mode = thinking_mode_from_request(request);
     let drop_thinking = matches!(
         request.messages.last().map(ChatMessage::role),
         Some(ChatRole::User)
     );
-    let synthetic_tool_system = request.tool_parsing_enabled();
-    let last_user_idx =
-        find_last_user_virtual_index(request.messages.as_slice(), synthetic_tool_system);
+    let render_offset = isize::from(request.tool_parsing_enabled());
+    let last_user_render_index =
+        find_last_user_render_index(request.messages.as_slice(), render_offset);
     let mut prompt = String::from(BOS_TOKEN);
 
-    for virtual_index in
-        0..virtual_message_count(request.messages.as_slice(), synthetic_tool_system)
-    {
+    if request.tool_parsing_enabled() {
+        prompt.push_str(&render_system_message("", &request.tools)?);
+    }
+
+    for (message_index, message) in request.messages.iter().enumerate() {
         prompt.push_str(&render_message(
-            request,
-            virtual_index,
-            synthetic_tool_system,
-            last_user_idx,
+            request.messages.as_slice(),
+            message_index,
+            message,
+            render_offset,
+            last_user_render_index,
             thinking_mode,
             drop_thinking,
         )?);
@@ -97,57 +94,33 @@ fn is_truthy(value: &Value) -> bool {
     }
 }
 
-/// Return the number of turns visible to the DeepSeek renderer.
+/// Find the last user-like turn in render order.
 ///
-/// When request-level tools are enabled, the renderer treats them as an empty
-/// leading system message carrying those tools. We model that as one extra
-/// "virtual" message slot instead of allocating a new `ChatMessage`.
-fn virtual_message_count(messages: &[ChatMessage], synthetic_tool_system: bool) -> usize {
-    messages.len() + usize::from(synthetic_tool_system)
-}
-
-/// Find the last user-like turn in the same virtual index space used during
-/// rendering.
-///
-/// With request-level tools enabled:
-/// - virtual index `0` is the synthetic tool-only system turn
-/// - virtual index `1` maps to the real `messages[0]`
-/// - and so on
-///
-/// This offset lets downstream logic talk about one consistent index space when
-/// deciding whether to open `<think>` after the final user/developer turn.
-fn find_last_user_virtual_index(messages: &[ChatMessage], synthetic_tool_system: bool) -> isize {
-    let offset = isize::from(synthetic_tool_system);
+/// `render_offset` is `1` when a synthetic tool-only system turn is rendered
+/// before the real request messages, and `0` otherwise.
+fn find_last_user_render_index(messages: &[ChatMessage], render_offset: isize) -> isize {
     messages
         .iter()
         .rposition(|message| matches!(message.role(), ChatRole::User | ChatRole::Developer))
-        .map(|index| index as isize + offset)
+        .map(|index| index as isize + render_offset)
         .unwrap_or(-1)
 }
 
-/// Render one visible turn in virtual-index order.
-///
-/// The first virtual slot may be the synthetic request-level-tools system turn;
-/// all later slots map back to a real message in `request.messages`.
+/// Render one real request message, using `render_offset` to account for any
+/// synthetic tool-only system turn that was already emitted before the loop.
 fn render_message(
-    request: &ChatRequest,
-    virtual_index: usize,
-    synthetic_tool_system: bool,
-    last_user_idx: isize,
+    messages: &[ChatMessage],
+    message_index: usize,
+    message: &ChatMessage,
+    render_offset: isize,
+    last_user_render_index: isize,
     thinking_mode: ThinkingMode,
     drop_thinking: bool,
 ) -> Result<String> {
-    if synthetic_tool_system && virtual_index == 0 {
-        return render_system_message("", &request.tools);
-    }
-
-    let actual_index = actual_index(virtual_index, synthetic_tool_system);
-    let message = request.messages.get(actual_index).ok_or_else(|| {
-        Error::ChatTemplate(format!(
-            "DeepSeek V3.2 message index {virtual_index} out of range for {} messages",
-            virtual_message_count(request.messages.as_slice(), synthetic_tool_system)
-        ))
-    })?;
+    let render_index = message_index as isize + render_offset;
+    let opens_thinking = render_index == last_user_render_index;
+    let after_last_user_turn = render_index > last_user_render_index;
+    let after_or_at_last_user_turn = render_index >= last_user_render_index;
 
     match message {
         ChatMessage::System { content } => {
@@ -156,29 +129,23 @@ fn render_message(
         ChatMessage::Developer { content, tools } => render_developer_message(
             &content.try_flatten_to_text()?,
             tools.as_deref().unwrap_or(&[]),
-            virtual_index as isize,
-            last_user_idx,
-            thinking_mode,
+            thinking_mode == ThinkingMode::Thinking && opens_thinking,
         ),
         ChatMessage::User { content } => render_user_message(
             &content.try_flatten_to_text()?,
-            virtual_index as isize,
-            last_user_idx,
-            thinking_mode,
+            thinking_mode == ThinkingMode::Thinking && opens_thinking,
         ),
         ChatMessage::Assistant { content } => {
             let reasoning = assistant_reasoning(
                 content,
-                actual_index,
-                request.messages.as_slice(),
+                message_index,
+                messages,
                 thinking_mode,
                 drop_thinking,
             );
             let tool_calls = content.tool_calls().collect::<Vec<_>>();
             render_assistant_message(
-                virtual_index as isize,
-                last_user_idx,
-                thinking_mode,
+                thinking_mode == ThinkingMode::Thinking && after_last_user_turn,
                 reasoning.as_deref(),
                 &content.text(),
                 &tool_calls,
@@ -186,20 +153,12 @@ fn render_message(
             )
         }
         ChatMessage::ToolResponse { content, .. } => render_tool_message(
-            request.messages.as_slice(),
-            actual_index,
-            virtual_index as isize,
-            last_user_idx,
-            thinking_mode,
+            messages,
+            message_index,
+            thinking_mode == ThinkingMode::Thinking && after_or_at_last_user_turn,
             &content.try_flatten_to_text()?,
         ),
     }
-}
-
-/// Convert a render-time virtual index back to the underlying `request.messages`
-/// index. This is only valid for non-synthetic turns.
-fn actual_index(virtual_index: usize, synthetic_tool_system: bool) -> usize {
-    virtual_index - usize::from(synthetic_tool_system)
 }
 
 /// Historical assistant reasoning is dropped in DeepSeek thinking mode when the
@@ -245,9 +204,7 @@ fn render_system_message(content: &str, tools: &[ChatTool]) -> Result<String> {
 fn render_developer_message(
     content: &str,
     tools: &[ChatTool],
-    virtual_index: isize,
-    last_user_idx: isize,
-    thinking_mode: ThinkingMode,
+    opens_thinking: bool,
 ) -> Result<String> {
     if content.is_empty() {
         return Err(Error::ChatTemplate(
@@ -263,40 +220,20 @@ fn render_developer_message(
     content_developer.push_str("\n\n# The user's message is: ");
     content_developer.push_str(content);
 
-    Ok(render_user_like_message(
-        &content_developer,
-        virtual_index,
-        last_user_idx,
-        thinking_mode,
-    ))
+    Ok(render_user_like_message(&content_developer, opens_thinking))
 }
 
 /// Plain user turns share the same wrapper shape as developer turns minus the
 /// extra developer preamble.
-fn render_user_message(
-    content: &str,
-    virtual_index: isize,
-    last_user_idx: isize,
-    thinking_mode: ThinkingMode,
-) -> Result<String> {
-    Ok(render_user_like_message(
-        content,
-        virtual_index,
-        last_user_idx,
-        thinking_mode,
-    ))
+fn render_user_message(content: &str, opens_thinking: bool) -> Result<String> {
+    Ok(render_user_like_message(content, opens_thinking))
 }
 
 /// Shared helper for the `<｜User｜>...<｜Assistant｜>` wrapper used by both
 /// real user turns and native developer turns.
-fn render_user_like_message(
-    content: &str,
-    virtual_index: isize,
-    last_user_idx: isize,
-    thinking_mode: ThinkingMode,
-) -> String {
+fn render_user_like_message(content: &str, opens_thinking: bool) -> String {
     let mut prompt = format!("<｜User｜>{content}<｜Assistant｜>");
-    if virtual_index == last_user_idx && thinking_mode == ThinkingMode::Thinking {
+    if opens_thinking {
         prompt.push_str(THINKING_START_TOKEN);
     } else {
         prompt.push_str(THINKING_END_TOKEN);
@@ -308,13 +245,11 @@ fn render_user_like_message(
 /// `<function_results>` block for the preceding assistant tool-call message.
 fn render_tool_message(
     messages: &[ChatMessage],
-    actual_index: usize,
-    virtual_index: isize,
-    last_user_idx: isize,
-    thinking_mode: ThinkingMode,
+    message_index: usize,
+    resumes_thinking: bool,
     content: &str,
 ) -> Result<String> {
-    let Some(prev_assistant_idx) = previous_non_tool_actual_index(messages, actual_index) else {
+    let Some(prev_assistant_idx) = previous_non_tool_actual_index(messages, message_index) else {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: missing previous assistant message".to_string(),
         ));
@@ -331,7 +266,7 @@ fn render_tool_message(
     };
 
     let tool_call_count = assistant_content.tool_calls().count();
-    let tool_call_order = actual_index - prev_assistant_idx;
+    let tool_call_order = message_index - prev_assistant_idx;
     if tool_call_count < tool_call_order {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: no matching assistant tool call".to_string(),
@@ -350,7 +285,7 @@ fn render_tool_message(
     if tool_call_order == tool_call_count {
         prompt.push_str("\n</function_results>");
         prompt.push_str("\n\n");
-        if virtual_index >= last_user_idx && thinking_mode == ThinkingMode::Thinking {
+        if resumes_thinking {
             prompt.push_str(THINKING_START_TOKEN);
         } else {
             prompt.push_str(THINKING_END_TOKEN);
@@ -374,9 +309,7 @@ fn previous_non_tool_actual_index(messages: &[ChatMessage], actual_index: usize)
 /// Render one assistant turn, including optional reasoning, DSML tool calls,
 /// and the trailing DeepSeek EOS marker.
 fn render_assistant_message(
-    virtual_index: isize,
-    last_user_idx: isize,
-    thinking_mode: ThinkingMode,
+    after_last_user_turn: bool,
     reasoning: Option<&str>,
     content: &str,
     tool_calls: &[&AssistantToolCall],
@@ -394,7 +327,7 @@ fn render_assistant_message(
     }
 
     let mut thinking_part = String::new();
-    if thinking_mode == ThinkingMode::Thinking && virtual_index > last_user_idx {
+    if after_last_user_turn {
         if reasoning.is_none() && tool_calls.is_empty() {
             return Err(Error::ChatTemplate(
                 "invalid DeepSeek V3.2 assistant message after last user message: expected reasoning or tool calls"
