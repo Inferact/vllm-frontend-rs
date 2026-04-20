@@ -63,6 +63,14 @@ impl ChatContent {
             Self::Parts(parts) => parts.iter().map(ChatContentPart::as_text).collect(),
         })
     }
+
+    /// Return whether flattening this chat content would produce an empty string.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Text(text) => text.is_empty(),
+            Self::Parts(parts) => parts.iter().all(|part| part.as_text().is_empty()),
+        }
+    }
 }
 
 impl From<String> for ChatContent {
