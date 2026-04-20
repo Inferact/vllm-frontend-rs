@@ -6,7 +6,7 @@ use serde_json_fmt::JsonFormat;
 
 use crate::error::{Error, Result};
 use crate::request::{ChatMessage, ChatRequest, ChatRole, ChatTool};
-use crate::{AssistantMessageExt, AssistantToolCall};
+use crate::{AssistantContentBlock, AssistantMessageExt, AssistantToolCall};
 
 const BOS_TOKEN: &str = "<｜begin▁of▁sentence｜>";
 const EOS_TOKEN: &str = "<｜end▁of▁sentence｜>";
@@ -35,7 +35,10 @@ struct RenderedToolSchema<'a> {
 
 /// Render one chat request into the prompt string.
 pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
-    let thinking_mode = thinking_mode_from_request(request);
+    let thinking_mode = match request.enable_thinking()?.unwrap_or(false) {
+        true => ThinkingMode::Thinking,
+        false => ThinkingMode::Chat,
+    };
     let drop_thinking = matches!(
         request.messages.last().map(ChatMessage::role),
         Some(ChatRole::User)
@@ -62,36 +65,6 @@ pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     }
 
     Ok(prompt)
-}
-
-/// DeepSeek V3.2 accepts loose truthiness for both `thinking` and
-/// `enable_thinking`, so mirror that contract instead of requiring a strict
-/// boolean.
-fn thinking_mode_from_request(request: &ChatRequest) -> ThinkingMode {
-    let kwargs = &request.chat_options.template_kwargs;
-    if kwargs.get("thinking").is_some_and(is_truthy)
-        || kwargs.get("enable_thinking").is_some_and(is_truthy)
-    {
-        ThinkingMode::Thinking
-    } else {
-        ThinkingMode::Chat
-    }
-}
-
-fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => match (value.as_i64(), value.as_u64(), value.as_f64()) {
-            (Some(value), _, _) => value != 0,
-            (_, Some(value), _) => value != 0,
-            (_, _, Some(value)) => value != 0.0,
-            _ => false,
-        },
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
 }
 
 /// Find the last user-like turn in render order.
@@ -165,7 +138,7 @@ fn render_message(
 /// final request turn is a new user message. Keep that policy local to
 /// assistant rendering instead of cloning a second stripped message list.
 fn assistant_reasoning(
-    content: &[crate::AssistantContentBlock],
+    content: &[AssistantContentBlock],
     actual_index: usize,
     messages: &[ChatMessage],
     thinking_mode: ThinkingMode,
