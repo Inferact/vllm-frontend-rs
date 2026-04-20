@@ -1,7 +1,9 @@
 use serde_json::{Map, Number, Value};
 
 use super::streaming::StreamingToolState;
-use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError};
+use super::{
+    Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, bail_parsing_failed,
+};
 use crate::request::{ChatRequest, ChatTool};
 
 const TOOL_CALL_START: &str = "<|tool_call>";
@@ -78,7 +80,7 @@ impl Gemma4ToolParser {
         if !self.state.active_tool_name_sent() {
             match parse_tool_header(&self.buffer) {
                 ToolHeader::NeedMore => return Ok(progressed),
-                ToolHeader::Invalid(message) => return Err(parse_failed(message)),
+                ToolHeader::Invalid(message) => bail_parsing_failed!("{}", message),
                 ToolHeader::Ready { name, consumed_len } => {
                     self.state.mark_active_tool_name_sent();
                     self.buffer.drain(..consumed_len);
@@ -349,7 +351,7 @@ fn parse_gemma4_value(value: &str) -> Result<Value> {
     if value.contains('.') {
         if let Ok(parsed) = value.parse::<f64>() {
             let Some(number) = Number::from_f64(parsed) else {
-                return Err(parse_failed("Gemma4 float argument is not finite"));
+                bail_parsing_failed!("Gemma4 float argument is not finite");
             };
             return Ok(Value::Number(number));
         }
@@ -660,10 +662,6 @@ fn find_common_prefix(lhs: &str, rhs: &str) -> String {
         .take_while(|(lhs_char, rhs_char)| lhs_char == rhs_char)
         .map(|(matched, _)| matched)
         .collect()
-}
-
-fn parse_failed(message: impl Into<String>) -> ToolParserError {
-    tool_parser::errors::ParserError::ParsingFailed(message.into()).into()
 }
 
 #[cfg(test)]
