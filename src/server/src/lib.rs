@@ -13,7 +13,6 @@ mod state;
 mod utils;
 
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -113,11 +112,18 @@ where
     // Optionally start the gRPC Generate server on a separate port. Bind the listener
     // synchronously here so bind errors (port in use, permission denied, ...) surface
     // before we start the HTTP server, rather than being deferred until shutdown.
+    // The gRPC listener follows the same host as the HTTP listener so that enabling
+    // --grpc-port does not accidentally expose the service on all interfaces when HTTP
+    // is intentionally local-only.
     let grpc_task = if let Some(grpc_port) = config.grpc_port {
-        let addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
-        let grpc_listener = TcpListener::bind(addr)
+        let grpc_host = match &config.listener_mode {
+            HttpListenerMode::BindTcp { host, .. } => host.as_str(),
+            HttpListenerMode::BindUnix { .. } | HttpListenerMode::InheritedFd { .. } => "0.0.0.0",
+        };
+        let grpc_listener = TcpListener::bind((grpc_host, grpc_port))
             .await
-            .with_context(|| format!("failed to bind gRPC listener on {addr}"))?;
+            .with_context(|| format!("failed to bind gRPC listener on {grpc_host}:{grpc_port}"))?;
+        let addr = grpc_listener.local_addr()?;
         let shutdown = shutdown.clone();
         let svc = grpc::GenerateServer::new(grpc::GenerateServiceImpl::new(state.clone()));
         info!(%addr, "starting gRPC server");
