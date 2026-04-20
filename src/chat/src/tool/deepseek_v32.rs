@@ -33,8 +33,9 @@ const TOOL_CALLS_START: &str = "<｜DSML｜function_calls>";
 /// waits until one full `<｜DSML｜invoke>...</｜DSML｜invoke>` block is available
 /// and then emits one complete tool call with full JSON arguments.
 ///
-/// Note: DSML markers are not special tokens, so no need to adjust the request's
-/// `skip_special_tokens` option.
+/// DeepSeek V3.2 relies on DSML markers such as `｜DSML｜`, which are represented
+/// as special tokens in the tokenizer and therefore must be preserved during
+/// decode for parsing to work.
 pub struct DeepSeekV32ToolParser {
     buffer: String,
     tool_call_started: bool,
@@ -199,6 +200,14 @@ impl ToolParser for DeepSeekV32ToolParser {
         Self: Sized + 'static,
     {
         Ok(Box::new(Self::new(tools)))
+    }
+
+    fn adjust_request(&self, request: &mut crate::request::ChatRequest) -> Result<()> {
+        if request.tool_parsing_enabled() {
+            // Preserve DSML sentinels like `｜DSML｜function_calls` during decode.
+            request.decode_options.skip_special_tokens = false;
+        }
+        Ok(())
     }
 
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
@@ -396,6 +405,18 @@ mod tests {
             convert_param_value_checked("[1,2]", "array").unwrap(),
             json!([1, 2])
         );
+    }
+
+    #[test]
+    fn deepseek_v32_adjust_request_keeps_special_tokens() {
+        let parser = DeepSeekV32ToolParser::new(&test_tools());
+        let mut request = crate::request::ChatRequest::for_test();
+        request.tools = test_tools();
+        request.tool_choice = crate::request::ChatToolChoice::Auto;
+        request.decode_options.skip_special_tokens = true;
+
+        parser.adjust_request(&mut request).unwrap();
+        assert!(!request.decode_options.skip_special_tokens);
     }
 
     #[test]
