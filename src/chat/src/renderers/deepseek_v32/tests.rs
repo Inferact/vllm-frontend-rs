@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
 
-use expect_test::{ExpectFile, expect_file};
+use expect_test::{ExpectFile, expect, expect_file};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use thiserror_ext::AsReport;
 
 use super::DeepSeekV32ChatRenderer;
+use crate::error::Error;
 use crate::event::{AssistantContentBlock, AssistantToolCall};
 use crate::request::{ChatMessage, ChatRequest, ChatTool, ChatToolChoice};
 use crate::{ChatRenderer, ChatRole};
@@ -78,6 +80,25 @@ fn render_request(request: &ChatRequest) -> String {
         .render(request)
         .unwrap()
         .prompt
+}
+
+fn render_result(request: &ChatRequest) -> Result<String, Error> {
+    DeepSeekV32ChatRenderer::new()
+        .render(request)
+        .map(|rendered| rendered.prompt)
+}
+
+fn thinking_request(messages: Vec<ChatMessage>) -> ChatRequest {
+    let mut request = ChatRequest {
+        request_id: "deepseek-v32-small-test".to_string(),
+        messages,
+        ..ChatRequest::for_test()
+    };
+    request
+        .chat_options
+        .template_kwargs
+        .insert("thinking".to_string(), Value::Bool(true));
+    request
 }
 
 fn fixture_request(input_name: &str) -> ChatRequest {
@@ -231,4 +252,68 @@ fn request_level_tools_are_lowered_as_synthetic_leading_system_message() {
     assert!(rendered.starts_with("<｜begin▁of▁sentence｜>\n\n## Tools\n"));
     assert!(rendered.contains("</functions>\nSystem prompt."));
     assert!(rendered.ends_with("<｜User｜>Hello<｜Assistant｜><think>"));
+}
+
+#[test]
+fn developer_turn_is_treated_as_last_user_like_turn() {
+    let request = thinking_request(vec![ChatMessage::developer("Follow policy.", None)]);
+
+    let rendered = render_request(&request);
+
+    assert!(rendered.contains("# The user's message is: Follow policy."));
+    assert!(rendered.ends_with("<｜Assistant｜><think>"));
+}
+
+#[test]
+fn historical_assistant_reasoning_is_dropped_before_final_user_turn() {
+    let request = thinking_request(vec![
+        ChatMessage::assistant_blocks(vec![
+            AssistantContentBlock::Reasoning {
+                text: "internal reasoning".to_string(),
+            },
+            AssistantContentBlock::Text {
+                text: "Visible answer.".to_string(),
+            },
+        ]),
+        ChatMessage::user("What about the next one?"),
+    ]);
+
+    let rendered = render_request(&request);
+
+    assert!(!rendered.contains("internal reasoning"));
+    assert!(rendered.contains("Visible answer.<｜end▁of▁sentence｜>"));
+    assert!(rendered.ends_with("<｜User｜>What about the next one?<｜Assistant｜><think>"));
+}
+
+#[test]
+fn tool_results_after_last_user_resume_thinking() {
+    let request = thinking_request(vec![
+        ChatMessage::user("Check the weather."),
+        ChatMessage::assistant_blocks(vec![AssistantContentBlock::ToolCall(AssistantToolCall {
+            id: "call-weather".to_string(),
+            name: "weather".to_string(),
+            arguments: "{\"city\":\"Hangzhou\"}".to_string(),
+        })]),
+        ChatMessage::tool_response("{\"ok\":true}", "call-weather"),
+    ]);
+
+    let rendered = render_request(&request);
+
+    assert!(rendered.contains(
+        "<｜User｜>Check the weather.<｜Assistant｜><think></think>\n\n<｜DSML｜function_calls>"
+    ));
+    assert!(rendered.ends_with("</function_results>\n\n<think>"));
+}
+
+#[test]
+fn assistant_after_last_user_requires_reasoning_or_tool_calls() {
+    let request = thinking_request(vec![
+        ChatMessage::user("Hello"),
+        ChatMessage::assistant_text("Hi there."),
+    ]);
+
+    let error = render_result(&request).unwrap_err();
+
+    expect!["chat template error: invalid DeepSeek V3.2 assistant message after last user message: expected reasoning or tool calls"]
+        .assert_eq(&error.to_report_string());
 }
