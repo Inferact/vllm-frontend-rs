@@ -1,6 +1,7 @@
 use regex::Regex;
 use serde_json::{Number, Value};
 
+use super::utils::partial_prefix_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
@@ -271,17 +272,6 @@ fn convert_param_value_checked(value: &str, param_type: &str) -> std::result::Re
         "object" | "array" => serde_json::from_str(value).map_err(|_| ()),
         _ => serde_json::from_str(value).map_err(|_| ()),
     }
-}
-
-fn partial_prefix_len(buffer: &str, token: &str) -> usize {
-    token
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(token.len()))
-        .filter(|&len| len < token.len())
-        .rev()
-        .find(|&len| buffer.ends_with(&token[..len]))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

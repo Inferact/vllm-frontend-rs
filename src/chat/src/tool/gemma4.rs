@@ -1,6 +1,7 @@
 use serde_json::{Map, Number, Value};
 
 use super::streaming::StreamingToolState;
+use super::utils::partial_prefix_len;
 use super::{
     Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, bail_parsing_failed,
 };
@@ -647,13 +648,6 @@ fn strip_partial_json_suffix(mut json: String) -> String {
         json.pop();
     }
     json
-}
-
-fn partial_prefix_len(buffer: &str, token: &str) -> usize {
-    (1..token.len())
-        .rev()
-        .find(|&len| buffer.ends_with(&token[..len]))
-        .unwrap_or(0)
 }
 
 fn find_common_prefix(lhs: &str, rhs: &str) -> String {

@@ -11,6 +11,7 @@ mod deepseek_v32;
 mod external;
 mod gemma4;
 pub(super) mod streaming;
+mod utils;
 
 use std::collections::{BTreeMap, btree_map};
 
