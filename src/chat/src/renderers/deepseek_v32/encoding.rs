@@ -401,7 +401,7 @@ fn render_assistant_message(
 
 /// Render one assistant tool call in DSML XML-like format.
 fn render_tool_call(out: &mut String, tool_call: &AssistantToolCall) -> Result<()> {
-    write!(out, "<{DSML_TOKEN}invoke name=\"{}\">\n", tool_call.name)
+    writeln!(out, "<{DSML_TOKEN}invoke name=\"{}\">", tool_call.name)
         .expect("writing to String cannot fail");
     encode_arguments_to_dsml(out, tool_call)?;
     write!(out, "\n</{DSML_TOKEN}invoke>").expect("writing to String cannot fail");
