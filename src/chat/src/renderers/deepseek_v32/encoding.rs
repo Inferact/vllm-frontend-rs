@@ -1,3 +1,5 @@
+//! DeepSeek V3.2 prompt renderer.
+
 use serde::Serialize;
 use serde_json::Value;
 use serde_json_fmt::JsonFormat;
@@ -12,50 +14,15 @@ const THINKING_START_TOKEN: &str = "<think>";
 const THINKING_END_TOKEN: &str = "</think>";
 const DSML_TOKEN: &str = "｜DSML｜";
 
+/// DeepSeek's renderer uses `"chat"` vs `"thinking"` mode names. Keep the split explicit here so
+/// downstream render branches stay easy to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThinkingMode {
     Chat,
     Thinking,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum EncodedMessage {
-    System {
-        content: String,
-        tools: Vec<EncodedTool>,
-    },
-    Developer {
-        content: String,
-        tools: Vec<EncodedTool>,
-    },
-    User {
-        content: String,
-    },
-    Assistant {
-        reasoning: Option<String>,
-        content: String,
-        tool_calls: Vec<EncodedToolCall>,
-        prefix: bool,
-    },
-    Tool {
-        content: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EncodedTool {
-    name: String,
-    description: Option<String>,
-    parameters: Value,
-    strict: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EncodedToolCall {
-    name: String,
-    arguments: String,
-}
-
+/// Tool schema shape rendered inside the `<functions>` block.
 #[derive(Debug, Serialize)]
 struct RenderedToolSchema<'a> {
     name: &'a str,
@@ -66,27 +33,43 @@ struct RenderedToolSchema<'a> {
     strict: Option<bool>,
 }
 
+/// Render one chat request into the prompt string.
+///
+/// The only extra bookkeeping beyond the typed request itself is:
+/// - whether request-level tools should behave like a synthetic leading system turn
+/// - where the last user/developer turn lands in that synthetic index space
+/// - whether historical assistant reasoning should be dropped because the final request turn is a
+///   new user question
 pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     let thinking_mode = thinking_mode_from_request(request);
     let drop_thinking = matches!(
         request.messages.last().map(ChatMessage::role),
         Some(ChatRole::User)
     );
+    let synthetic_tool_system = request.tool_parsing_enabled();
+    let last_user_idx =
+        find_last_user_virtual_index(request.messages.as_slice(), synthetic_tool_system);
+    let mut prompt = String::from(BOS_TOKEN);
 
-    let mut messages = lower_messages(&request.messages)?;
-    if request.tool_parsing_enabled() {
-        messages.insert(
-            0,
-            EncodedMessage::System {
-                content: String::new(),
-                tools: lower_tools(&request.tools),
-            },
-        );
+    for virtual_index in
+        0..virtual_message_count(request.messages.as_slice(), synthetic_tool_system)
+    {
+        prompt.push_str(&render_message(
+            request,
+            virtual_index,
+            synthetic_tool_system,
+            last_user_idx,
+            thinking_mode,
+            drop_thinking,
+        )?);
     }
 
-    encode_messages(messages, thinking_mode, drop_thinking)
+    Ok(prompt)
 }
 
+/// DeepSeek V3.2 accepts loose truthiness for both `thinking` and
+/// `enable_thinking`, so mirror that contract instead of requiring a strict
+/// boolean.
 fn thinking_mode_from_request(request: &ChatRequest) -> ThinkingMode {
     let kwargs = &request.chat_options.template_kwargs;
     if kwargs.get("thinking").is_some_and(is_truthy)
@@ -114,211 +97,242 @@ fn is_truthy(value: &Value) -> bool {
     }
 }
 
-fn lower_messages(messages: &[ChatMessage]) -> Result<Vec<EncodedMessage>> {
-    messages.iter().map(lower_message).collect()
+/// Return the number of turns visible to the DeepSeek renderer.
+///
+/// When request-level tools are enabled, the renderer treats them as an empty
+/// leading system message carrying those tools. We model that as one extra
+/// "virtual" message slot instead of allocating a new `ChatMessage`.
+fn virtual_message_count(messages: &[ChatMessage], synthetic_tool_system: bool) -> usize {
+    messages.len() + usize::from(synthetic_tool_system)
 }
 
-fn lower_message(message: &ChatMessage) -> Result<EncodedMessage> {
-    Ok(match message {
-        ChatMessage::System { content } => EncodedMessage::System {
-            content: content.try_flatten_to_text()?,
-            tools: Vec::new(),
-        },
-        ChatMessage::Developer { content, tools } => EncodedMessage::Developer {
-            content: content.try_flatten_to_text()?,
-            tools: tools.as_deref().map(lower_tools).unwrap_or_default(),
-        },
-        ChatMessage::User { content } => EncodedMessage::User {
-            content: content.try_flatten_to_text()?,
-        },
-        ChatMessage::Assistant { content } => EncodedMessage::Assistant {
-            reasoning: content.reasoning(),
-            content: content.text(),
-            tool_calls: content.tool_calls().map(lower_tool_call).collect(),
-            prefix: false,
-        },
-        ChatMessage::ToolResponse { content, .. } => EncodedMessage::Tool {
-            content: content.try_flatten_to_text()?,
-        },
-    })
-}
-
-fn lower_tools(tools: &[ChatTool]) -> Vec<EncodedTool> {
-    tools
-        .iter()
-        .map(|tool| EncodedTool {
-            name: tool.name.clone(),
-            description: tool.description.clone(),
-            parameters: tool.parameters.clone(),
-            strict: tool.strict,
-        })
-        .collect()
-}
-
-fn lower_tool_call(tool_call: &AssistantToolCall) -> EncodedToolCall {
-    EncodedToolCall {
-        name: tool_call.name.clone(),
-        arguments: tool_call.arguments.clone(),
-    }
-}
-
-fn encode_messages(
-    messages: Vec<EncodedMessage>,
-    thinking_mode: ThinkingMode,
-    drop_thinking: bool,
-) -> Result<String> {
-    let full_messages = if thinking_mode == ThinkingMode::Thinking && drop_thinking {
-        drop_thinking_messages(&messages)
-    } else {
-        messages
-    };
-
-    let mut prompt = String::from(BOS_TOKEN);
-    for index in 0..full_messages.len() {
-        prompt.push_str(&render_message(index, &full_messages, thinking_mode)?);
-    }
-    Ok(prompt)
-}
-
-fn drop_thinking_messages(messages: &[EncodedMessage]) -> Vec<EncodedMessage> {
-    let last_user_idx = find_last_user_index(messages);
-    let mut stripped = Vec::with_capacity(messages.len());
-
-    for (index, message) in messages.iter().enumerate() {
-        if matches!(
-            message.role(),
-            MessageRole::User | MessageRole::System | MessageRole::Tool
-        ) || index as isize >= last_user_idx
-        {
-            stripped.push(message.clone());
-            continue;
-        }
-
-        if let EncodedMessage::Assistant {
-            content,
-            tool_calls,
-            prefix,
-            ..
-        } = message
-        {
-            stripped.push(EncodedMessage::Assistant {
-                reasoning: None,
-                content: content.clone(),
-                tool_calls: tool_calls.clone(),
-                prefix: *prefix,
-            });
-        }
-    }
-
-    stripped
-}
-
-fn find_last_user_index(messages: &[EncodedMessage]) -> isize {
+/// Find the last user-like turn in the same virtual index space used during
+/// rendering.
+///
+/// With request-level tools enabled:
+/// - virtual index `0` is the synthetic tool-only system turn
+/// - virtual index `1` maps to the real `messages[0]`
+/// - and so on
+///
+/// This offset lets downstream logic talk about one consistent index space when
+/// deciding whether to open `<think>` after the final user/developer turn.
+fn find_last_user_virtual_index(messages: &[ChatMessage], synthetic_tool_system: bool) -> isize {
+    let offset = isize::from(synthetic_tool_system);
     messages
         .iter()
-        .rposition(|message| matches!(message.role(), MessageRole::User | MessageRole::Developer))
-        .map(|index| index as isize)
+        .rposition(|message| matches!(message.role(), ChatRole::User | ChatRole::Developer))
+        .map(|index| index as isize + offset)
         .unwrap_or(-1)
 }
 
+/// Render one visible turn in virtual-index order.
+///
+/// The first virtual slot may be the synthetic request-level-tools system turn;
+/// all later slots map back to a real message in `request.messages`.
 fn render_message(
-    index: usize,
-    messages: &[EncodedMessage],
+    request: &ChatRequest,
+    virtual_index: usize,
+    synthetic_tool_system: bool,
+    last_user_idx: isize,
     thinking_mode: ThinkingMode,
+    drop_thinking: bool,
 ) -> Result<String> {
-    let message = messages.get(index).ok_or_else(|| {
+    if synthetic_tool_system && virtual_index == 0 {
+        return render_system_message("", &request.tools);
+    }
+
+    let actual_index = actual_index(virtual_index, synthetic_tool_system);
+    let message = request.messages.get(actual_index).ok_or_else(|| {
         Error::ChatTemplate(format!(
-            "DeepSeek V3.2 message index {index} out of range for {} messages",
-            messages.len()
+            "DeepSeek V3.2 message index {virtual_index} out of range for {} messages",
+            virtual_message_count(request.messages.as_slice(), synthetic_tool_system)
         ))
     })?;
-    let last_user_idx = find_last_user_index(messages);
 
-    let prompt = match message {
-        EncodedMessage::System { content, tools } => {
-            let mut prompt = content.clone();
-            if !tools.is_empty() {
-                prompt.push_str("\n\n");
-                prompt.push_str(&render_tools(tools)?);
-            }
-            prompt
+    match message {
+        ChatMessage::System { content } => {
+            render_system_message(&content.try_flatten_to_text()?, &[])
         }
-        EncodedMessage::Developer { content, tools } => {
-            if content.is_empty() {
-                return Err(Error::ChatTemplate(
-                    "invalid DeepSeek V3.2 developer message: empty content".to_string(),
-                ));
-            }
-
-            let mut content_developer = String::new();
-            if !tools.is_empty() {
-                content_developer.push_str("\n\n");
-                content_developer.push_str(&render_tools(tools)?);
-            }
-            content_developer.push_str("\n\n# The user's message is: ");
-            content_developer.push_str(content);
-
-            let mut prompt = format!("<｜User｜>{content_developer}<｜Assistant｜>");
-            if index as isize == last_user_idx && thinking_mode == ThinkingMode::Thinking {
-                prompt.push_str(THINKING_START_TOKEN);
-            } else {
-                prompt.push_str(THINKING_END_TOKEN);
-            }
-            prompt
-        }
-        EncodedMessage::User { content } => {
-            let mut prompt = format!("<｜User｜>{content}<｜Assistant｜>");
-            if index as isize == last_user_idx && thinking_mode == ThinkingMode::Thinking {
-                prompt.push_str(THINKING_START_TOKEN);
-            } else {
-                prompt.push_str(THINKING_END_TOKEN);
-            }
-            prompt
-        }
-        EncodedMessage::Tool { content } => {
-            render_tool_message(index, messages, last_user_idx, thinking_mode, content)?
-        }
-        EncodedMessage::Assistant {
-            reasoning,
-            content,
-            tool_calls,
-            prefix,
-        } => render_assistant_message(
-            index,
+        ChatMessage::Developer { content, tools } => render_developer_message(
+            &content.try_flatten_to_text()?,
+            tools.as_deref().unwrap_or(&[]),
+            virtual_index as isize,
             last_user_idx,
             thinking_mode,
-            reasoning.as_deref(),
-            content,
-            tool_calls,
-            *prefix,
-        )?,
-    };
+        ),
+        ChatMessage::User { content } => render_user_message(
+            &content.try_flatten_to_text()?,
+            virtual_index as isize,
+            last_user_idx,
+            thinking_mode,
+        ),
+        ChatMessage::Assistant { content } => {
+            let reasoning = assistant_reasoning(
+                content,
+                actual_index,
+                request.messages.as_slice(),
+                thinking_mode,
+                drop_thinking,
+            );
+            let tool_calls = content.tool_calls().collect::<Vec<_>>();
+            render_assistant_message(
+                virtual_index as isize,
+                last_user_idx,
+                thinking_mode,
+                reasoning.as_deref(),
+                &content.text(),
+                &tool_calls,
+                false,
+            )
+        }
+        ChatMessage::ToolResponse { content, .. } => render_tool_message(
+            request.messages.as_slice(),
+            actual_index,
+            virtual_index as isize,
+            last_user_idx,
+            thinking_mode,
+            &content.try_flatten_to_text()?,
+        ),
+    }
+}
 
+/// Convert a render-time virtual index back to the underlying `request.messages`
+/// index. This is only valid for non-synthetic turns.
+fn actual_index(virtual_index: usize, synthetic_tool_system: bool) -> usize {
+    virtual_index - usize::from(synthetic_tool_system)
+}
+
+/// Historical assistant reasoning is dropped in DeepSeek thinking mode when the
+/// final request turn is a new user message. Keep that policy local to
+/// assistant rendering instead of cloning a second stripped message list.
+fn assistant_reasoning(
+    content: &[crate::AssistantContentBlock],
+    actual_index: usize,
+    messages: &[ChatMessage],
+    thinking_mode: ThinkingMode,
+    drop_thinking: bool,
+) -> Option<String> {
+    if thinking_mode == ThinkingMode::Thinking
+        && drop_thinking
+        && actual_index < find_last_user_actual_index(messages)
+    {
+        None
+    } else {
+        content.reasoning()
+    }
+}
+
+/// Return the last user/developer turn in the real request message list.
+fn find_last_user_actual_index(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .rposition(|message| matches!(message.role(), ChatRole::User | ChatRole::Developer))
+        .unwrap_or(usize::MAX)
+}
+
+/// Render a system turn, optionally followed by the DeepSeek tool preamble.
+fn render_system_message(content: &str, tools: &[ChatTool]) -> Result<String> {
+    let mut prompt = content.to_string();
+    if !tools.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&render_tools(tools)?);
+    }
     Ok(prompt)
 }
 
+/// Developer messages follow DeepSeek's native "wrap as user turn" behavior and
+/// may carry message-local tools that are distinct from request-level tools.
+fn render_developer_message(
+    content: &str,
+    tools: &[ChatTool],
+    virtual_index: isize,
+    last_user_idx: isize,
+    thinking_mode: ThinkingMode,
+) -> Result<String> {
+    if content.is_empty() {
+        return Err(Error::ChatTemplate(
+            "invalid DeepSeek V3.2 developer message: empty content".to_string(),
+        ));
+    }
+
+    let mut content_developer = String::new();
+    if !tools.is_empty() {
+        content_developer.push_str("\n\n");
+        content_developer.push_str(&render_tools(tools)?);
+    }
+    content_developer.push_str("\n\n# The user's message is: ");
+    content_developer.push_str(content);
+
+    Ok(render_user_like_message(
+        &content_developer,
+        virtual_index,
+        last_user_idx,
+        thinking_mode,
+    ))
+}
+
+/// Plain user turns share the same wrapper shape as developer turns minus the
+/// extra developer preamble.
+fn render_user_message(
+    content: &str,
+    virtual_index: isize,
+    last_user_idx: isize,
+    thinking_mode: ThinkingMode,
+) -> Result<String> {
+    Ok(render_user_like_message(
+        content,
+        virtual_index,
+        last_user_idx,
+        thinking_mode,
+    ))
+}
+
+/// Shared helper for the `<｜User｜>...<｜Assistant｜>` wrapper used by both
+/// real user turns and native developer turns.
+fn render_user_like_message(
+    content: &str,
+    virtual_index: isize,
+    last_user_idx: isize,
+    thinking_mode: ThinkingMode,
+) -> String {
+    let mut prompt = format!("<｜User｜>{content}<｜Assistant｜>");
+    if virtual_index == last_user_idx && thinking_mode == ThinkingMode::Thinking {
+        prompt.push_str(THINKING_START_TOKEN);
+    } else {
+        prompt.push_str(THINKING_END_TOKEN);
+    }
+    prompt
+}
+
+/// Render one tool result turn and decide whether it opens or closes the shared
+/// `<function_results>` block for the preceding assistant tool-call message.
 fn render_tool_message(
-    index: usize,
-    messages: &[EncodedMessage],
+    messages: &[ChatMessage],
+    actual_index: usize,
+    virtual_index: isize,
     last_user_idx: isize,
     thinking_mode: ThinkingMode,
     content: &str,
 ) -> Result<String> {
-    let Some(prev_assistant_idx) = previous_non_tool_index(index, messages) else {
+    let Some(prev_assistant_idx) = previous_non_tool_actual_index(messages, actual_index) else {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: missing previous assistant message".to_string(),
         ));
     };
 
-    let EncodedMessage::Assistant { tool_calls, .. } = &messages[prev_assistant_idx] else {
+    let ChatMessage::Assistant {
+        content: assistant_content,
+    } = &messages[prev_assistant_idx]
+    else {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: previous non-tool message is not assistant"
                 .to_string(),
         ));
     };
 
-    let tool_call_order = index - prev_assistant_idx;
-    if tool_calls.len() < tool_call_order {
+    let tool_call_count = assistant_content.tool_calls().count();
+    let tool_call_order = actual_index - prev_assistant_idx;
+    if tool_call_count < tool_call_order {
         return Err(Error::ChatTemplate(
             "invalid DeepSeek V3.2 tool message: no matching assistant tool call".to_string(),
         ));
@@ -333,13 +347,12 @@ fn render_tool_message(
     prompt.push_str(content);
     prompt.push_str("</result>");
 
-    if tool_call_order == tool_calls.len() {
+    if tool_call_order == tool_call_count {
         prompt.push_str("\n</function_results>");
-        if index as isize >= last_user_idx && thinking_mode == ThinkingMode::Thinking {
-            prompt.push_str("\n\n");
+        prompt.push_str("\n\n");
+        if virtual_index >= last_user_idx && thinking_mode == ThinkingMode::Thinking {
             prompt.push_str(THINKING_START_TOKEN);
         } else {
-            prompt.push_str("\n\n");
             prompt.push_str(THINKING_END_TOKEN);
         }
     }
@@ -347,28 +360,33 @@ fn render_tool_message(
     Ok(prompt)
 }
 
-fn previous_non_tool_index(index: usize, messages: &[EncodedMessage]) -> Option<usize> {
-    let mut current = index.checked_sub(1)?;
-    while matches!(messages[current], EncodedMessage::Tool { .. }) {
+/// Walk backwards from a tool result to the assistant turn that emitted the
+/// corresponding tool calls, skipping any earlier sibling tool results in the
+/// same batch.
+fn previous_non_tool_actual_index(messages: &[ChatMessage], actual_index: usize) -> Option<usize> {
+    let mut current = actual_index.checked_sub(1)?;
+    while matches!(messages[current], ChatMessage::ToolResponse { .. }) {
         current = current.checked_sub(1)?;
     }
     Some(current)
 }
 
+/// Render one assistant turn, including optional reasoning, DSML tool calls,
+/// and the trailing DeepSeek EOS marker.
 fn render_assistant_message(
-    index: usize,
+    virtual_index: isize,
     last_user_idx: isize,
     thinking_mode: ThinkingMode,
     reasoning: Option<&str>,
     content: &str,
-    tool_calls: &[EncodedToolCall],
+    tool_calls: &[&AssistantToolCall],
     prefix: bool,
 ) -> Result<String> {
     let mut tool_calls_content = String::new();
     if !tool_calls.is_empty() {
         let rendered_calls = tool_calls
             .iter()
-            .map(render_tool_call)
+            .map(|tool_call| render_tool_call(tool_call))
             .collect::<Result<Vec<_>>>()?;
         tool_calls_content.push_str("\n\n<｜DSML｜function_calls>\n");
         tool_calls_content.push_str(&rendered_calls.join("\n"));
@@ -376,7 +394,7 @@ fn render_assistant_message(
     }
 
     let mut thinking_part = String::new();
-    if thinking_mode == ThinkingMode::Thinking && index as isize > last_user_idx {
+    if thinking_mode == ThinkingMode::Thinking && virtual_index > last_user_idx {
         if reasoning.is_none() && tool_calls.is_empty() {
             return Err(Error::ChatTemplate(
                 "invalid DeepSeek V3.2 assistant message after last user message: expected reasoning or tool calls"
@@ -397,7 +415,8 @@ fn render_assistant_message(
     ))
 }
 
-fn render_tool_call(tool_call: &EncodedToolCall) -> Result<String> {
+/// Render one assistant tool call in DeepSeek's DSML XML-like format.
+fn render_tool_call(tool_call: &AssistantToolCall) -> Result<String> {
     Ok(format!(
         "<{DSML_TOKEN}invoke name=\"{}\">\n{}\n</{DSML_TOKEN}invoke>",
         tool_call.name,
@@ -405,7 +424,12 @@ fn render_tool_call(tool_call: &EncodedToolCall) -> Result<String> {
     ))
 }
 
-fn encode_arguments_to_dsml(tool_call: &EncodedToolCall) -> Result<String> {
+/// Convert one assistant tool-call arguments object into DeepSeek's DSML
+/// parameter form.
+///
+/// String values are emitted raw with `string="true"`, while all other JSON
+/// values are rendered with JSON syntax and `string="false"`.
+fn encode_arguments_to_dsml(tool_call: &AssistantToolCall) -> Result<String> {
     let arguments: Value = serde_json::from_str(&tool_call.arguments).map_err(|error| {
         Error::ChatTemplate(format!(
             "assistant tool call has invalid JSON arguments for DeepSeek V3.2: {error}"
@@ -436,7 +460,8 @@ fn encode_arguments_to_dsml(tool_call: &EncodedToolCall) -> Result<String> {
     Ok(rendered.join("\n"))
 }
 
-fn render_tools(tools: &[EncodedTool]) -> Result<String> {
+/// Render the full DeepSeek tool preamble shown to the model.
+fn render_tools(tools: &[ChatTool]) -> Result<String> {
     let tool_schemas = tools
         .iter()
         .map(render_tool_schema)
@@ -480,7 +505,9 @@ Here are the functions available in JSONSchema format:
     ))
 }
 
-fn render_tool_schema(tool: &EncodedTool) -> Result<String> {
+/// Serialize one typed tool schema into the JSON shape embedded inside
+/// `<functions>`.
+fn render_tool_schema(tool: &ChatTool) -> Result<String> {
     json_dumps(&RenderedToolSchema {
         name: &tool.name,
         description: tool.description.as_deref(),
@@ -489,6 +516,7 @@ fn render_tool_schema(tool: &EncodedTool) -> Result<String> {
     })
 }
 
+/// Python-compatible compact JSON serialization used by the upstream encoder.
 fn json_dumps<T: Serialize>(value: &T) -> Result<String> {
     JsonFormat::new()
         .comma(", ")
@@ -502,25 +530,4 @@ fn json_dumps<T: Serialize>(value: &T) -> Result<String> {
                 "failed to serialize DeepSeek V3.2 JSON payload: {error}"
             ))
         })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MessageRole {
-    System,
-    Developer,
-    User,
-    Assistant,
-    Tool,
-}
-
-impl EncodedMessage {
-    fn role(&self) -> MessageRole {
-        match self {
-            Self::System { .. } => MessageRole::System,
-            Self::Developer { .. } => MessageRole::Developer,
-            Self::User { .. } => MessageRole::User,
-            Self::Assistant { .. } => MessageRole::Assistant,
-            Self::Tool { .. } => MessageRole::Tool,
-        }
-    }
 }
