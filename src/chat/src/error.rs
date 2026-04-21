@@ -7,9 +7,11 @@ pub enum Error {
     #[error("chat request must contain at least one message")]
     EmptyMessages,
     #[error(
-        "cannot enable both `add_generation_prompt` and `continue_final_message` at the same time"
+        "cannot start a new assistant turn when the last message is from the assistant; use `ContinueFinalAssistant` instead"
     )]
-    ConflictingGenerationPromptMode,
+    StartNewAssistantOnFinalAssistant,
+    #[error("cannot continue the final message when the last message is not from the assistant")]
+    ContinueFinalAssistantWithoutFinalAssistant,
     #[error("chat template is required but none was configured")]
     MissingChatTemplate,
     #[error("chat template error: {0}")]

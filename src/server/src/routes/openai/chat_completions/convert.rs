@@ -1,7 +1,7 @@
 use vllm_chat::{
     AssistantContentBlock, AssistantToolCall, ChatContent, ChatContentPart,
     ChatMessage as VllmChatMessage, ChatOptions, ChatRequest, ChatTool, ChatToolChoice,
-    SamplingParams,
+    GenerationPromptMode, SamplingParams,
 };
 
 use super::types::ChatCompletionRequest;
@@ -53,7 +53,12 @@ pub(crate) fn prepare_chat_request(
         .messages
         .into_iter()
         .map(convert_message)
-        .try_collect()?;
+        .try_collect::<Vec<_>>()?;
+    let generation_prompt_mode = normalize_generation_prompt_mode(
+        request.add_generation_prompt,
+        request.continue_final_message,
+        &messages,
+    )?;
 
     let template_kwargs = request.chat_template_kwargs.unwrap_or_default();
 
@@ -102,8 +107,7 @@ pub(crate) fn prepare_chat_request(
             ),
         },
         chat_options: ChatOptions {
-            add_generation_prompt: request.add_generation_prompt && !request.continue_final_message,
-            continue_final_message: request.continue_final_message,
+            generation_prompt_mode,
             chat_template: request.chat_template,
             template_kwargs,
         },
@@ -134,6 +138,38 @@ pub(crate) fn prepare_chat_request(
         return_token_ids: request.return_token_ids.unwrap_or(false),
         return_tokens_as_token_ids: request.return_tokens_as_token_ids.unwrap_or(false),
     })
+}
+
+fn normalize_generation_prompt_mode(
+    add_generation_prompt: bool,
+    continue_final_message: bool,
+    messages: &[VllmChatMessage],
+) -> Result<GenerationPromptMode, ApiError> {
+    if add_generation_prompt && continue_final_message {
+        bail_invalid_request!(
+            "Cannot set both `continue_final_message` and `add_generation_prompt` to True."
+        );
+    }
+
+    let last_role = messages.last().map(VllmChatMessage::role);
+    match (add_generation_prompt, continue_final_message, last_role) {
+        (true, true, _) => unreachable!("conflicting generation prompt flags are rejected above"),
+        (true, false, Some(vllm_chat::ChatRole::Assistant)) => {
+            bail_invalid_request!(
+                "Cannot set `add_generation_prompt` to True when the last message is from the assistant. Consider using `continue_final_message` instead."
+            );
+        }
+        (false, true, Some(vllm_chat::ChatRole::Assistant)) => {
+            Ok(GenerationPromptMode::ContinueFinalAssistant)
+        }
+        (false, true, _) => {
+            bail_invalid_request!(
+                "Cannot set `continue_final_message` to True when the last message is not from the assistant."
+            );
+        }
+        (true, false, _) => Ok(GenerationPromptMode::StartNewAssistant),
+        (false, false, _) => Ok(GenerationPromptMode::NoGenerationPrompt),
+    }
 }
 
 /// Extract the text content of the last message if it has the assistant role.
@@ -302,8 +338,8 @@ mod tests {
     use axum::http::HeaderMap;
     use serde_json::json;
     use vllm_chat::{
-        AssistantContentBlock, AssistantToolCall, ChatContentPart as VllmChatContentPart,
-        ChatMessage as VllmChatMessage, ChatTool as VllmChatTool, ChatToolChoice,
+        AssistantContentBlock, AssistantToolCall, ChatMessage as VllmChatMessage,
+        ChatTool as VllmChatTool, ChatToolChoice, GenerationPromptMode,
         SamplingParams as VllmSamplingParams,
     };
     use vllm_text::output::TextDecodeOptions;
@@ -335,11 +371,13 @@ mod tests {
     #[test]
     fn prepare_chat_request_maps_text_parts() {
         let mut request = base_request();
-        request.messages = vec![ChatMessage::User {
-            content: MessageContent::Parts(vec![ContentPart::Text {
+        request.messages = vec![ChatMessage::Assistant {
+            content: Some(MessageContent::Parts(vec![ContentPart::Text {
                 text: "hello".to_string(),
-            }]),
+            }])),
             name: None,
+            tool_calls: None,
+            reasoning_content: None,
         }];
         request.add_generation_prompt = false;
         request.continue_final_message = true;
@@ -356,16 +394,16 @@ mod tests {
         assert!(prepared.request_id.starts_with("chatcmpl-"));
         assert_eq!(
             prepared.chat_request.messages,
-            vec![VllmChatMessage::user(vec![VllmChatContentPart::text(
-                "hello"
-            )])]
+            vec![VllmChatMessage::assistant_text("hello")]
         );
         assert_eq!(
             prepared.chat_request.sampling_params,
             VllmSamplingParams::default()
         );
-        assert!(!prepared.chat_request.chat_options.add_generation_prompt);
-        assert!(prepared.chat_request.chat_options.continue_final_message);
+        assert_eq!(
+            prepared.chat_request.chat_options.generation_prompt_mode,
+            GenerationPromptMode::ContinueFinalAssistant
+        );
         assert_eq!(
             prepared.chat_request.chat_options.template_kwargs,
             HashMap::from([("foo".to_string(), json!("bar"))])
@@ -401,8 +439,10 @@ mod tests {
             prepared.chat_request.sampling_params,
             VllmSamplingParams::default()
         );
-        assert!(prepared.chat_request.chat_options.add_generation_prompt);
-        assert!(!prepared.chat_request.chat_options.continue_final_message);
+        assert_eq!(
+            prepared.chat_request.chat_options.generation_prompt_mode,
+            GenerationPromptMode::StartNewAssistant
+        );
         assert_eq!(
             prepared.chat_request.decode_options,
             TextDecodeOptions {
@@ -550,6 +590,7 @@ mod tests {
                 tool_calls: None,
                 reasoning_content: Some("inner".to_string()),
             }],
+            add_generation_prompt: false,
             ..base_request()
         };
 
