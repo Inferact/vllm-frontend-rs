@@ -124,7 +124,7 @@ mod tests {
     use vllm_text::tokenizers::Tokenizer;
 
     use super::Gemma4ReasoningParser;
-    use crate::reasoning::ReasoningParser;
+    use crate::parser::reasoning::ReasoningParser;
     use crate::request::ChatRequest;
 
     struct FakeTokenizer;

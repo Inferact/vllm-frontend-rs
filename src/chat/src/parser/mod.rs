@@ -1,3 +1,6 @@
+pub mod reasoning;
+pub mod tool;
+
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;

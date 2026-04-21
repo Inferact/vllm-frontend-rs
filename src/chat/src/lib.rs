@@ -20,7 +20,10 @@ pub use event::{
 };
 use futures::{StreamExt, TryStreamExt as _};
 pub use parser::ParserSelection;
-pub use reasoning::{ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory};
+pub use parser::reasoning::{
+    ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,
+};
+pub use parser::tool::{ToolParser, ToolParserError, ToolParserFactory};
 pub use renderers::hf::ChatTemplateContentFormatOption;
 pub use renderers::{
     ChatRenderer, DeepSeekV32ChatRenderer, DynChatRenderer, RenderedPrompt, RendererSelection,
@@ -30,7 +33,6 @@ pub use request::{
     ChatToolChoice, GenerationPromptMode, SamplingParams,
 };
 pub use stream::{ChatEventStream, ChatEventStreamTrait, CollectedAssistantMessage};
-pub use tool::{ToolParser, ToolParserError, ToolParserFactory};
 use tracing::info;
 pub use vllm_llm::FinishReason;
 
@@ -40,11 +42,9 @@ mod error;
 mod event;
 mod output;
 mod parser;
-mod reasoning;
 mod renderers;
 mod request;
 mod stream;
-mod tool;
 
 use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;
@@ -269,7 +269,7 @@ mod tests {
     use thiserror_ext::AsReport;
 
     use super::{ParserSelection, validate_parser_overrides};
-    use crate::reasoning::names;
+    use crate::parser::reasoning::names;
 
     #[test]
     fn validate_parser_overrides_accepts_registered_names() {

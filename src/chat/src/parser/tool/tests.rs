@@ -1,7 +1,6 @@
-use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserFactory};
+use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserFactory, names};
 use crate::Error;
 use crate::request::{ChatRequest, ChatTool};
-use crate::tool::names;
 
 struct FakeToolParser;
 

@@ -352,9 +352,9 @@ mod tests {
         )
     }
 
-    fn collect_stream(chunks: &[&str], tools: &[ChatTool]) -> crate::tool::ToolParseResult {
+    fn collect_stream(chunks: &[&str], tools: &[ChatTool]) -> crate::parser::tool::ToolParseResult {
         let mut parser = DeepSeekV32ToolParser::new(tools);
-        let mut result = crate::tool::ToolParseResult::default();
+        let mut result = crate::parser::tool::ToolParseResult::default();
         for chunk in chunks {
             result.append(parser.push(chunk).unwrap());
         }

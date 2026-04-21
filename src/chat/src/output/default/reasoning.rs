@@ -15,7 +15,7 @@ use super::ContentEvent;
 use crate::error::Error;
 use crate::event::AssistantBlockKind;
 use crate::output::DecodedTextEventStream;
-use crate::reasoning::{ReasoningDelta, ReasoningParser};
+use crate::parser::reasoning::{ReasoningDelta, ReasoningParser};
 
 /// Per-stream reasoning parsing state.
 struct ReasoningState {
@@ -199,7 +199,7 @@ mod tests {
     use super::super::ContentEvent;
     use super::reasoning_event_stream;
     use crate::event::AssistantBlockKind;
-    use crate::reasoning::{
+    use crate::parser::reasoning::{
         ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory, names,
     };
 

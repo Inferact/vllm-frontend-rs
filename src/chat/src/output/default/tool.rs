@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::{AssistantEvent, ContentEvent, ContentEventStream};
 use crate::error::Error;
 use crate::event::{AssistantBlockKind, AssistantToolCall};
-use crate::tool::{ToolCallDelta, ToolParseResult, ToolParser};
+use crate::parser::tool::{ToolCallDelta, ToolParseResult, ToolParser};
 
 /// One currently open tool call being assembled from streaming parser output.
 struct OpenToolCallState {
@@ -403,16 +403,16 @@ mod tests {
     use super::super::{AssistantEvent, ContentEvent};
     use super::tool_event_stream;
     use crate::event::{AssistantBlockKind, AssistantMessageExt as _};
+    use crate::parser::tool::{Result, ToolParseResult, ToolParser};
     use crate::request::ChatTool;
     use crate::stream::ChatEventStream;
-    use crate::tool::{Result, ToolParseResult, ToolParser};
 
     struct FailingParser {
         fail_next: bool,
     }
 
     impl ToolParser for FailingParser {
-        fn create(_tools: &[ChatTool]) -> crate::tool::Result<Box<dyn ToolParser>>
+        fn create(_tools: &[ChatTool]) -> crate::parser::tool::Result<Box<dyn ToolParser>>
         where
             Self: Sized + 'static,
         {
