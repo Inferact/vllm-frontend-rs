@@ -194,7 +194,7 @@ fn to_chat_tools(tools: &[FixtureTool]) -> Vec<ChatTool> {
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/renderers/deepseek_v32")
+        .join("src/renderer/deepseek_v32")
         .join("fixtures")
         .join(name)
 }
