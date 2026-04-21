@@ -1,7 +1,9 @@
 mod default;
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+pub use default::DefaultChatOutputProcessor;
 use futures::Stream;
 use subenum::subenum;
 use vllm_text::output::{DecodedLogprobs, DecodedPromptLogprobs, DecodedTextEvent};
@@ -99,7 +101,16 @@ impl ContentEvent {
     }
 }
 
+/// Boxed stream of decoded text events coming from [`vllm_text`].
+pub type DynDecodedTextEventStream = Pin<Box<dyn Stream<Item = Result<DecodedTextEvent>> + Send>>;
+/// Boxed stream of structured chat events exposed by [`crate::ChatLlm`].
+pub type DynChatEventStream = Pin<Box<dyn Stream<Item = Result<ChatEvent>> + Send>>;
+
+/// Request-scoped output processor from decoded text events into structured chat events.
+pub trait ChatOutputProcessor: Send {
+    /// Consume decoded text stream and return the structured chat-event stream.
+    fn process(self: Box<Self>, decoded: DynDecodedTextEventStream) -> Result<DynChatEventStream>;
+}
+
 pub(crate) trait DecodedTextEventStream = Stream<Item = Result<DecodedTextEvent>> + Send + 'static;
 pub(crate) trait ChatEventStream = Stream<Item = Result<ChatEvent>> + Send + 'static;
-
-pub(crate) use default::{OutputProcessors, output_stream};
