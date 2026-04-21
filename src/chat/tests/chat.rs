@@ -678,18 +678,6 @@ fn chat_request_rejects_conflicting_generation_modes() {
 }
 
 #[test]
-fn chat_request_rejects_start_new_assistant_after_final_assistant() {
-    let mut request = sample_request("chat-2a");
-    request.messages = vec![ChatMessage::assistant_text("hello")];
-    let error = request.validate().unwrap_err();
-
-    assert!(matches!(
-        error,
-        vllm_chat::Error::StartNewAssistantOnFinalAssistant
-    ));
-}
-
-#[test]
 fn chat_request_accepts_continue_final_assistant_mode_with_final_assistant() {
     let mut request = sample_request("chat-2b");
     request.messages = vec![ChatMessage::assistant_text("hello")];

@@ -141,11 +141,11 @@ pub(crate) fn prepare_chat_request(
 }
 
 fn normalize_generation_prompt_mode(
-    add_generation_prompt: bool,
+    add_generation_prompt: Option<bool>,
     continue_final_message: bool,
     messages: &[VllmChatMessage],
 ) -> Result<GenerationPromptMode, ApiError> {
-    if add_generation_prompt && continue_final_message {
+    if add_generation_prompt == Some(true) && continue_final_message {
         bail_invalid_request!(
             "Cannot set both `continue_final_message` and `add_generation_prompt` to True."
         );
@@ -153,22 +153,17 @@ fn normalize_generation_prompt_mode(
 
     let last_role = messages.last().map(VllmChatMessage::role);
     match (add_generation_prompt, continue_final_message, last_role) {
-        (true, true, _) => unreachable!("conflicting generation prompt flags are rejected above"),
-        (true, false, Some(vllm_chat::ChatRole::Assistant)) => {
-            bail_invalid_request!(
-                "Cannot set `add_generation_prompt` to True when the last message is from the assistant. Consider using `continue_final_message` instead."
-            );
-        }
-        (false, true, Some(vllm_chat::ChatRole::Assistant)) => {
+        (Some(true), true, _) => unreachable!("rejected above"),
+        (_, true, Some(vllm_chat::ChatRole::Assistant)) => {
             Ok(GenerationPromptMode::ContinueFinalAssistant)
         }
-        (false, true, _) => {
+        (_, true, _) => {
             bail_invalid_request!(
                 "Cannot set `continue_final_message` to True when the last message is not from the assistant."
             );
         }
-        (true, false, _) => Ok(GenerationPromptMode::StartNewAssistant),
-        (false, false, _) => Ok(GenerationPromptMode::NoGenerationPrompt),
+        (Some(false), false, _) => Ok(GenerationPromptMode::NoGenerationPrompt),
+        (None | Some(true), false, _) => Ok(GenerationPromptMode::StartNewAssistant),
     }
 }
 
@@ -336,6 +331,7 @@ mod tests {
     use std::collections::HashMap;
 
     use axum::http::HeaderMap;
+    use expect_test::expect;
     use serde_json::json;
     use vllm_chat::{
         AssistantContentBlock, AssistantToolCall, ChatMessage as VllmChatMessage,
@@ -379,7 +375,7 @@ mod tests {
             tool_calls: None,
             reasoning_content: None,
         }];
-        request.add_generation_prompt = false;
+        request.add_generation_prompt = Some(false);
         request.continue_final_message = true;
         request.skip_special_tokens = false;
         request.chat_template_kwargs = Some(HashMap::from([("foo".to_string(), json!("bar"))]));
@@ -590,7 +586,7 @@ mod tests {
                 tool_calls: None,
                 reasoning_content: Some("inner".to_string()),
             }],
-            add_generation_prompt: false,
+            add_generation_prompt: Some(false),
             ..base_request()
         };
 
@@ -755,5 +751,105 @@ mod tests {
         )
         .expect("request is valid");
         assert_eq!(prepared.chat_request.data_parallel_rank, None);
+    }
+
+    #[test]
+    fn prepare_chat_request_maps_no_generation_prompt_mode() {
+        let mut request = base_request();
+        request.add_generation_prompt = Some(false);
+
+        let prepared = prepare_chat_request(
+            request,
+            "Qwen/Qwen1.5-0.5B-Chat",
+            ResolvedRequestContext::default(),
+        )
+        .expect("request is valid");
+
+        assert_eq!(
+            prepared.chat_request.chat_options.generation_prompt_mode,
+            GenerationPromptMode::NoGenerationPrompt
+        );
+    }
+
+    #[test]
+    fn prepare_chat_request_rejects_conflicting_explicit_generation_prompt_flags() {
+        let mut request = base_request();
+        request.add_generation_prompt = Some(true);
+        request.continue_final_message = true;
+
+        let error = prepare_chat_request(
+            request,
+            "Qwen/Qwen1.5-0.5B-Chat",
+            ResolvedRequestContext::default(),
+        )
+        .unwrap_err();
+
+        expect!["Cannot set both `continue_final_message` and `add_generation_prompt` to True."]
+            .assert_eq(&error.to_error_response().error.message);
+    }
+
+    #[test]
+    fn prepare_chat_request_accepts_continue_final_message_with_implicit_add_generation_prompt() {
+        let mut request = base_request();
+        request.messages = vec![ChatMessage::Assistant {
+            content: Some(MessageContent::Text("hello".to_string())),
+            name: None,
+            tool_calls: None,
+            reasoning_content: None,
+        }];
+        request.continue_final_message = true;
+
+        let prepared = prepare_chat_request(
+            request,
+            "Qwen/Qwen1.5-0.5B-Chat",
+            ResolvedRequestContext::default(),
+        )
+        .expect("request is valid");
+
+        assert_eq!(
+            prepared.chat_request.chat_options.generation_prompt_mode,
+            GenerationPromptMode::ContinueFinalAssistant
+        );
+    }
+
+    #[test]
+    fn prepare_chat_request_rejects_continue_final_message_without_final_assistant() {
+        let mut request = base_request();
+        request.continue_final_message = true;
+
+        let error = prepare_chat_request(
+            request,
+            "Qwen/Qwen1.5-0.5B-Chat",
+            ResolvedRequestContext::default(),
+        )
+        .unwrap_err();
+
+        expect!["Cannot set `continue_final_message` to True when the last message is not from the assistant."]
+            .assert_eq(&error.to_error_response().error.message);
+    }
+
+    #[test]
+    fn prepare_chat_request_allows_new_assistant_mode_after_final_assistant() {
+        let request = ChatCompletionRequest {
+            messages: vec![ChatMessage::Assistant {
+                content: Some(MessageContent::Text("hello".to_string())),
+                name: None,
+                tool_calls: None,
+                reasoning_content: None,
+            }],
+            ..base_request()
+        };
+
+        let prepared = prepare_chat_request(
+            request,
+            "Qwen/Qwen1.5-0.5B-Chat",
+            ResolvedRequestContext::default(),
+        )
+        .expect("request is valid");
+
+        assert_eq!(
+            prepared.chat_request.chat_options.generation_prompt_mode,
+            GenerationPromptMode::StartNewAssistant
+        );
     }
 }

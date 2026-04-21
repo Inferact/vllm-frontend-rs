@@ -6,10 +6,6 @@ type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 pub enum Error {
     #[error("chat request must contain at least one message")]
     EmptyMessages,
-    #[error(
-        "cannot start a new assistant turn when the last message is from the assistant; use `ContinueFinalAssistant` instead"
-    )]
-    StartNewAssistantOnFinalAssistant,
     #[error("cannot continue the final message when the last message is not from the assistant")]
     ContinueFinalAssistantWithoutFinalAssistant,
     #[error("chat template is required but none was configured")]

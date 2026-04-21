@@ -381,9 +381,6 @@ impl ChatRequest {
             self.chat_options.generation_prompt_mode,
             self.messages.last().map(ChatMessage::role),
         ) {
-            (GenerationPromptMode::StartNewAssistant, Some(ChatRole::Assistant)) => {
-                return Err(Error::StartNewAssistantOnFinalAssistant);
-            }
             (GenerationPromptMode::ContinueFinalAssistant, Some(ChatRole::Assistant)) => {}
             (GenerationPromptMode::ContinueFinalAssistant, _) => {
                 return Err(Error::ContinueFinalAssistantWithoutFinalAssistant);
