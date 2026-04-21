@@ -112,5 +112,8 @@ pub trait ChatOutputProcessor: Send {
     fn process(self: Box<Self>, decoded: DynDecodedTextEventStream) -> Result<DynChatEventStream>;
 }
 
+/// Trait-object form of [`ChatOutputProcessor`].
+pub type DynChatOutputProcessor = Box<dyn ChatOutputProcessor>;
+
 pub(crate) trait DecodedTextEventStream = Stream<Item = Result<DecodedTextEvent>> + Send + 'static;
 pub(crate) trait ChatEventStream = Stream<Item = Result<ChatEvent>> + Send + 'static;

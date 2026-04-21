@@ -4,7 +4,6 @@ use tracing::info;
 use vllm_text::DynTextBackend;
 use vllm_text::backend::hf::{HfTextBackend, ResolvedModelFiles, load_model_config};
 
-use crate::RendererSelection;
 use crate::backend::{
     ChatBackend, DynChatBackend, LoadModelBackendsOptions, LoadedModelBackends,
     NewChatOutputProcessorOptions,
@@ -14,6 +13,7 @@ use crate::output::DefaultChatOutputProcessor;
 use crate::renderer::hf::HfChatRenderer;
 use crate::renderer::{DeepSeekV32ChatRenderer, DynChatRenderer};
 use crate::request::ChatRequest;
+use crate::{DynChatOutputProcessor, RendererSelection};
 
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
@@ -67,7 +67,7 @@ impl ChatBackend for HfChatBackend {
         &self,
         request: &mut ChatRequest,
         options: NewChatOutputProcessorOptions<'_>,
-    ) -> Result<Box<dyn crate::output::ChatOutputProcessor>> {
+    ) -> Result<DynChatOutputProcessor> {
         Ok(Box::new(DefaultChatOutputProcessor::new(
             request,
             &self.model_id,

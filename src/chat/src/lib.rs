@@ -20,7 +20,7 @@ pub use event::{
     AssistantToolCall, ChatEvent,
 };
 use futures::{StreamExt, TryStreamExt as _};
-pub use output::{ChatOutputProcessor, DefaultChatOutputProcessor};
+pub use output::{ChatOutputProcessor, DefaultChatOutputProcessor, DynChatOutputProcessor};
 pub use parser::ParserSelection;
 pub use parser::reasoning::{
     ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,

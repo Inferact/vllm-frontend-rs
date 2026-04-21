@@ -7,8 +7,8 @@ use futures::StreamExt as _;
 use tokio::time::timeout;
 use vllm_chat::{
     AssistantBlockKind, AssistantContentBlock, AssistantMessageExt as _, ChatBackend, ChatEvent,
-    ChatLlm, ChatMessage, ChatOutputProcessor, ChatRenderer, ChatRequest, ChatRole,
-    ChatTextBackend, ChatTool, ChatToolChoice, DefaultChatOutputProcessor, DynChatRenderer,
+    ChatLlm, ChatMessage, ChatRenderer, ChatRequest, ChatRole, ChatTextBackend, ChatTool,
+    ChatToolChoice, DefaultChatOutputProcessor, DynChatOutputProcessor, DynChatRenderer,
     FinishReason, GenerationPromptMode, NewChatOutputProcessorOptions, ParserSelection,
     RenderedPrompt, SamplingParams,
 };
@@ -244,7 +244,7 @@ impl ChatBackend for FakeChatBackend {
         &self,
         request: &mut ChatRequest,
         options: NewChatOutputProcessorOptions<'_>,
-    ) -> vllm_chat::Result<Box<dyn ChatOutputProcessor>> {
+    ) -> vllm_chat::Result<DynChatOutputProcessor> {
         Ok(Box::new(DefaultChatOutputProcessor::new(
             request,
             &self.model_id,
@@ -318,16 +318,10 @@ impl ChatBackend for FailingDecodeBackend {
 
     fn new_chat_output_processor(
         &self,
-        request: &mut ChatRequest,
-        options: NewChatOutputProcessorOptions<'_>,
-    ) -> vllm_chat::Result<Box<dyn ChatOutputProcessor>> {
-        Ok(Box::new(DefaultChatOutputProcessor::new(
-            request,
-            self.inner.model_id(),
-            options.tokenizer,
-            options.tool_call_parser,
-            options.reasoning_parser,
-        )?))
+        _request: &mut ChatRequest,
+        _options: NewChatOutputProcessorOptions<'_>,
+    ) -> vllm_chat::Result<DynChatOutputProcessor> {
+        Ok(Box::new(DefaultChatOutputProcessor::plain_text_only()))
     }
 }
 

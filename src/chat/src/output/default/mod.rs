@@ -74,6 +74,18 @@ impl DefaultChatOutputProcessor {
         })
     }
 
+    /// Build the plain-text-only default output processor.
+    ///
+    /// This keeps the default structured chat-event assembly but disables both reasoning parsing
+    /// and tool-call parsing completely, so that all content is treated as opaque text.
+    pub fn plain_text_only() -> Self {
+        Self {
+            intermediate: false,
+            reasoning_parser: None,
+            tool_parser: None,
+        }
+    }
+
     fn resolve_tool_parser(
         request: &mut ChatRequest,
         model_id: &str,

@@ -6,7 +6,7 @@ use vllm_text::tokenizer::DynTokenizer;
 use vllm_text::{DynTextBackend, TextBackend};
 
 use crate::error::Result;
-use crate::output::ChatOutputProcessor;
+use crate::output::DynChatOutputProcessor;
 use crate::renderer::DynChatRenderer;
 use crate::request::ChatRequest;
 use crate::{ChatTemplateContentFormatOption, ParserSelection, RendererSelection};
@@ -30,7 +30,7 @@ pub trait ChatBackend: Send + Sync {
         &self,
         request: &mut ChatRequest,
         options: NewChatOutputProcessorOptions<'_>,
-    ) -> Result<Box<dyn ChatOutputProcessor>>;
+    ) -> Result<DynChatOutputProcessor>;
 }
 
 /// Shared trait-object form of [`ChatBackend`].
