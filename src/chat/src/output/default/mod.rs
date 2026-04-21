@@ -1,7 +1,6 @@
 //! Default output processing pipeline.
 
 mod reasoning;
-mod structured;
 mod tool;
 
 use std::sync::Once;
@@ -11,8 +10,8 @@ use tracing::info;
 use vllm_text::tokenizer::DynTokenizer;
 
 use self::reasoning::reasoning_event_stream;
-use self::structured::structured_chat_event_stream;
 use self::tool::tool_event_stream;
+use super::structured::structured_chat_event_stream;
 use crate::error::Result;
 use crate::output::{
     AssistantEvent, ChatOutputProcessor, ContentEvent, DynChatEventStream,
@@ -25,7 +24,6 @@ use crate::request::{ChatRequest, ChatToolChoice};
 use crate::{Error, Result as ChatResult};
 
 trait ContentEventStream = Stream<Item = Result<ContentEvent>> + Send + 'static;
-trait AssistantEventStream = Stream<Item = Result<AssistantEvent>> + Send + 'static;
 
 /// Default request-scoped output processor used by Hugging Face style chat backends.
 ///

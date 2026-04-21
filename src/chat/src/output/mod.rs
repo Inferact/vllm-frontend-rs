@@ -1,9 +1,6 @@
-mod default;
-
 use std::pin::Pin;
 use std::sync::Arc;
 
-pub use default::DefaultChatOutputProcessor;
 use futures::Stream;
 use subenum::subenum;
 use vllm_text::output::{DecodedLogprobs, DecodedPromptLogprobs, DecodedTextEvent};
@@ -11,6 +8,11 @@ use vllm_text::output::{DecodedLogprobs, DecodedPromptLogprobs, DecodedTextEvent
 use crate::FinishReason;
 use crate::error::Result;
 use crate::event::{AssistantBlockKind, AssistantToolCall, ChatEvent};
+
+mod default;
+mod structured;
+
+pub use default::DefaultChatOutputProcessor;
 
 /// Internal assistant event before final assembly.
 ///
@@ -116,4 +118,5 @@ pub trait ChatOutputProcessor: Send {
 pub type DynChatOutputProcessor = Box<dyn ChatOutputProcessor>;
 
 pub(crate) trait DecodedTextEventStream = Stream<Item = Result<DecodedTextEvent>> + Send + 'static;
+pub(crate) trait AssistantEventStream = Stream<Item = Result<AssistantEvent>> + Send + 'static;
 pub(crate) trait ChatEventStream = Stream<Item = Result<ChatEvent>> + Send + 'static;
