@@ -151,7 +151,7 @@ impl ReasoningParserFactory {
     pub fn global() -> &'static Self {
         static INSTANCE: LazyLock<ReasoningParserFactory> =
             LazyLock::new(ReasoningParserFactory::new);
-        &*INSTANCE
+        &INSTANCE
     }
 
     /// Create the default registry with built-in parser names and model mappings.

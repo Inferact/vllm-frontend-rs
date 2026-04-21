@@ -169,7 +169,7 @@ impl ToolParserFactory {
     /// Get the global tool parser factory with built-in registrations and model mappings.
     pub fn global() -> &'static Self {
         static INSTANCE: LazyLock<ToolParserFactory> = LazyLock::new(ToolParserFactory::new);
-        &*INSTANCE
+        &INSTANCE
     }
 
     /// Create the default registry with built-in parser names and model mappings.
