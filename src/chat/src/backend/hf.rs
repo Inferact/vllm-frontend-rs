@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use tracing::info;
 use vllm_text::DynTextBackend;
-use vllm_text::backends::hf::{HfTextBackend, ResolvedModelFiles, load_model_config};
+use vllm_text::backend::hf::{HfTextBackend, ResolvedModelFiles, load_model_config};
 
 use crate::RendererSelection;
-use crate::backend::{ChatBackend, DynChatBackend};
-use crate::backends::{LoadModelBackendsOptions, LoadedModelBackends};
+use crate::backend::{ChatBackend, DynChatBackend, LoadModelBackendsOptions, LoadedModelBackends};
 use crate::error::Result;
-use crate::renderers::hf::HfChatRenderer;
-use crate::renderers::{DeepSeekV32ChatRenderer, DynChatRenderer};
+use crate::renderer::hf::HfChatRenderer;
+use crate::renderer::{DeepSeekV32ChatRenderer, DynChatRenderer};
 
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
@@ -84,12 +83,11 @@ mod tests {
     use std::path::PathBuf;
 
     use tempfile::tempdir;
-    use vllm_text::backends::hf::TokenizerSource;
+    use vllm_text::backend::hf::TokenizerSource;
 
     use super::HfChatBackend;
     use crate::RendererSelection;
-    use crate::backend::ChatBackend;
-    use crate::backends::LoadModelBackendsOptions;
+    use crate::backend::{ChatBackend, LoadModelBackendsOptions};
     use crate::request::{ChatContent, ChatMessage, ChatRequest};
 
     fn request_with_user_text(text: &str) -> ChatRequest {
@@ -109,7 +107,7 @@ mod tests {
     fn resolved_files(
         config_json: &str,
         tokenizer_config_json: &str,
-    ) -> vllm_text::backends::hf::ResolvedModelFiles {
+    ) -> vllm_text::backend::hf::ResolvedModelFiles {
         let dir = tempdir().unwrap();
         let root = dir.keep();
         let config_path = root.join("config.json");
@@ -117,7 +115,7 @@ mod tests {
         write_json(&config_path, config_json);
         write_json(&tokenizer_config_path, tokenizer_config_json);
 
-        vllm_text::backends::hf::ResolvedModelFiles {
+        vllm_text::backend::hf::ResolvedModelFiles {
             tokenizer: TokenizerSource::HuggingFace(PathBuf::from("/tmp/unused-tokenizer.json")),
             tokenizer_config_path: Some(tokenizer_config_path),
             generation_config_path: None,

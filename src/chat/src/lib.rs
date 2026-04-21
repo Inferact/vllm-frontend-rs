@@ -9,10 +9,11 @@
 //! structured reasoning and final-answer blocks. It is closer to vLLM's internal chat-rendering
 //! flow than to a full OpenAI-compatible surface.
 
+pub use backend::hf::HfChatBackend;
 pub use backend::{
-    ChatBackend, ChatTextBackend, DynChatBackend, DynChatTextBackend, SamplingHints,
+    ChatBackend, ChatTextBackend, DynChatBackend, DynChatTextBackend, LoadModelBackendsOptions,
+    LoadedModelBackends, load_model_backends,
 };
-pub use backends::{LoadModelBackendsOptions, LoadedModelBackends, load_model_backends};
 pub use error::{Error, Result};
 pub use event::{
     AssistantBlockKind, AssistantContentBlock, AssistantMessage, AssistantMessageExt,
@@ -24,8 +25,8 @@ pub use parser::reasoning::{
     ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,
 };
 pub use parser::tool::{ToolParser, ToolParserError, ToolParserFactory};
-pub use renderers::hf::ChatTemplateContentFormatOption;
-pub use renderers::{
+pub use renderer::hf::ChatTemplateContentFormatOption;
+pub use renderer::{
     ChatRenderer, DeepSeekV32ChatRenderer, DynChatRenderer, RenderedPrompt, RendererSelection,
 };
 pub use request::{
@@ -37,12 +38,11 @@ use tracing::info;
 pub use vllm_llm::FinishReason;
 
 mod backend;
-pub mod backends;
 mod error;
 mod event;
 mod output;
 mod parser;
-mod renderers;
+mod renderer;
 mod request;
 mod stream;
 

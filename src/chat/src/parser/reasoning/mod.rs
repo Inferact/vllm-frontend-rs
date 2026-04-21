@@ -22,7 +22,7 @@ mod kimi;
 mod qwen3;
 
 use thiserror::Error;
-use vllm_text::tokenizers::DynTokenizer;
+use vllm_text::tokenizer::DynTokenizer;
 
 pub use self::cohere_cmd::CohereCmdReasoningParser;
 pub use self::deepseek_r1::DeepSeekR1ReasoningParser;

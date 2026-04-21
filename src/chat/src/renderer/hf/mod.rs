@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror_ext::AsReport as _;
 use tracing::{info, trace, warn};
-use vllm_text::backends::hf::{
+use vllm_text::backend::hf::{
     HfSpecialTokens, HfTokenizerConfig, ResolvedModelFiles, load_tokenizer_config,
 };
 
@@ -176,7 +176,7 @@ impl ChatRenderer for HfChatRenderer {
 /// Chat message in the JSON shape expected by Jinja chat templates.
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Serialize)]
-pub(super) struct TemplateMessage {
+struct TemplateMessage {
     role: &'static str,
     content: TemplateContent,
     // Developer-role messages may provide message-local tools in the same shape
@@ -343,7 +343,7 @@ mod tests {
 
     use expect_test::expect;
     use serde_json::Value;
-    use vllm_text::backends::hf::{HfSpecialTokens, NamedSpecialToken};
+    use vllm_text::backend::hf::{HfSpecialTokens, NamedSpecialToken};
 
     use super::{ChatTemplateContentFormatOption, HfChatRenderer};
     use crate::request::{

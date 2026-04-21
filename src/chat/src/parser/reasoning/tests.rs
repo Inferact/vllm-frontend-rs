@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use vllm_text::tokenizers::Tokenizer;
+use vllm_text::tokenizer::Tokenizer;
 
 use super::{
     DeepSeekR1ReasoningParser, DelimitedReasoningParser, Qwen3ReasoningParser, ReasoningParser,

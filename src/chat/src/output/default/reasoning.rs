@@ -194,7 +194,7 @@ mod tests {
     use vllm_text::output::{
         DecodedLogprobs, DecodedPositionLogprobs, DecodedTextEvent, DecodedTokenLogprob,
     };
-    use vllm_text::tokenizers::{DynTokenizer, Tokenizer};
+    use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
 
     use super::super::ContentEvent;
     use super::reasoning_event_stream;

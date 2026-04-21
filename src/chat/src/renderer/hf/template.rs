@@ -11,14 +11,14 @@ use std::path::Path;
 use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::{self};
-use vllm_text::backends::hf::HfSpecialTokens;
+use vllm_text::backend::hf::HfSpecialTokens;
 
 use super::error::TemplateError;
 use super::format::{
     ChatTemplateContentFormat, ChatTemplateContentFormatOption, detect_chat_template_content_format,
 };
 use super::tojson::hf_tojson_filter;
-use crate::renderers::hf::{TemplateMessage, TemplateTool};
+use crate::renderer::hf::{TemplateMessage, TemplateTool};
 
 type Result<T> = std::result::Result<T, TemplateError>;
 
@@ -131,7 +131,7 @@ mod tests {
     use std::fs;
 
     use tempfile::TempDir;
-    use vllm_text::backends::hf::{HfSpecialTokens, NamedSpecialToken};
+    use vllm_text::backend::hf::{HfSpecialTokens, NamedSpecialToken};
 
     use super::*;
 

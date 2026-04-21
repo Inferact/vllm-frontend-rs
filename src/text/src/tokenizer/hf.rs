@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::Error;
 use crate::error::Result;
-use crate::tokenizers::Tokenizer;
+use crate::tokenizer::Tokenizer;
 
 enum Backend {
     Hf(Box<HfTokenizer>),

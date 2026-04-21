@@ -14,7 +14,7 @@ pub use self::config::{
 pub use self::model_files::{ResolvedModelFiles, TokenizerSource};
 use crate::backend::{SamplingHints, TextBackend};
 use crate::error::Result;
-use crate::tokenizers::{DynTokenizer, HuggingFaceTokenizer, TekkenTokenizer, TiktokenTokenizer};
+use crate::tokenizer::{DynTokenizer, HuggingFaceTokenizer, TekkenTokenizer, TiktokenTokenizer};
 
 fn load_tokenizer(tokenizer: &TokenizerSource) -> Result<DynTokenizer> {
     match tokenizer {

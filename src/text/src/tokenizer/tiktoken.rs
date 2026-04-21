@@ -363,8 +363,8 @@ mod tests {
         CL100K_BASE_PATTERN, KIMI_PATTERN, TiktokenModelConfig, TiktokenTokenizer,
         TiktokenTokenizerConfig, detect_bpe_pattern,
     };
-    use crate::backends::hf::{ResolvedModelFiles, TokenizerSource};
-    use crate::tokenizers::Tokenizer;
+    use crate::backend::hf::{ResolvedModelFiles, TokenizerSource};
+    use crate::tokenizer::Tokenizer;
 
     macro_rules! config_json {
         ($($json:tt)+) => {

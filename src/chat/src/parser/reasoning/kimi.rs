@@ -1,4 +1,4 @@
-use vllm_text::tokenizers::DynTokenizer;
+use vllm_text::tokenizer::DynTokenizer;
 
 use super::{DelimitedReasoningParser, ReasoningDelta, ReasoningParser, Result};
 

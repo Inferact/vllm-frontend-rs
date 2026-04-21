@@ -1,7 +1,9 @@
+pub mod hf;
+
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::tokenizers::DynTokenizer;
+use crate::tokenizer::DynTokenizer;
 
 /// Tokenizer/model-derived hints used to enrich text-generation requests before they are lowered
 /// into engine-core.

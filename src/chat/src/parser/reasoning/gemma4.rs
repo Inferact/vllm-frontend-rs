@@ -1,4 +1,4 @@
-use vllm_text::tokenizers::DynTokenizer;
+use vllm_text::tokenizer::DynTokenizer;
 
 use super::{DelimitedReasoningParser, ReasoningDelta, ReasoningParser, Result};
 use crate::request::ChatRequest;
@@ -121,7 +121,7 @@ impl ReasoningParser for Gemma4ReasoningParser {
 mod tests {
     use std::sync::Arc;
 
-    use vllm_text::tokenizers::Tokenizer;
+    use vllm_text::tokenizer::Tokenizer;
 
     use super::Gemma4ReasoningParser;
     use crate::parser::reasoning::ReasoningParser;
