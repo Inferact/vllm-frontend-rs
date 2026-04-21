@@ -7,7 +7,8 @@ use futures::StreamExt as _;
 use serial_test::serial;
 use tonic::transport::Server as TonicServer;
 use vllm_chat::{
-    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DynChatRenderer,
+    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DefaultChatOutputProcessor,
+    DynChatOutputProcessor, DynChatRenderer, NewChatOutputProcessorOptions, RenderedPrompt,
 };
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
@@ -15,8 +16,8 @@ use vllm_engine_core_client::protocol::{
 use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig, EngineId};
 use vllm_llm::Llm;
-use vllm_text::TextBackend;
-use vllm_text::tokenizers::{DynTokenizer, Tokenizer};
+use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
+use vllm_text::{Prompt, TextBackend};
 use zeromq::prelude::{SocketRecv, SocketSend};
 use zeromq::{DealerSocket, PushSocket, ZmqMessage};
 
@@ -168,17 +169,37 @@ impl TextBackend for FakeTextBackend {
     fn tokenizer(&self) -> DynTokenizer {
         Arc::new(FakeTokenizer)
     }
+
+    fn model_id(&self) -> &str {
+        "test-model"
+    }
 }
 
 impl ChatBackend for FakeTextBackend {
     fn chat_renderer(&self) -> DynChatRenderer {
         Arc::new(self.clone())
     }
+
+    fn new_chat_output_processor(
+        &self,
+        request: &mut ChatRequest,
+        options: NewChatOutputProcessorOptions<'_>,
+    ) -> vllm_chat::Result<DynChatOutputProcessor> {
+        Ok(Box::new(DefaultChatOutputProcessor::new(
+            request,
+            self.model_id(),
+            options.tokenizer,
+            options.tool_call_parser,
+            options.reasoning_parser,
+        )?))
+    }
 }
 
 impl ChatRenderer for FakeTextBackend {
-    fn render(&self, _request: &ChatRequest) -> vllm_chat::Result<String> {
-        Ok(String::new())
+    fn render(&self, _request: &ChatRequest) -> vllm_chat::Result<RenderedPrompt> {
+        Ok(RenderedPrompt {
+            prompt: Prompt::Text(String::new()),
+        })
     }
 }
 

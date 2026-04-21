@@ -14,7 +14,8 @@ use async_openai::types::chat::{
 use futures::StreamExt as _;
 use serial_test::serial;
 use vllm_chat::{
-    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DynChatRenderer,
+    ChatBackend, ChatLlm, ChatRenderer, ChatRequest, ChatTextBackend, DefaultChatOutputProcessor,
+    DynChatOutputProcessor, DynChatRenderer, NewChatOutputProcessorOptions, RenderedPrompt,
 };
 use vllm_engine_core_client::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
@@ -22,8 +23,8 @@ use vllm_engine_core_client::protocol::{
 use vllm_engine_core_client::test_utils::{IpcNamespace, spawn_mock_engine_task};
 use vllm_engine_core_client::{EngineCoreClient, EngineCoreClientConfig, EngineId};
 use vllm_llm::Llm;
-use vllm_text::TextBackend;
-use vllm_text::tokenizers::{DynTokenizer, Tokenizer};
+use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
+use vllm_text::{Prompt, TextBackend};
 use zeromq::prelude::{SocketRecv, SocketSend};
 use zeromq::{DealerSocket, PushSocket, ZmqMessage};
 
@@ -174,16 +175,34 @@ impl TextBackend for FakeChatBackend {
     fn tokenizer(&self) -> DynTokenizer {
         Arc::new(FakeChatTokenizer)
     }
+
+    fn model_id(&self) -> &str {
+        "test-model"
+    }
 }
 
 impl ChatBackend for FakeChatBackend {
     fn chat_renderer(&self) -> DynChatRenderer {
         Arc::new(self.clone())
     }
+
+    fn new_chat_output_processor(
+        &self,
+        request: &mut ChatRequest,
+        options: NewChatOutputProcessorOptions<'_>,
+    ) -> vllm_chat::Result<DynChatOutputProcessor> {
+        Ok(Box::new(DefaultChatOutputProcessor::new(
+            request,
+            self.model_id(),
+            options.tokenizer,
+            options.tool_call_parser,
+            options.reasoning_parser,
+        )?))
+    }
 }
 
 impl ChatRenderer for FakeChatBackend {
-    fn render(&self, request: &ChatRequest) -> vllm_chat::Result<String> {
+    fn render(&self, request: &ChatRequest) -> vllm_chat::Result<RenderedPrompt> {
         let mut prompt = String::new();
         for message in &request.messages {
             prompt.push_str(message.role().as_str());
@@ -191,10 +210,12 @@ impl ChatRenderer for FakeChatBackend {
             prompt.push_str(&message.text_content()?);
             prompt.push('\n');
         }
-        if request.chat_options.add_generation_prompt {
+        if request.chat_options.add_generation_prompt() {
             prompt.push_str("assistant:");
         }
-        Ok(prompt)
+        Ok(RenderedPrompt {
+            prompt: Prompt::Text(prompt),
+        })
     }
 }
 
