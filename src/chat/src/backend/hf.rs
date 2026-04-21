@@ -18,6 +18,7 @@ use crate::{DynChatOutputProcessor, RendererSelection};
 /// [`ChatBackend`] implementation built on Hugging Face model files.
 pub struct HfChatBackend {
     model_id: String,
+    model_type: String,
     chat_renderer: DynChatRenderer,
 }
 
@@ -53,6 +54,7 @@ impl HfChatBackend {
 
         Ok(Self {
             model_id,
+            model_type: model_type.to_string(),
             chat_renderer,
         })
     }
@@ -68,6 +70,9 @@ impl ChatBackend for HfChatBackend {
         request: &mut ChatRequest,
         options: NewChatOutputProcessorOptions<'_>,
     ) -> Result<DynChatOutputProcessor> {
+        // TODO: use model_type to select different output processor implementations if needed
+        let _ = self.model_type;
+
         Ok(Box::new(DefaultChatOutputProcessor::new(
             request,
             &self.model_id,
