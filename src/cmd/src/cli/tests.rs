@@ -30,11 +30,11 @@ fn serve_args_forward_python_flags_with_separator() {
                     python: "../vllm/.venv/bin/python",
                     host: "127.0.0.1",
                     port: 8000,
+                    uds: None,
                     handshake_host: "127.0.0.1",
                     handshake_port: None,
                     data_parallel_size: 1,
                     data_parallel_size_local: None,
-                    uds: None,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
                         engine_ready_timeout_secs: 300,
@@ -571,13 +571,13 @@ fn serve_args_accept_handshake_aliases() {
                     python: "python3",
                     host: "127.0.0.1",
                     port: 8000,
+                    uds: None,
                     handshake_host: "10.99.48.128",
                     handshake_port: Some(
                         13345,
                     ),
                     data_parallel_size: 4,
                     data_parallel_size_local: None,
-                    uds: None,
                     runtime: SharedRuntimeArgs {
                         model: "Qwen/Qwen3-0.6B",
                         engine_ready_timeout_secs: 300,
