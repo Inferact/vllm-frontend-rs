@@ -2100,7 +2100,7 @@ async fn multi_engine_abort_is_grouped_and_utility_fans_out_to_all_engines() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn collective_rpc_returns_only_the_first_engine_result() {
+async fn collective_rpc_flattens_results_from_all_engines() {
     init_tracing();
     let ipc = IpcNamespace::new().unwrap();
     let handshake_address = ipc.handshake_endpoint();
@@ -2189,7 +2189,13 @@ async fn collective_rpc_returns_only_the_first_engine_result() {
         )
         .await
         .unwrap();
-    assert_eq!(results, vec![Value::from("engine-0-worker")]);
+    assert_eq!(
+        results,
+        vec![
+            Value::from("engine-0-worker"),
+            Value::from("engine-1-worker")
+        ]
+    );
 
     let _ = shutdown_tx_0.send(());
     let _ = shutdown_tx_1.send(());
