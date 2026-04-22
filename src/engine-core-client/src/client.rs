@@ -536,8 +536,7 @@ impl EngineCoreClient {
             .expect("utility fanout must include at least one engine"))
     }
 
-    /// Execute Python-style `collective_rpc`, preserving the upstream DPLB behavior where the
-    /// utility is broadcast to all engines but only the first engine's result is returned.
+    /// Execute `collective_rpc` on all engines and return only the first engine's result.
     pub async fn collective_rpc<A, K>(
         &self,
         method: &str,
