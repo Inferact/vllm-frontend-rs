@@ -485,8 +485,8 @@ impl EngineCoreClient {
         Ok(())
     }
 
-    /// Call a typed utility method on all connected engines, returning the first result if all
-    /// calls succeed or an error if any call fails.
+    /// Call a typed utility method on all connected engines, returning the first decoded result if
+    /// all calls succeed or an error if any call fails.
     ///
     /// Callers should pass utility arguments using Rust tuple semantics so the encoded payload
     /// matches Python's `(client_index, call_id, method_name, args)` contract:
@@ -534,6 +534,30 @@ impl EngineCoreClient {
             .into_iter()
             .next()
             .expect("utility fanout must include at least one engine"))
+    }
+
+    /// Execute Python-style `collective_rpc`, preserving the upstream DPLB behavior where the
+    /// utility is broadcast to all engines but only the first engine's result is returned.
+    pub async fn collective_rpc<A, K>(
+        &self,
+        method: &str,
+        timeout: Option<f64>,
+        args: A,
+        kwargs: K,
+    ) -> Result<Vec<rmpv::Value>>
+    where
+        A: serde::Serialize,
+        K: serde::Serialize,
+    {
+        let result = self
+            .call_utility::<rmpv::Value, _>("collective_rpc", (method, timeout, args, kwargs))
+            .await?;
+
+        Ok(match result {
+            // The selected engine's `collective_rpc` result is itself the worker-level result list.
+            rmpv::Value::Array(results) => results,
+            other => vec![other],
+        })
     }
 
     /// Return whether the engine is currently sleeping at any level.
