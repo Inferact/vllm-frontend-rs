@@ -24,6 +24,9 @@ struct ToolState {
     /// Whether tool parsing has already failed for this stream.
     parser_failed: bool,
     /// The parser-local index of the currently open tool call, if any.
+    // NOTE: We only allow single open tool call at a time right now, since that's what all
+    // supported parsers currently emit. Change this to a `BTreeMap` if we need to support multiple
+    // interleaved calls in the future.
     open_call_index: Option<usize>,
 }
 
@@ -49,6 +52,7 @@ impl ToolState {
         // Only normal assistant text is eligible for tool parsing. Reasoning
         // blocks and plain-text fallback should pass through unchanged.
         if kind != AssistantBlockKind::Text || self.parser_failed {
+            self.open_call_index = None;
             events.push(AssistantEvent::TextDelta { kind, delta });
             return Ok(events);
         }
@@ -65,6 +69,7 @@ impl ToolState {
                     );
                     self.parser_failed = true;
                 }
+                self.open_call_index = None;
                 events.push(AssistantEvent::TextDelta { kind, delta });
             }
         }
@@ -90,6 +95,7 @@ impl ToolState {
             // plain text output.
             self.process_tool_items(result.calls, events)?;
             if !result.normal_text.is_empty() {
+                self.open_call_index = None;
                 push_text_delta(events, kind, result.normal_text);
             }
         }
@@ -613,6 +619,63 @@ mod tests {
             .expect("expected invariant error");
 
         assert!(matches!(err, Error::ToolCallStreamInvariant { .. }));
+    }
+
+    #[tokio::test]
+    async fn tool_stream_resets_open_tool_when_normal_text_interrupts_it() {
+        let events = stream::iter(vec![
+            Ok(ContentEvent::TextDelta {
+                kind: AssistantBlockKind::Text,
+                delta: "start".to_string(),
+            }),
+            Ok(ContentEvent::TextDelta {
+                kind: AssistantBlockKind::Text,
+                delta: "text".to_string(),
+            }),
+            Ok(ContentEvent::TextDelta {
+                kind: AssistantBlockKind::Text,
+                delta: "args".to_string(),
+            }),
+        ]);
+
+        let parser = ScriptedParser {
+            push_results: vec![
+                ToolParseResult {
+                    normal_text: String::new(),
+                    calls: vec![crate::parser::tool::ToolCallDelta {
+                        tool_index: 0,
+                        name: None,
+                        arguments: "}".to_string(),
+                    }],
+                },
+                ToolParseResult {
+                    normal_text: "plain text".to_string(),
+                    calls: Vec::new(),
+                },
+                ToolParseResult {
+                    normal_text: String::new(),
+                    calls: vec![crate::parser::tool::ToolCallDelta {
+                        tool_index: 0,
+                        name: Some("first".to_string()),
+                        arguments: "{".to_string(),
+                    }],
+                },
+            ],
+            finish_result: ToolParseResult::default(),
+        };
+
+        let err = tool_event_stream(events, true, Some(Box::new(parser)))
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .find_map(|result| result.err())
+            .expect("expected invariant error");
+
+        assert!(matches!(
+            err,
+            Error::ToolCallStreamInvariant { message }
+                if message == "received arguments for tool index 0 before any tool-call start"
+        ));
     }
 
     #[tokio::test]
