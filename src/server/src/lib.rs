@@ -22,6 +22,7 @@ use futures::FutureExt as _;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::either::Either;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Server as TonicServer;
 use tracing::{info, trace};
 use vllm_chat::{ChatLlm, LoadModelBackendsOptions, load_model_backends};
@@ -109,13 +110,12 @@ where
     let model = state.model_id.clone();
     let app = build_router(state.clone());
 
-    // Optionally start the gRPC Generate server on a separate port. Bind the listener
-    // synchronously here so bind errors (port in use, permission denied, ...) surface
-    // before we start the HTTP server, rather than being deferred until shutdown.
-    // The gRPC listener follows the same host as the HTTP listener so that enabling
-    // --grpc-port does not accidentally expose the service on all interfaces when HTTP
-    // is intentionally local-only.
-    let grpc_task = if let Some(grpc_port) = config.grpc_port {
+    // Optionally bind the gRPC Generate server on a separate port. Bind synchronously
+    // here so bind errors (port in use, permission denied, ...) surface before we start
+    // serving, rather than being deferred until shutdown. The gRPC listener follows the
+    // same host as the HTTP listener so that enabling --grpc-port does not accidentally
+    // expose the service on all interfaces when HTTP is intentionally local-only.
+    let grpc_setup = if let Some(grpc_port) = config.grpc_port {
         let grpc_host = match &config.listener_mode {
             HttpListenerMode::BindTcp { host, .. } => host.as_str(),
             HttpListenerMode::BindUnix { .. } | HttpListenerMode::InheritedFd { .. } => "0.0.0.0",
@@ -124,16 +124,9 @@ where
             .await
             .with_context(|| format!("failed to bind gRPC listener on {grpc_host}:{grpc_port}"))?;
         let addr = grpc_listener.local_addr()?;
-        let shutdown = shutdown.clone();
         let svc = grpc::GenerateServer::new(grpc::GenerateServiceImpl::new(state.clone()));
         info!(%addr, "starting gRPC server");
-        Some(tokio::spawn(async move {
-            let incoming = TcpListenerStream::new(grpc_listener);
-            TonicServer::builder()
-                .add_service(svc)
-                .serve_with_incoming_shutdown(incoming, shutdown)
-                .await
-        }))
+        Some((grpc_listener, svc))
     } else {
         None
     };
@@ -150,13 +143,62 @@ where
         }
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    // Run HTTP and gRPC concurrently under a shared cancellation token. If either
+    // server exits — cleanly or with an error — we trip the token so the other
+    // begins a graceful drain immediately. This avoids a partial-outage state where
+    // one protocol keeps serving after the other has died.
+    let internal_shutdown = CancellationToken::new();
 
-    if let Some(task) = grpc_task {
-        task.await?.context("gRPC server failed")?;
-    }
+    let http_fut = {
+        let external = shutdown.clone();
+        let internal = internal_shutdown.clone();
+        async move {
+            let signal = combined_shutdown(external, internal.clone());
+            let result = axum::serve(listener, app)
+                .with_graceful_shutdown(signal)
+                .await
+                .context("HTTP server failed");
+            internal.cancel();
+            result
+        }
+    };
+
+    let grpc_fut = {
+        let external = shutdown.clone();
+        let internal = internal_shutdown.clone();
+        async move {
+            let Some((grpc_listener, svc)) = grpc_setup else {
+                // No gRPC configured: just wait for shutdown so we do not race the
+                // join! by resolving early and tripping the cancellation token.
+                external.await;
+                return Ok(());
+            };
+            let signal = combined_shutdown(external, internal.clone());
+            let result = TonicServer::builder()
+                .add_service(svc)
+                .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), signal)
+                .await
+                .context("gRPC server failed");
+            internal.cancel();
+            result
+        }
+    };
+
+    let (http_res, grpc_res) = tokio::join!(http_fut, grpc_fut);
+    http_res.and(grpc_res)?;
 
     state.shutdown().await
+}
+
+/// Resolves when either the external shutdown future fires or the internal
+/// cancellation token is tripped. Used to fan one shared shutdown signal out to
+/// both server loops while also letting either loop pull the other down.
+async fn combined_shutdown<F>(external: F, internal: CancellationToken)
+where
+    F: Future<Output = ()>,
+{
+    tokio::select! {
+        _ = external => {}
+        _ = internal.cancelled() => {}
+    }
 }
