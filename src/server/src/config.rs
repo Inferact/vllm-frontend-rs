@@ -1,9 +1,53 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value;
 use vllm_chat::{ChatTemplateContentFormatOption, ParserSelection, RendererSelection};
 use vllm_engine_core_client::{CoordinatorMode as EngineCoreCoordinatorMode, TransportMode};
+
+/// TLS/SSL configuration for the HTTP server.
+///
+/// Equivalent to the `ssl_keyfile`, `ssl_certfile`, `ssl_ca_certs`, `ssl_cert_reqs`, and
+/// `enable_ssl_refresh` arguments in Python vLLM's `FrontendArgs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlsConfig {
+    /// Path to the SSL private key file (PEM format).
+    pub keyfile: String,
+    /// Path to the SSL certificate file (PEM format).
+    pub certfile: String,
+    /// Path to the CA certificates file for client certificate verification.
+    pub ca_certs: Option<String>,
+    /// Client certificate requirement level: 0 = none, 1 = optional, 2 = required.
+    pub cert_reqs: i32,
+    /// Whether to watch certificate files and reload on change.
+    pub enable_refresh: bool,
+}
+
+impl TlsConfig {
+    /// Build a `TlsConfig` from the individual SSL arguments.
+    ///
+    /// Returns `Ok(None)` when neither keyfile nor certfile is set, and errors if only one of
+    /// the two is provided.
+    pub fn from_args(
+        ssl_keyfile: Option<String>,
+        ssl_certfile: Option<String>,
+        ssl_ca_certs: Option<String>,
+        ssl_cert_reqs: i32,
+        enable_ssl_refresh: bool,
+    ) -> Result<Option<Self>> {
+        match (ssl_keyfile, ssl_certfile) {
+            (Some(keyfile), Some(certfile)) => Ok(Some(Self {
+                keyfile,
+                certfile,
+                ca_certs: ssl_ca_certs,
+                cert_reqs: ssl_cert_reqs,
+                enable_refresh: enable_ssl_refresh,
+            })),
+            (None, None) => Ok(None),
+            _ => bail!("both --ssl-keyfile and --ssl-certfile must be provided for TLS"),
+        }
+    }
+}
 
 /// How the HTTP server obtains its listening socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +83,8 @@ pub struct Config {
     pub model: String,
     /// HTTP listener setup.
     pub listener_mode: HttpListenerMode,
+    /// Optional TLS configuration. When `Some`, the server serves HTTPS.
+    pub tls: Option<TlsConfig>,
     /// Tool-call parser selection.
     pub tool_call_parser: ParserSelection,
     /// Reasoning parser selection.

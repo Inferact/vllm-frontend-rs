@@ -10,6 +10,7 @@ mod listener;
 mod middleware;
 mod routes;
 mod state;
+mod tls;
 mod utils;
 
 use std::future::Future;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use axum::serve::ListenerExt as _;
-pub use config::{Config, CoordinatorMode, HttpListenerMode};
+pub use config::{Config, CoordinatorMode, HttpListenerMode, TlsConfig};
 use futures::FutureExt as _;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -110,6 +111,25 @@ where
     let model = state.model_id.clone();
     let app = build_router(state.clone());
 
+    // Build a rustls ServerConfig (and a shared holder that supports hot-reload) once
+    // so that both HTTP and gRPC can share the same TLS state.
+    let tls_holder = if let Some(ref tls_config) = config.tls {
+        let server_config =
+            tls::build_server_config(tls_config).context("failed to initialize TLS")?;
+        let holder = Arc::new(arc_swap::ArcSwap::from_pointee(server_config));
+        if tls_config.enable_refresh {
+            // The task runs for the lifetime of the process; we intentionally drop the
+            // JoinHandle so it detaches.
+            std::mem::drop(tls::spawn_cert_refresh(
+                Arc::clone(&holder),
+                tls_config.clone(),
+            ));
+        }
+        Some(holder)
+    } else {
+        None
+    };
+
     // Optionally bind the gRPC Generate server on a separate port. Bind synchronously
     // here so bind errors (port in use, permission denied, ...) surface before we start
     // serving, rather than being deferred until shutdown. The gRPC listener follows the
@@ -125,13 +145,16 @@ where
             .with_context(|| format!("failed to bind gRPC listener on {grpc_host}:{grpc_port}"))?;
         let addr = grpc_listener.local_addr()?;
         let svc = grpc::GenerateServer::new(grpc::GenerateServiceImpl::new(state.clone()));
-        info!(%addr, "starting gRPC server");
+        let scheme = if tls_holder.is_some() {
+            "grpcs"
+        } else {
+            "grpc"
+        };
+        info!(%addr, %scheme, "starting gRPC server");
         Some((grpc_listener, svc))
     } else {
         None
     };
-
-    info!(%bind_address, %model, "starting OpenAI server");
 
     // Set TCP_NODELAY on accepted connections to reduce latency.
     // By `tap_io` we will do this on every accepted connection.
@@ -143,6 +166,13 @@ where
         }
     });
 
+    let http_scheme = if tls_holder.is_some() {
+        "HTTPS"
+    } else {
+        "HTTP"
+    };
+    info!(%bind_address, %model, "starting OpenAI server ({http_scheme})");
+
     // Run HTTP and gRPC concurrently under a shared cancellation token. If either
     // server exits — cleanly or with an error — we trip the token so the other
     // begins a graceful drain immediately. This avoids a partial-outage state where
@@ -152,12 +182,21 @@ where
     let http_fut = {
         let external = shutdown.clone();
         let internal = internal_shutdown.clone();
+        let tls_holder = tls_holder.clone();
         async move {
             let signal = combined_shutdown(external, internal.clone());
-            let result = axum::serve(listener, app)
-                .with_graceful_shutdown(signal)
-                .await
-                .context("HTTP server failed");
+            let result = if let Some(holder) = tls_holder {
+                let tls_listener = tls::TlsListener::from_holder(listener, holder);
+                axum::serve(tls_listener, app)
+                    .with_graceful_shutdown(signal)
+                    .await
+                    .context("HTTP server failed")
+            } else {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(signal)
+                    .await
+                    .context("HTTP server failed")
+            };
             internal.cancel();
             result
         }
@@ -166,6 +205,7 @@ where
     let grpc_fut = {
         let external = shutdown.clone();
         let internal = internal_shutdown.clone();
+        let tls_holder = tls_holder.clone();
         async move {
             let Some((grpc_listener, svc)) = grpc_setup else {
                 // No gRPC configured: just wait for shutdown so we do not race the
@@ -174,11 +214,20 @@ where
                 return Ok(());
             };
             let signal = combined_shutdown(external, internal.clone());
-            let result = TonicServer::builder()
-                .add_service(svc)
-                .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), signal)
-                .await
-                .context("gRPC server failed");
+            let result = if let Some(holder) = tls_holder {
+                let incoming = tls::tls_incoming(grpc_listener, holder);
+                TonicServer::builder()
+                    .add_service(svc)
+                    .serve_with_incoming_shutdown(incoming, signal)
+                    .await
+                    .context("gRPC server failed")
+            } else {
+                TonicServer::builder()
+                    .add_service(svc)
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), signal)
+                    .await
+                    .context("gRPC server failed")
+            };
             internal.cancel();
             result
         }
