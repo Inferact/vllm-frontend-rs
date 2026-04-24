@@ -10,6 +10,7 @@
 mod deepseek_v32;
 mod external;
 mod gemma4;
+mod hermes;
 pub(super) mod streaming;
 mod utils;
 
@@ -28,6 +29,7 @@ pub type Result<T> = std::result::Result<T, ToolParserError>;
 pub use deepseek_v32::DeepSeekV32ToolParser;
 pub use external::*;
 pub use gemma4::Gemma4ToolParser;
+pub use hermes::HermesToolParser;
 
 /// Canonical public names for registered tool parsers.
 pub mod names {
@@ -38,6 +40,7 @@ pub mod names {
     pub const GLM45: &str = "glm45";
     pub const GLM47: &str = "glm47";
     pub const GEMMA4: &str = "gemma4";
+    pub const HERMES: &str = "hermes";
     pub const JSON: &str = "json";
     pub const KIMI_K2: &str = "kimi_k2";
     pub const LLAMA3_JSON: &str = "llama3_json";
@@ -184,6 +187,7 @@ impl ToolParserFactory {
             .register_parser::<Glm45MoeToolParser>(names::GLM45)
             .register_parser::<Glm47MoeToolParser>(names::GLM47)
             .register_parser::<Gemma4ToolParser>(names::GEMMA4)
+            .register_parser::<HermesToolParser>(names::HERMES)
             .register_parser::<JsonToolParser>(names::JSON)
             .register_parser::<KimiK2ToolParser>(names::KIMI_K2)
             .register_parser::<Llama3JsonToolParser>(names::LLAMA3_JSON)

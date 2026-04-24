@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn validate_parser_overrides_accepts_registered_names() {
         validate_parser_overrides(
-            &ParserSelection::Explicit("json".to_string()),
+            &ParserSelection::Explicit("hermes".to_string()),
             &ParserSelection::Explicit(names::QWEN3.to_string()),
         )
         .unwrap();
@@ -211,7 +211,7 @@ mod tests {
         )
         .unwrap_err();
 
-        expect_test::expect!["tool parser `definitely_missing_tool_parser` is not registered (choose from: cohere, deepseek_v3, deepseek_v31, deepseek_v32, gemma4, glm45, glm47, json, kimi_k2, llama3_json, llama4_json, llama4_pythonic, minimax_m2, mistral, pythonic, qwen3_coder, qwen3_xml, step3)"].assert_eq(&error.to_report_string());
+        expect_test::expect!["tool parser `definitely_missing_tool_parser` is not registered (choose from: cohere, deepseek_v3, deepseek_v31, deepseek_v32, gemma4, glm45, glm47, hermes, json, kimi_k2, llama3_json, llama4_json, llama4_pythonic, minimax_m2, mistral, pythonic, qwen3_coder, qwen3_xml, step3)"].assert_eq(&error.to_report_string());
     }
 
     #[test]
