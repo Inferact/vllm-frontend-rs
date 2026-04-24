@@ -5,7 +5,7 @@ use super::utils::partial_prefix_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
-const TOOL_CALLS_START: &str = "<｜DSML｜function_calls>";
+pub(super) const TOOL_CALLS_START: &str = "<｜DSML｜function_calls>";
 
 /// Tool parser for DeepSeek V3.2 models.
 ///
@@ -41,17 +41,28 @@ pub struct DeepSeekV32ToolParser {
     tool_call_started: bool,
     emitted_invoke_count: usize,
     tools: Vec<ChatTool>,
+    tool_call_start: &'static str,
     invoke_complete_regex: Regex,
     parameter_complete_regex: Regex,
 }
 
 impl DeepSeekV32ToolParser {
     fn new(tools: &[ChatTool]) -> Self {
+        Self::with_start_token(tools, TOOL_CALLS_START)
+    }
+
+    /// Construct a parser configured for a different tool-call start token.
+    ///
+    /// Used by DeepSeek V4, which keeps the V3.2 DSML invoke/parameter grammar
+    /// but wraps tool calls in `<｜DSML｜tool_calls>` instead of
+    /// `<｜DSML｜function_calls>`.
+    pub(super) fn with_start_token(tools: &[ChatTool], tool_call_start: &'static str) -> Self {
         Self {
             buffer: String::new(),
             tool_call_started: false,
             emitted_invoke_count: 0,
             tools: tools.to_vec(),
+            tool_call_start,
             invoke_complete_regex: Regex::new(
                 r#"(?s)<｜DSML｜invoke\s+name="([^"]+)"\s*>(.*?)</｜DSML｜invoke>"#,
             )
@@ -220,15 +231,15 @@ impl ToolParser for DeepSeekV32ToolParser {
         let mut result = ToolParseResult::default();
 
         if !self.tool_call_started {
-            if let Some(start_idx) = self.buffer.find(TOOL_CALLS_START) {
+            if let Some(start_idx) = self.buffer.find(self.tool_call_start) {
                 if start_idx > 0 {
                     result.normal_text.push_str(&self.buffer[..start_idx]);
                 }
-                let consumed = start_idx + TOOL_CALLS_START.len();
+                let consumed = start_idx + self.tool_call_start.len();
                 self.buffer.drain(..consumed);
                 self.tool_call_started = true;
             } else {
-                let keep_len = partial_prefix_len(&self.buffer, TOOL_CALLS_START);
+                let keep_len = partial_prefix_len(&self.buffer, self.tool_call_start);
                 let emit_len = self.buffer.len().saturating_sub(keep_len);
                 if emit_len > 0 {
                     result.normal_text.push_str(&self.buffer[..emit_len]);
