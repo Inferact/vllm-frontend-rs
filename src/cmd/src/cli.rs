@@ -170,12 +170,12 @@ pub struct SharedRuntimeArgs {
 
 impl SharedRuntimeArgs {
     /// Maximum time to wait for the expected engines to register on the frontend transport.
-    fn ready_timeout(&self) -> Duration {
+    pub fn ready_timeout(&self) -> Duration {
         Duration::from_secs(self.engine_ready_timeout_secs)
     }
 
     /// Maximum time to wait for active requests to drain during shutdown.
-    fn shutdown_timeout(&self) -> Duration {
+    pub fn shutdown_timeout(&self) -> Duration {
         Duration::from_secs(self.shutdown_timeout)
     }
 
