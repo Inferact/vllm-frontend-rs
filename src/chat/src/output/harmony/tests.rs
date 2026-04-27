@@ -114,6 +114,31 @@ fn interrupted_final_message_is_preserved() {
 }
 
 #[test]
+fn eos_flush_preserves_trailing_replacement_text() {
+    let mut tokens = completion_tokens(&[text_message("final", "Hi")]);
+    tokens.pop();
+    tokens.push(u32::MAX);
+
+    let events = block_on(collect_events(
+        HarmonyChatOutputProcessor::new(&ChatRequest::for_test()).unwrap(),
+        vec![
+            decoded_start(),
+            DecodedTextEvent::TextDelta {
+                delta: String::new(),
+                token_ids: tokens,
+                logprobs: None,
+                finished: Some(finished()),
+            },
+        ],
+    ));
+
+    let ChatEvent::Done { message, .. } = events.last().unwrap() else {
+        panic!("expected done");
+    };
+    assert_eq!(message.text(), format!("Hi{}", char::REPLACEMENT_CHARACTER));
+}
+
+#[test]
 fn interrupted_analysis_message_is_preserved() {
     let tokens = completion_tokens(&[text_message("analysis", "think")]);
     let events = block_on(collect_events(

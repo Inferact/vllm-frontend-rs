@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use futures::StreamExt as _;
 use futures_async_stream::try_stream;
-use openai_harmony::chat::Role;
+use openai_harmony::chat::{Content as HarmonyContent, Message as HarmonyMessage, Role};
 use openai_harmony::{
     HarmonyEncoding, HarmonyEncodingName, StreamableParser, load_harmony_encoding,
 };
@@ -186,6 +186,61 @@ impl HarmonyState {
         Ok(events)
     }
 
+    /// Flush Harmony parser state at EOS and emit any newly finalized assistant events.
+    fn process_eos(&mut self) -> Result<Vec<AssistantEvent>> {
+        let completed_before = self.parser.messages().len();
+        let pending_key = HarmonyGroupKey {
+            serial: completed_before,
+            channel: self.parser.current_channel(),
+            recipient: self.parser.current_recipient(),
+        };
+        let pending_content = self
+            .parser
+            .current_content()
+            .map_err(harmony_output_parsing_error)?;
+
+        self.parser
+            .process_eos()
+            .map_err(harmony_output_parsing_error)?;
+
+        let completed_after = self.parser.messages().len();
+        let mut events = Vec::new();
+
+        if completed_after == completed_before {
+            return Ok(events);
+        }
+
+        let final_message = &self.parser.messages()[completed_before];
+        let final_text = harmony_message_text(final_message);
+        let tail = final_text
+            .strip_prefix(&pending_content)
+            .unwrap_or(final_text)
+            .to_string();
+        if !tail.is_empty() {
+            self.emit_group(
+                HarmonyGroup {
+                    key: pending_key,
+                    text: tail,
+                },
+                &mut events,
+            );
+        }
+
+        for serial in completed_before..completed_after {
+            let key = {
+                let message = &self.parser.messages()[serial];
+                HarmonyGroupKey {
+                    serial,
+                    channel: message.channel.clone(),
+                    recipient: message.recipient.clone(),
+                }
+            };
+            self.handle_completed_message(key);
+        }
+
+        Ok(events)
+    }
+
     /// Flush one coalesced Harmony content group into internal assistant events.
     fn emit_group(&mut self, group: HarmonyGroup, events: &mut Vec<AssistantEvent>) {
         let channel = group.key.channel.as_deref();
@@ -299,6 +354,12 @@ async fn harmony_assistant_event_stream(
                     yield event;
                 }
 
+                if finished.is_some() {
+                    for event in state.process_eos()? {
+                        yield event;
+                    }
+                }
+
                 if logprobs.is_some() || !token_ids.is_empty() {
                     yield AssistantEvent::LogprobsDelta {
                         logprobs,
@@ -339,6 +400,14 @@ fn harmony_output_parsing_error(
     Error::HarmonyOutputParsing {
         error: error.into(),
     }
+}
+
+/// Return the decoded text payload from one parsed Harmony message.
+fn harmony_message_text(message: &HarmonyMessage) -> &str {
+    let [HarmonyContent::Text(text)] = message.content.as_slice() else {
+        unreachable!("Harmony parser emits one text content block per parsed message")
+    };
+    &text.text
 }
 
 /// Map one Harmony `(channel, recipient)` pair to a visible assistant block kind.
