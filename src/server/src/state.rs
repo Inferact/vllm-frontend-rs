@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, Instant, sleep_until};
 use tracing::warn;
 use vllm_chat::ChatLlm;
 use vllm_engine_core_client::EngineCoreClient;
@@ -61,7 +61,7 @@ impl AppState {
     ///
     /// If the deadline elapses while request/connection tasks still hold state references, skip the
     /// clean engine-client shutdown and let process teardown reclaim the remaining resources.
-    pub async fn shutdown(mut self: Arc<Self>, deadline: Option<Instant>) -> anyhow::Result<()> {
+    pub async fn shutdown(mut self: Arc<Self>, deadline: Instant) -> anyhow::Result<()> {
         loop {
             match Arc::try_unwrap(self) {
                 Ok(state) => {
@@ -72,15 +72,8 @@ impl AppState {
             }
             let ref_count = Arc::strong_count(&self);
 
-            let Some(deadline) = deadline else {
-                warn!(
-                    ref_count,
-                    "skipping engine-client shutdown because app state still has references"
-                );
-                return Ok(());
-            };
-
-            if Instant::now() >= deadline {
+            let now = Instant::now();
+            if now >= deadline {
                 warn!(
                     ref_count,
                     "shutdown deadline elapsed before app state became idle; skipping engine-client shutdown"
@@ -88,7 +81,11 @@ impl AppState {
                 return Ok(());
             }
 
-            sleep(SHUTDOWN_REFCOUNT_POLL_INTERVAL).await;
+            sleep_until(std::cmp::min(
+                deadline,
+                now + SHUTDOWN_REFCOUNT_POLL_INTERVAL,
+            ))
+            .await;
         }
     }
 }

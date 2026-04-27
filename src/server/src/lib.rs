@@ -224,6 +224,9 @@ pub async fn serve(config: Config, shutdown: CancellationToken) -> Result<()> {
     let (http_res, grpc_res) = tokio::join!(http_fut, grpc_fut);
     http_res.and(grpc_res)?;
 
-    let shutdown_deadline = shutdown_deadline.get().copied();
+    let shutdown_deadline = shutdown_deadline
+        .get()
+        .copied()
+        .unwrap_or_else(|| Instant::now() + config.shutdown_timeout);
     state.shutdown(shutdown_deadline).await
 }
