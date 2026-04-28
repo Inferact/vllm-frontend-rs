@@ -5342,6 +5342,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "criterion",
  "easy-ext",
  "expect-test",
  "futures",

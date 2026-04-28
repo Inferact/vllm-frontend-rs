@@ -31,6 +31,7 @@ winnow.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 clap.workspace = true
+criterion.workspace = true
 expect-test.workspace = true
 rmp-serde.workspace = true
 tempfile.workspace = true
@@ -39,6 +40,10 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 vllm-engine-core-client = { workspace = true, features = ["test-util"] }
 zeromq.workspace = true
+
+[[bench]]
+name = "deepseek_v32_tool_parser"
+harness = false
 
 [lints]
 workspace = true
