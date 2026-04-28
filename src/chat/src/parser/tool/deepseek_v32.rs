@@ -573,6 +573,82 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_v32_streaming_handles_bpe_chunked_dsml_opener() {
+        let result = collect_stream(
+            &[
+                "<｜DSML｜",
+                "function",
+                "_c",
+                "all",
+                "s",
+                ">\n",
+                "<｜DSML｜",
+                "invoke",
+                " name=\"",
+                "get_weather",
+                "\">\n",
+                "<｜DSML｜",
+                "parameter",
+                " name=\"location\" string=\"true\">",
+                "Beijing",
+                "</｜DSML｜",
+                "parameter>\n",
+                "</｜DSML｜",
+                "invoke>\n",
+                "</｜DSML｜",
+                "function_calls>",
+            ],
+            &test_tools(),
+        );
+
+        assert!(result.normal_text.is_empty());
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({ "location": "Beijing" })
+        );
+    }
+
+    #[test]
+    fn deepseek_v32_streaming_truncated_parameter_does_not_leak_eos() {
+        let result = collect_stream(
+            &[
+                "<｜DSML｜function_calls>\n",
+                "<｜DSML｜invoke name=\"get_weather\">\n",
+                "<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo",
+                "<｜end▁of▁sentence｜>",
+            ],
+            &test_tools(),
+        );
+
+        assert!(result.calls.is_empty());
+        assert!(!result.normal_text.contains("<｜end▁of▁sentence｜>"));
+    }
+
+    #[test]
+    fn deepseek_v32_streaming_malformed_empty_name_does_not_trap_buffer() {
+        let result = collect_stream(
+            &[
+                "<｜DSML｜function_calls>\n",
+                "<｜DSML｜invoke name=\"\">junk</｜DSML｜invoke>\n",
+                "<｜DSML｜invoke name=\"get_weather\">\n",
+                "<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo</｜DSML｜parameter>\n",
+                "</｜DSML｜invoke>\n",
+                "</｜DSML｜function_calls>",
+            ],
+            &test_tools(),
+        );
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({ "location": "Tokyo" })
+        );
+    }
+
+    #[test]
     fn deepseek_v32_streaming_does_not_emit_incomplete_invoke() {
         let result = collect_stream(
             &[
