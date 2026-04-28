@@ -311,7 +311,7 @@ fn parse_invoke_params(invoke_body: &str) -> ModalResult<Vec<(String, String)>> 
 }
 
 /// Parse a DSML parameter block.
-fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
+fn parse_parameter(input: &mut &str) -> ModalResult<(String, String)> {
     let (_, _, name, _, _, _, _, value, _) = (
         literal(PARAMETER_START),
         ws1,
