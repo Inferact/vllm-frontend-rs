@@ -1,9 +1,10 @@
 use serde_json::{Number, Value};
+use winnow::ascii::{multispace0 as ws0, multispace1 as ws1};
 use winnow::combinator::{alt, delimited, eof, repeat, terminated};
 use winnow::error::{ErrMode, Needed};
 use winnow::prelude::*;
 use winnow::stream::{Offset, Partial, Stream};
-use winnow::token::{literal, take_until, take_while};
+use winnow::token::{literal, take_until};
 
 use super::utils::partial_prefix_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
@@ -241,7 +242,7 @@ fn parse_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
 }
 
 fn parse_tool_block_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
-    dsml_ws0.void().parse_next(input)?;
+    ws0.void().parse_next(input)?;
     alt((tool_calls_end_event, invoke_event)).parse_next(input)
 }
 
@@ -279,13 +280,16 @@ fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
 }
 
 fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
-    literal(INVOKE_START).parse_next(input)?;
-    dsml_ws1.void().parse_next(input)?;
-    let name = dsml_name_attr.parse_next(input)?;
-    dsml_ws0.void().parse_next(input)?;
-    ">".parse_next(input)?;
-    let body = take_until(0.., INVOKE_END).parse_next(input)?;
-    literal(INVOKE_END).parse_next(input)?;
+    let (_, _, name, _, _, body, _) = (
+        literal(INVOKE_START),
+        ws1,
+        dsml_name_attr,
+        ws0,
+        ">",
+        take_until(0.., INVOKE_END),
+        literal(INVOKE_END),
+    )
+        .parse_next(input)?;
     let raw_params = parse_invoke_params(body)?;
     Ok(DsmlEvent::Invoke {
         name: name.to_string(),
@@ -296,14 +300,11 @@ fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
 /// Parse all complete `<parameter>` values from one invoke body.
 fn parse_invoke_params(invoke_body: &str) -> ModalResult<Vec<(String, String)>> {
     let mut input = invoke_body;
-    ws0.void().parse_next(&mut input)?;
-    let params = repeat(0.., terminated(parse_parameter, ws0)).parse_next(&mut input)?;
-    eof.parse_next(&mut input)?;
-    Ok(params)
+    delimited(ws0, repeat(0.., terminated(parse_parameter, ws0)), eof).parse_next(&mut input)
 }
 
 fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
-    (
+    let (_, _, name, _, _, _, _, value, _) = (
         literal(PARAMETER_START),
         ws1,
         name_attr,
@@ -314,8 +315,8 @@ fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
         take_until(0.., PARAMETER_END),
         literal(PARAMETER_END),
     )
-        .map(|(_, _, name, _, _, _, _, value, _)| (name.to_string(), value.to_string()))
-        .parse_next(input)
+        .parse_next(input)?;
+    Ok((name.to_string(), value.to_string()))
 }
 
 fn name_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
@@ -326,24 +327,8 @@ fn string_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     delimited("string=\"", alt(("true", "false")), "\"").parse_next(input)
 }
 
-fn ws0<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
-    take_while(0.., char::is_whitespace).parse_next(input)
-}
-
-fn ws1<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
-    take_while(1.., char::is_whitespace).parse_next(input)
-}
-
 fn dsml_name_attr<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
     delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
-}
-
-fn dsml_ws0<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
-    take_while(0.., char::is_whitespace).parse_next(input)
-}
-
-fn dsml_ws1<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
-    take_while(1.., char::is_whitespace).parse_next(input)
 }
 
 fn incomplete<T>() -> ModalResult<T> {
