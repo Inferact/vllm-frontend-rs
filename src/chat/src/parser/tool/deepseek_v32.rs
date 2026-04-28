@@ -230,6 +230,7 @@ impl ToolParser for DeepSeekV32ToolParser {
     }
 }
 
+/// Parse a DSML event for the current parser mode.
 fn parse_next_dsml_event(input: &mut DsmlInput<'_>, mode: DsmlMode) -> ModalResult<DsmlEvent> {
     match mode {
         DsmlMode::Text => parse_text_event(input),
@@ -237,27 +238,32 @@ fn parse_next_dsml_event(input: &mut DsmlInput<'_>, mode: DsmlMode) -> ModalResu
     }
 }
 
+/// Parse a text-mode DSML event.
 fn parse_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     alt((tool_calls_start_event, safe_text_event)).parse_next(input)
 }
 
+/// Parse a tool-block DSML event.
 fn parse_tool_block_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     ws0.void().parse_next(input)?;
     alt((tool_calls_end_event, invoke_event)).parse_next(input)
 }
 
+/// Parse a DSML function-calls start marker.
 fn tool_calls_start_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     literal(TOOL_CALLS_START)
         .value(DsmlEvent::ToolCallsStart)
         .parse_next(input)
 }
 
+/// Parse a DSML function-calls end marker.
 fn tool_calls_end_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     literal(TOOL_CALLS_END)
         .value(DsmlEvent::ToolCallsEnd)
         .parse_next(input)
 }
 
+/// Parse a safe text run before the next DSML marker.
 fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     let text = **input;
     if text.is_empty() {
@@ -279,6 +285,7 @@ fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     Ok(DsmlEvent::Text { len: emit_len })
 }
 
+/// Parse a DSML invoke block.
 fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     let (_, _, name, _, _, body, _) = (
         literal(INVOKE_START),
@@ -297,12 +304,13 @@ fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     })
 }
 
-/// Parse all complete `<parameter>` values from one invoke body.
+/// Parse a DSML invoke body.
 fn parse_invoke_params(invoke_body: &str) -> ModalResult<Vec<(String, String)>> {
     let mut input = invoke_body;
     delimited(ws0, repeat(0.., terminated(parse_parameter, ws0)), eof).parse_next(&mut input)
 }
 
+/// Parse a DSML parameter block.
 fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
     let (_, _, name, _, _, _, _, value, _) = (
         literal(PARAMETER_START),
@@ -319,14 +327,17 @@ fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
     Ok((name.to_string(), value.to_string()))
 }
 
+/// Parse a name attribute.
 fn name_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
 }
 
+/// Parse a string attribute.
 fn string_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
     delimited("string=\"", alt(("true", "false")), "\"").parse_next(input)
 }
 
+/// Parse a DSML name attribute.
 fn dsml_name_attr<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
     delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
 }
