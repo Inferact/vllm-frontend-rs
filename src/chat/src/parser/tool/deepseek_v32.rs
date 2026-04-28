@@ -26,7 +26,9 @@ enum DsmlMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DsmlEvent {
-    Text(String),
+    Text {
+        len: usize,
+    },
     ToolCallsStart,
     ToolCallsEnd,
     Invoke {
@@ -83,7 +85,9 @@ impl DeepSeekV32ToolParser {
 
     fn apply_event(&mut self, event: DsmlEvent, result: &mut ToolParseResult) -> Result<()> {
         match event {
-            DsmlEvent::Text(text) => result.normal_text.push_str(&text),
+            DsmlEvent::Text { len: consumed_len } => {
+                result.normal_text.push_str(&self.buffer[..consumed_len]);
+            }
             DsmlEvent::ToolCallsStart => self.mode = DsmlMode::ToolBlock,
             DsmlEvent::ToolCallsEnd => self.mode = DsmlMode::Text,
             DsmlEvent::Invoke { name, raw_params } => {
@@ -260,8 +264,8 @@ fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     }
 
     if let Some(start_idx) = text.find(TOOL_CALLS_START) {
-        let text = input.next_slice(start_idx).to_string();
-        return Ok(DsmlEvent::Text(text));
+        input.next_slice(start_idx);
+        return Ok(DsmlEvent::Text { len: start_idx });
     }
 
     let keep_len = partial_prefix_len(text, TOOL_CALLS_START);
@@ -270,7 +274,8 @@ fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
         return incomplete();
     }
 
-    Ok(DsmlEvent::Text(input.next_slice(emit_len).to_string()))
+    input.next_slice(emit_len);
+    Ok(DsmlEvent::Text { len: emit_len })
 }
 
 fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
