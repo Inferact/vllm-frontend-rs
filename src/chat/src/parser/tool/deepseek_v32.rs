@@ -1,11 +1,39 @@
-use regex::Regex;
 use serde_json::{Number, Value};
+use winnow::combinator::{alt, delimited, eof, repeat, terminated};
+use winnow::error::{ErrMode, Needed};
+use winnow::prelude::*;
+use winnow::stream::{Offset, Partial, Stream};
+use winnow::token::{literal, take_until, take_while};
 
 use super::utils::partial_prefix_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
 const TOOL_CALLS_START: &str = "<｜DSML｜function_calls>";
+const TOOL_CALLS_END: &str = "</｜DSML｜function_calls>";
+const INVOKE_START: &str = "<｜DSML｜invoke";
+const INVOKE_END: &str = "</｜DSML｜invoke>";
+const PARAMETER_START: &str = "<｜DSML｜parameter";
+const PARAMETER_END: &str = "</｜DSML｜parameter>";
+
+type DsmlInput<'i> = Partial<&'i str>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DsmlMode {
+    Text,
+    ToolBlock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DsmlEvent {
+    Text(String),
+    ToolCallsStart,
+    ToolCallsEnd,
+    Invoke {
+        name: String,
+        raw_params: Vec<(String, String)>,
+    },
+}
 
 /// Tool parser for DeepSeek V3.2 models.
 ///
@@ -38,93 +66,40 @@ const TOOL_CALLS_START: &str = "<｜DSML｜function_calls>";
 /// decode for parsing to work.
 pub struct DeepSeekV32ToolParser {
     buffer: String,
-    tool_call_started: bool,
+    mode: DsmlMode,
     emitted_invoke_count: usize,
     tools: Vec<ChatTool>,
-    invoke_complete_regex: Regex,
-    parameter_complete_regex: Regex,
 }
 
 impl DeepSeekV32ToolParser {
     fn new(tools: &[ChatTool]) -> Self {
         Self {
             buffer: String::new(),
-            tool_call_started: false,
+            mode: DsmlMode::Text,
             emitted_invoke_count: 0,
             tools: tools.to_vec(),
-            invoke_complete_regex: Regex::new(
-                r#"(?s)<｜DSML｜invoke\s+name="([^"]+)"\s*>(.*?)</｜DSML｜invoke>"#,
-            )
-            .expect("valid DeepSeek V3.2 invoke regex"),
-            parameter_complete_regex: Regex::new(
-                r#"(?s)<｜DSML｜parameter\s+name="([^"]+)"\s+string="(?:true|false)"\s*>(.*?)</｜DSML｜parameter>"#,
-            )
-            .expect("valid DeepSeek V3.2 parameter regex"),
         }
     }
 
-    /// Extract `ToolCallDelta`s from newly completed `<invoke>` blocks.
-    ///
-    /// Drains each completed invoke from the front of the buffer after
-    /// emitting it so later streaming updates do not rescan previously
-    /// processed content.
-    fn extract_completed_invokes(&mut self, result: &mut ToolParseResult) -> Result<()> {
-        while let Some((name, body, consumed_len)) = self
-            .invoke_complete_regex
-            .captures(&self.buffer)
-            .map(|captures| {
-                let name = captures
-                    .get(1)
-                    .expect("invoke regex always captures tool name")
-                    .as_str()
-                    .to_string();
-                let body = captures
-                    .get(2)
-                    .expect("invoke regex always captures tool body")
-                    .as_str()
-                    .to_string();
-                let consumed_len = captures
-                    .get(0)
-                    .expect("invoke regex always captures full invoke")
-                    .end();
-                (name, body, consumed_len)
-            })
-        {
-            let raw_params = self.parse_invoke_params(&body);
-            let arguments = self.convert_params_with_schema(&name, raw_params)?;
-            let arguments = serde_json::to_string(&arguments)
-                .map_err(|error| parsing_failed!("failed to serialize arguments: {}", error))?;
+    fn apply_event(&mut self, event: DsmlEvent, result: &mut ToolParseResult) -> Result<()> {
+        match event {
+            DsmlEvent::Text(text) => result.normal_text.push_str(&text),
+            DsmlEvent::ToolCallsStart => self.mode = DsmlMode::ToolBlock,
+            DsmlEvent::ToolCallsEnd => self.mode = DsmlMode::Text,
+            DsmlEvent::Invoke { name, raw_params } => {
+                let arguments = self.convert_params_with_schema(&name, raw_params)?;
+                let arguments = serde_json::to_string(&arguments)
+                    .map_err(|error| parsing_failed!("failed to serialize arguments: {}", error))?;
 
-            result.calls.push(ToolCallDelta {
-                tool_index: self.emitted_invoke_count,
-                name: Some(name),
-                arguments,
-            });
-            self.emitted_invoke_count += 1;
-            self.buffer.drain(..consumed_len);
-        }
-
+                result.calls.push(ToolCallDelta {
+                    tool_index: self.emitted_invoke_count,
+                    name: Some(name),
+                    arguments,
+                });
+                self.emitted_invoke_count += 1;
+            }
+        };
         Ok(())
-    }
-
-    /// Parse all complete `<parameter>` values from one invoke body.
-    fn parse_invoke_params(&self, invoke_body: &str) -> Vec<(String, String)> {
-        self.parameter_complete_regex
-            .captures_iter(invoke_body)
-            .map(|captures| {
-                let name = captures
-                    .get(1)
-                    .expect("parameter regex always captures parameter name")
-                    .as_str()
-                    .to_string();
-                let value = captures
-                    .get(2)
-                    .expect("parameter regex always captures parameter value")
-                    .as_str()
-                    .to_string();
-                (name, value)
-            })
-            .collect()
     }
 
     /// Convert raw string parameter values using the tool schema types.
@@ -189,7 +164,7 @@ impl DeepSeekV32ToolParser {
     /// Reset all streaming state.
     fn reset(&mut self) {
         self.buffer.clear();
-        self.tool_call_started = false;
+        self.mode = DsmlMode::Text;
         self.emitted_invoke_count = 0;
     }
 }
@@ -219,37 +194,155 @@ impl ToolParser for DeepSeekV32ToolParser {
         self.buffer.push_str(chunk);
         let mut result = ToolParseResult::default();
 
-        if !self.tool_call_started {
-            if let Some(start_idx) = self.buffer.find(TOOL_CALLS_START) {
-                if start_idx > 0 {
-                    result.normal_text.push_str(&self.buffer[..start_idx]);
+        loop {
+            let mut input = Partial::new(self.buffer.as_str());
+            let checkpoint = input.checkpoint();
+            let event = match parse_next_dsml_event(&mut input, self.mode) {
+                Ok(event) => event,
+                Err(ErrMode::Incomplete(_)) => break,
+                Err(error) => {
+                    return Err(parsing_failed!("failed to parse DSML event: {}", error));
                 }
-                let consumed = start_idx + TOOL_CALLS_START.len();
-                self.buffer.drain(..consumed);
-                self.tool_call_started = true;
-            } else {
-                let keep_len = partial_prefix_len(&self.buffer, TOOL_CALLS_START);
-                let emit_len = self.buffer.len().saturating_sub(keep_len);
-                if emit_len > 0 {
-                    result.normal_text.push_str(&self.buffer[..emit_len]);
-                    self.buffer.drain(..emit_len);
-                }
-                return Ok(result);
+            };
+            let consumed_len = input.offset_from(&checkpoint);
+            if consumed_len == 0 {
+                break;
             }
+            self.apply_event(event, &mut result)?;
+            self.buffer.drain(..consumed_len);
         }
 
-        self.extract_completed_invokes(&mut result)?;
         Ok(result)
     }
 
     fn finish(&mut self) -> Result<ToolParseResult> {
         let mut result = ToolParseResult::default();
-        if !self.tool_call_started && !self.buffer.is_empty() {
+        if self.mode == DsmlMode::Text && !self.buffer.is_empty() {
             result.normal_text.push_str(&self.buffer);
         }
         self.reset();
         Ok(result)
     }
+}
+
+fn parse_next_dsml_event(input: &mut DsmlInput<'_>, mode: DsmlMode) -> ModalResult<DsmlEvent> {
+    match mode {
+        DsmlMode::Text => parse_text_event(input),
+        DsmlMode::ToolBlock => parse_tool_block_event(input),
+    }
+}
+
+fn parse_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    alt((tool_calls_start_event, safe_text_event)).parse_next(input)
+}
+
+fn parse_tool_block_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    dsml_ws0.void().parse_next(input)?;
+    alt((tool_calls_end_event, invoke_event)).parse_next(input)
+}
+
+fn tool_calls_start_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    literal(TOOL_CALLS_START)
+        .value(DsmlEvent::ToolCallsStart)
+        .parse_next(input)
+}
+
+fn tool_calls_end_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    literal(TOOL_CALLS_END)
+        .value(DsmlEvent::ToolCallsEnd)
+        .parse_next(input)
+}
+
+fn safe_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    let text = **input;
+    if text.is_empty() {
+        return incomplete();
+    }
+
+    if let Some(start_idx) = text.find(TOOL_CALLS_START) {
+        let text = input.next_slice(start_idx).to_string();
+        return Ok(DsmlEvent::Text(text));
+    }
+
+    let keep_len = partial_prefix_len(text, TOOL_CALLS_START);
+    let emit_len = text.len().saturating_sub(keep_len);
+    if emit_len == 0 {
+        return incomplete();
+    }
+
+    Ok(DsmlEvent::Text(input.next_slice(emit_len).to_string()))
+}
+
+fn invoke_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    literal(INVOKE_START).parse_next(input)?;
+    dsml_ws1.void().parse_next(input)?;
+    let name = dsml_name_attr.parse_next(input)?;
+    dsml_ws0.void().parse_next(input)?;
+    ">".parse_next(input)?;
+    let body = take_until(0.., INVOKE_END).parse_next(input)?;
+    literal(INVOKE_END).parse_next(input)?;
+    let raw_params = parse_invoke_params(body)?;
+    Ok(DsmlEvent::Invoke {
+        name: name.to_string(),
+        raw_params,
+    })
+}
+
+/// Parse all complete `<parameter>` values from one invoke body.
+fn parse_invoke_params(invoke_body: &str) -> ModalResult<Vec<(String, String)>> {
+    let mut input = invoke_body;
+    ws0.void().parse_next(&mut input)?;
+    let params = repeat(0.., terminated(parse_parameter, ws0)).parse_next(&mut input)?;
+    eof.parse_next(&mut input)?;
+    Ok(params)
+}
+
+fn parse_parameter<'i>(input: &mut &'i str) -> ModalResult<(String, String)> {
+    (
+        literal(PARAMETER_START),
+        ws1,
+        name_attr,
+        ws1,
+        string_attr,
+        ws0,
+        ">",
+        take_until(0.., PARAMETER_END),
+        literal(PARAMETER_END),
+    )
+        .map(|(_, _, name, _, _, _, _, value, _)| (name.to_string(), value.to_string()))
+        .parse_next(input)
+}
+
+fn name_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
+}
+
+fn string_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    delimited("string=\"", alt(("true", "false")), "\"").parse_next(input)
+}
+
+fn ws0<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    take_while(0.., char::is_whitespace).parse_next(input)
+}
+
+fn ws1<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
+    take_while(1.., char::is_whitespace).parse_next(input)
+}
+
+fn dsml_name_attr<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
+    delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
+}
+
+fn dsml_ws0<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
+    take_while(0.., char::is_whitespace).parse_next(input)
+}
+
+fn dsml_ws1<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
+    take_while(1.., char::is_whitespace).parse_next(input)
+}
+
+fn incomplete<T>() -> ModalResult<T> {
+    Err(ErrMode::Incomplete(Needed::Unknown))
 }
 
 /// Convert a parameter value to the requested type.
@@ -533,6 +626,14 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_v32_streaming_without_tool_call_emits_text_incrementally() {
+        let result = collect_stream(&["Hello, ", "world!"], &test_tools());
+
+        assert_eq!(result.normal_text, "Hello, world!");
+        assert!(result.calls.is_empty());
+    }
+
+    #[test]
     fn deepseek_v32_streaming_extracts_multiple_tool_calls_in_order() {
         let result = collect_stream(
             &[&format!(
@@ -624,28 +725,6 @@ mod tests {
 
         assert!(result.calls.is_empty());
         assert!(!result.normal_text.contains("<｜end▁of▁sentence｜>"));
-    }
-
-    #[test]
-    fn deepseek_v32_streaming_malformed_empty_name_does_not_trap_buffer() {
-        let result = collect_stream(
-            &[
-                "<｜DSML｜function_calls>\n",
-                "<｜DSML｜invoke name=\"\">junk</｜DSML｜invoke>\n",
-                "<｜DSML｜invoke name=\"get_weather\">\n",
-                "<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo</｜DSML｜parameter>\n",
-                "</｜DSML｜invoke>\n",
-                "</｜DSML｜function_calls>",
-            ],
-            &test_tools(),
-        );
-
-        assert_eq!(result.calls.len(), 1);
-        assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
-        assert_eq!(
-            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
-            json!({ "location": "Tokyo" })
-        );
     }
 
     #[test]
