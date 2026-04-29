@@ -197,7 +197,7 @@ fn convert_value(param_type: &JsonParamType, value: &str) -> Option<Value> {
             .ok()
             .map(Number::from)
             .map(Value::Number),
-        JsonParamType::Number => value.parse::<Number>().ok().map(Value::Number),
+        JsonParamType::Number => convert_number(value),
         JsonParamType::Boolean => convert_boolean(value),
         JsonParamType::Object | JsonParamType::Array => serde_json::from_str(value).ok(),
         JsonParamType::Null => value.eq_ignore_ascii_case("null").then_some(Value::Null),
@@ -205,6 +205,14 @@ fn convert_value(param_type: &JsonParamType, value: &str) -> Option<Value> {
             .iter()
             .find_map(|param_type| convert_value(param_type, value)),
     }
+}
+
+/// Convert one raw string value to a JSON number.
+fn convert_number(value: &str) -> Option<Value> {
+    if let Ok(parsed) = value.parse::<i64>() {
+        return Some(Value::Number(Number::from(parsed)));
+    }
+    Number::from_f64(value.parse::<f64>().ok()?).map(Value::Number)
 }
 
 /// Convert one raw string value to a boolean.
@@ -278,6 +286,26 @@ mod tests {
         assert_eq!(params.convert("payload", r#"{"k":1}"#), json!({ "k": 1 }));
         assert_eq!(params.convert("items", "[1,2]"), json!([1, 2]));
         assert_eq!(params.convert("nothing", "null"), json!(null));
+    }
+
+    #[test]
+    fn number_conversion_parses_int_then_float() {
+        let params = ToolSchema::from_schema(&json!({
+            "type": "object",
+            "properties": {
+                "value": { "type": "number" }
+            }
+        }));
+
+        assert_eq!(params.convert("value", "5"), json!(5));
+        assert_eq!(params.convert("value", "5.0"), json!(5.0));
+        assert_eq!(params.convert("value", "5."), json!(5.0));
+        assert_eq!(params.convert("value", "+1"), json!(1));
+        assert_eq!(params.convert("value", "+1.0"), json!(1.0));
+        assert_eq!(
+            params.convert("value", "9223372036854775807.5"),
+            json!(9223372036854775808.0)
+        );
     }
 
     #[test]
