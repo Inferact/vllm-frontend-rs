@@ -55,7 +55,8 @@ impl ToolSchemas {
         let tool_schema = self.tools.get(function_name).cloned().unwrap_or_default();
         let mut converted = serde_json::Map::new();
         for (name, value) in params {
-            converted.insert(name.clone(), tool_schema.convert(&name, &value));
+            let value = tool_schema.convert(&name, &value);
+            converted.insert(name, value);
         }
         converted
     }
@@ -83,13 +84,13 @@ impl ToolSchema {
     /// If the parameter name is unknown, or we don't have a schema for it, or the value fails to
     /// convert, this falls back to returning the raw string as a JSON string value.
     fn convert(&self, name: &str, value: &str) -> Value {
-        let Some(param_type) = self.params.get(name) else {
-            return Value::String(value.to_string());
-        };
-
         if value.eq_ignore_ascii_case("null") {
             return Value::Null;
         }
+
+        let Some(param_type) = self.params.get(name) else {
+            return Value::String(value.to_string());
+        };
 
         convert_value(param_type, value).unwrap_or_else(|| Value::String(value.to_string()))
     }
@@ -245,7 +246,7 @@ mod tests {
         let params = ToolSchema::from_schema(&json!({ "type": "object" }));
 
         assert_eq!(params.convert("count", "42"), json!("42"));
-        assert_eq!(params.convert("count", "null"), json!("null"));
+        assert_eq!(params.convert("count", "null"), json!(null));
     }
 
     #[test]
@@ -471,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_converts_everything_as_string() {
+    fn unknown_tool_converts_values_without_schema() {
         let schemas = ToolSchemas::from_tools(&[test_tool(
             "search",
             json!({ "type": "object", "properties": {} }),
@@ -488,6 +489,6 @@ mod tests {
 
         assert_eq!(converted.get("query"), Some(&json!("rust")));
         assert_eq!(converted.get("topn"), Some(&json!("5")));
-        assert_eq!(converted.get("nullish"), Some(&json!("null")));
+        assert_eq!(converted.get("nullish"), Some(&json!(null)));
     }
 }
