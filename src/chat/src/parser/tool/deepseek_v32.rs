@@ -116,7 +116,7 @@ impl DeepSeekV32ToolParser {
             DsmlEvent::Invoke { name, raw_params } => {
                 let arguments = self
                     .tool_parameters
-                    .convert_params_with_schema(&name, raw_params)?;
+                    .convert_params_with_schema(&name, raw_params);
                 let arguments = serde_json::to_string(&arguments)
                     .map_err(|error| parsing_failed!("failed to serialize arguments: {}", error))?;
 

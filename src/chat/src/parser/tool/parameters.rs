@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use serde_json::{Number, Value};
 
-use super::{Result, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
 /// Normalized parameter schemas for all tools in one request.
@@ -47,24 +46,18 @@ impl ToolSchemas {
 
     /// Convert raw string parameter values for one named tool.
     ///
-    /// Returns an error if the tool name is unknown.
+    /// Unknown tool names use an empty schema, so all parameters fall back to strings.
     pub(super) fn convert_params_with_schema(
         &self,
         function_name: &str,
         params: Vec<(String, String)>,
-    ) -> Result<serde_json::Map<String, Value>> {
-        let Some(tool_parameters) = self.tools.get(function_name) else {
-            return Err(parsing_failed!(
-                "unknown tool call function: {}",
-                function_name
-            ));
-        };
-
+    ) -> serde_json::Map<String, Value> {
+        let tool_schema = self.tools.get(function_name).cloned().unwrap_or_default();
         let mut converted = serde_json::Map::new();
         for (name, value) in params {
-            converted.insert(name.clone(), tool_parameters.convert(&name, &value));
+            converted.insert(name.clone(), tool_schema.convert(&name, &value));
         }
-        Ok(converted)
+        converted
     }
 }
 
@@ -383,15 +376,13 @@ mod tests {
             }),
         )]);
 
-        let converted = schemas
-            .convert_params_with_schema(
-                "search",
-                vec![
-                    ("query".to_string(), "rust".to_string()),
-                    ("topn".to_string(), "5".to_string()),
-                ],
-            )
-            .unwrap();
+        let converted = schemas.convert_params_with_schema(
+            "search",
+            vec![
+                ("query".to_string(), "rust".to_string()),
+                ("topn".to_string(), "5".to_string()),
+            ],
+        );
 
         assert_eq!(converted.get("query"), Some(&json!("rust")));
         assert_eq!(converted.get("topn"), Some(&json!(5)));
@@ -413,19 +404,17 @@ mod tests {
             }),
         )]);
 
-        let converted = schemas
-            .convert_params_with_schema(
-                "convert",
-                vec![
-                    ("whole".to_string(), "not-a-number".to_string()),
-                    ("flag".to_string(), "maybe".to_string()),
-                    ("payload".to_string(), "not-json".to_string()),
-                    ("items".to_string(), "not-json".to_string()),
-                    ("missing_type".to_string(), "42".to_string()),
-                    ("unknown_param".to_string(), "42".to_string()),
-                ],
-            )
-            .unwrap();
+        let converted = schemas.convert_params_with_schema(
+            "convert",
+            vec![
+                ("whole".to_string(), "not-a-number".to_string()),
+                ("flag".to_string(), "maybe".to_string()),
+                ("payload".to_string(), "not-json".to_string()),
+                ("items".to_string(), "not-json".to_string()),
+                ("missing_type".to_string(), "42".to_string()),
+                ("unknown_param".to_string(), "42".to_string()),
+            ],
+        );
 
         assert_eq!(converted.get("whole"), Some(&json!("not-a-number")));
         assert_eq!(converted.get("flag"), Some(&json!("maybe")));
@@ -448,23 +437,29 @@ mod tests {
         )]);
 
         let converted = schemas
-            .convert_params_with_schema("convert", vec![("value".to_string(), "NULL".to_string())])
-            .unwrap();
+            .convert_params_with_schema("convert", vec![("value".to_string(), "NULL".to_string())]);
 
         assert_eq!(converted.get("value"), Some(&json!(null)));
     }
 
     #[test]
-    fn rejects_unknown_tool() {
+    fn unknown_tool_converts_everything_as_string() {
         let schemas = ToolSchemas::from_tools(&[test_tool(
             "search",
             json!({ "type": "object", "properties": {} }),
         )]);
 
-        let error = schemas
-            .convert_params_with_schema("missing", vec![("query".to_string(), "rust".to_string())])
-            .unwrap_err();
+        let converted = schemas.convert_params_with_schema(
+            "missing",
+            vec![
+                ("query".to_string(), "rust".to_string()),
+                ("topn".to_string(), "5".to_string()),
+                ("nullish".to_string(), "null".to_string()),
+            ],
+        );
 
-        assert!(error.to_string().contains("missing"));
+        assert_eq!(converted.get("query"), Some(&json!("rust")));
+        assert_eq!(converted.get("topn"), Some(&json!("5")));
+        assert_eq!(converted.get("nullish"), Some(&json!("null")));
     }
 }
