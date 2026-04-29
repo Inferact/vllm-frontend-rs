@@ -4,7 +4,7 @@ use winnow::combinator::{alt, delimited, eof, repeat, terminated};
 use winnow::error::{ErrMode, Needed};
 use winnow::prelude::*;
 use winnow::stream::{Offset, Partial, Stream};
-use winnow::token::{literal, take_until};
+use winnow::token::{literal, rest, take_until};
 
 use super::utils::partial_prefix_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
@@ -23,6 +23,7 @@ type DsmlInput<'i> = Partial<&'i str>;
 enum DsmlMode {
     Text,
     ToolBlock,
+    Done,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,11 +32,12 @@ enum DsmlEvent {
         len: usize,
     },
     ToolCallsStart,
-    ToolCallsEnd,
     Invoke {
         name: String,
         raw_params: Vec<(String, String)>,
     },
+    ToolCallsEnd,
+    IgnoredRest,
 }
 
 /// Tool parser for DeepSeek V3.2 models.
@@ -90,7 +92,6 @@ impl DeepSeekV32ToolParser {
                 result.normal_text.push_str(&self.buffer[..consumed_len]);
             }
             DsmlEvent::ToolCallsStart => self.mode = DsmlMode::ToolBlock,
-            DsmlEvent::ToolCallsEnd => self.mode = DsmlMode::Text,
             DsmlEvent::Invoke { name, raw_params } => {
                 let arguments = self.convert_params_with_schema(&name, raw_params)?;
                 let arguments = serde_json::to_string(&arguments)
@@ -103,6 +104,8 @@ impl DeepSeekV32ToolParser {
                 });
                 self.emitted_invoke_count += 1;
             }
+            DsmlEvent::ToolCallsEnd => self.mode = DsmlMode::Done,
+            DsmlEvent::IgnoredRest => {}
         };
         Ok(())
     }
@@ -235,6 +238,7 @@ fn parse_next_dsml_event(input: &mut DsmlInput<'_>, mode: DsmlMode) -> ModalResu
     match mode {
         DsmlMode::Text => parse_text_event(input),
         DsmlMode::ToolBlock => parse_tool_block_event(input),
+        DsmlMode::Done => ignored_rest_event(input),
     }
 }
 
@@ -246,7 +250,7 @@ fn parse_text_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
 /// Parse a tool-block DSML event.
 fn parse_tool_block_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     ws0.void().parse_next(input)?;
-    alt((tool_calls_end_event, invoke_event)).parse_next(input)
+    alt((invoke_event, tool_calls_end_event)).parse_next(input)
 }
 
 /// Parse a DSML function-calls start marker.
@@ -261,6 +265,11 @@ fn tool_calls_end_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
     literal(TOOL_CALLS_END)
         .value(DsmlEvent::ToolCallsEnd)
         .parse_next(input)
+}
+
+/// Parse a trailing rest after DSML function calls.
+fn ignored_rest_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
+    rest.value(DsmlEvent::IgnoredRest).parse_next(input)
 }
 
 /// Parse a safe text run before the next DSML marker.
@@ -726,6 +735,42 @@ mod tests {
 
         assert!(result.calls.is_empty());
         assert!(!result.normal_text.contains("<｜end▁of▁sentence｜>"));
+    }
+
+    #[test]
+    fn deepseek_v32_streaming_drops_eos_after_complete_tool_calls() {
+        let result = collect_stream(
+            &[
+                "<｜DSML｜function_calls>\n",
+                "<｜DSML｜invoke name=\"get_weather\">\n",
+                "<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n",
+                "</｜DSML｜invoke>\n",
+                "</｜DSML｜function_calls><｜end▁of▁sentence｜>",
+            ],
+            &test_tools(),
+        );
+
+        assert!(result.normal_text.is_empty());
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
+    }
+
+    #[test]
+    fn deepseek_v32_streaming_ignores_text_after_complete_tool_calls() {
+        let result = collect_stream(
+            &[
+                "<｜DSML｜function_calls>\n",
+                "<｜DSML｜invoke name=\"get_weather\">\n",
+                "<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n",
+                "</｜DSML｜invoke>\n",
+                "</｜DSML｜function_calls>",
+                "trailing text",
+            ],
+            &test_tools(),
+        );
+
+        assert!(result.normal_text.is_empty());
+        assert_eq!(result.calls.len(), 1);
     }
 
     #[test]
