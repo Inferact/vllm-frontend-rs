@@ -4,7 +4,7 @@ use super::{ToolParseResult, ToolParser};
 use crate::request::ChatTool;
 
 /// Build a reusable set of function tools for parser unit tests.
-pub(super) fn test_tools() -> Vec<ChatTool> {
+pub fn test_tools() -> Vec<ChatTool> {
     vec![
         ChatTool {
             name: "get_weather".to_string(),
@@ -82,7 +82,7 @@ pub(super) fn test_tools() -> Vec<ChatTool> {
 }
 
 /// Push chunks through a streaming parser and coalesce its tool-call deltas.
-pub(super) fn collect_stream(parser: &mut impl ToolParser, chunks: &[&str]) -> ToolParseResult {
+pub fn collect_stream<T: ToolParser + ?Sized>(parser: &mut T, chunks: &[&str]) -> ToolParseResult {
     let mut result = ToolParseResult::default();
     for chunk in chunks {
         result.append(parser.push(chunk).unwrap());
@@ -92,7 +92,7 @@ pub(super) fn collect_stream(parser: &mut impl ToolParser, chunks: &[&str]) -> T
 }
 
 /// Split text into chunks containing at most `chunk_chars` Unicode scalar values.
-pub(super) fn split_by_chars(text: &str, chunk_chars: usize) -> Vec<&str> {
+pub fn split_by_chars(text: &str, chunk_chars: usize) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut start = 0;
     let mut count = 0;

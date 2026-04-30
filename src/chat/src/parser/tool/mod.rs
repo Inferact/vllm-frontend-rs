@@ -14,8 +14,8 @@ mod gemma4;
 mod parameters;
 mod qwen_coder;
 pub(super) mod streaming;
-#[cfg(test)]
-mod test_utils;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils;
 mod utils;
 
 use std::collections::{BTreeMap, btree_map};
