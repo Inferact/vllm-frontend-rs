@@ -45,5 +45,9 @@ zeromq.workspace = true
 name = "deepseek_v32_tool_parser"
 harness = false
 
+[[bench]]
+name = "qwen3_coder_tool_parser"
+harness = false
+
 [lints]
 workspace = true
