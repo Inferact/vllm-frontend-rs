@@ -1,12 +1,11 @@
 use winnow::ascii::multispace0 as ws0;
 use winnow::combinator::{alt, delimited, eof, repeat, terminated};
-use winnow::error::ErrMode;
 use winnow::prelude::*;
-use winnow::stream::{Offset, Partial, Stream};
+use winnow::stream::Partial;
 use winnow::token::{literal, take_until};
 
 use super::parameters::ToolSchemas;
-use super::utils::safe_text_len;
+use super::utils::{parse_buffered_event, safe_text_len};
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
@@ -123,23 +122,9 @@ impl ToolParser for Qwen3CoderToolParser {
         self.buffer.push_str(chunk);
         let mut result = ToolParseResult::default();
 
-        loop {
-            let mut input = Partial::new(self.buffer.as_str());
-            let checkpoint = input.checkpoint();
-            let event = match parse_next_qwen_coder_event(&mut input, self.mode) {
-                Ok(event) => event,
-                Err(ErrMode::Incomplete(_)) => break,
-                Err(error) => {
-                    return Err(parsing_failed!(
-                        "failed to parse Qwen Coder event: {}",
-                        error
-                    ));
-                }
-            };
-            let consumed_len = input.offset_from(&checkpoint);
-            if consumed_len == 0 {
-                break;
-            }
+        while let Some((event, consumed_len)) = parse_buffered_event(&self.buffer, |input| {
+            parse_next_qwen_coder_event(input, self.mode)
+        })? {
             self.apply_event(event, &mut result)?;
             self.buffer.drain(..consumed_len);
         }
@@ -246,7 +231,9 @@ fn trim_one_wrapping_newline(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use expect_test::expect;
     use serde_json::{Value, json};
+    use thiserror_ext::AsReport;
 
     use super::{Qwen3CoderToolParser, ToolParser};
     use crate::request::ChatTool;
@@ -508,11 +495,7 @@ mod tests {
         let mut parser = Qwen3CoderToolParser::new(&test_tools());
         let error = parser.push("<tool_call>\n<bad>\n</tool_call>").unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("failed to parse Qwen Coder event")
-        );
+        expect!["tool parser parsing failed: "].assert_eq(&error.to_report_string());
     }
 
     #[test]
@@ -524,11 +507,7 @@ mod tests {
             )
             .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("failed to parse Qwen Coder event")
-        );
+        expect!["tool parser parsing failed: "].assert_eq(&error.to_report_string());
     }
 
     #[test]

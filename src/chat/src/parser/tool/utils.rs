@@ -1,7 +1,9 @@
 //! Shared helpers for tool parsers.
 
 use winnow::error::{ErrMode, ModalResult, Needed};
-use winnow::stream::{Partial, Stream};
+use winnow::stream::{Offset, Partial, Stream};
+
+use super::{Result, ToolParserError, parsing_failed};
 
 /// Return the byte length of the longest proper prefix of `token` that is also
 /// a suffix of `buffer`.
@@ -45,6 +47,35 @@ pub(super) fn safe_text_len(input: &mut Partial<&str>, marker: &str) -> ModalRes
 
     input.next_slice(emit_len);
     Ok(emit_len)
+}
+
+/// Parse one event from a buffered streaming input.
+///
+/// Returns:
+/// - `Ok(Some((event, consumed_len)))` if an event was successfully parsed, along with the number
+///   of bytes consumed from the buffer.
+/// - `Ok(None)` if the buffer does not contain a full event yet, and more data is needed.
+/// - `Err` if a parsing error occurred.
+pub(super) fn parse_buffered_event<E>(
+    buffer: &str,
+    parse: impl FnOnce(&mut Partial<&str>) -> ModalResult<E>,
+) -> Result<Option<(E, usize)>> {
+    let mut input = Partial::new(buffer);
+    let checkpoint = input.checkpoint();
+    let event = match parse(&mut input) {
+        Ok(event) => event,
+        Err(ErrMode::Incomplete(_)) => return Ok(None),
+        Err(ErrMode::Backtrack(e) | ErrMode::Cut(e)) => {
+            // TODO: enrich context for error reporting
+            return Err(parsing_failed!("{}", e));
+        }
+    };
+    let consumed_len = input.offset_from(&checkpoint);
+    if consumed_len == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some((event, consumed_len)))
 }
 
 /// Returns an error indicating that we need more data to continue parsing.

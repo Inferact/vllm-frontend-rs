@@ -1,12 +1,11 @@
 use winnow::ascii::{multispace0 as ws0, multispace1 as ws1};
 use winnow::combinator::{alt, delimited, eof, repeat, terminated};
-use winnow::error::ErrMode;
 use winnow::prelude::*;
-use winnow::stream::{Offset, Partial, Stream};
+use winnow::stream::Partial;
 use winnow::token::{literal, rest, take_until};
 
 use super::parameters::ToolSchemas;
-use super::utils::safe_text_len;
+use super::utils::{parse_buffered_event, safe_text_len};
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
@@ -169,20 +168,9 @@ impl ToolParser for DeepSeekV32ToolParser {
         self.buffer.push_str(chunk);
         let mut result = ToolParseResult::default();
 
-        loop {
-            let mut input = Partial::new(self.buffer.as_str());
-            let checkpoint = input.checkpoint();
-            let event = match parse_next_dsml_event(&mut input, self.mode, self.tokens) {
-                Ok(event) => event,
-                Err(ErrMode::Incomplete(_)) => break,
-                Err(error) => {
-                    return Err(parsing_failed!("failed to parse DSML event: {}", error));
-                }
-            };
-            let consumed_len = input.offset_from(&checkpoint);
-            if consumed_len == 0 {
-                break;
-            }
+        while let Some((event, consumed_len)) = parse_buffered_event(&self.buffer, |input| {
+            parse_next_dsml_event(input, self.mode, self.tokens)
+        })? {
             self.apply_event(event, &mut result)?;
             self.buffer.drain(..consumed_len);
         }
