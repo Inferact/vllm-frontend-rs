@@ -2,7 +2,6 @@
 
 use futures::FutureExt as _;
 use openai_protocol::common::{Function as OpenAiFunction, Tool as OpenAiTool};
-use tool_parser::parsers::QwenCoderParser as ExternalQwenCoderParser;
 use tool_parser::traits::ToolParser as ExternalToolParser;
 use vllm_chat::test_utils::tool_parser::collect_stream;
 use vllm_chat::{ChatTool, ToolParser};
@@ -28,7 +27,7 @@ pub(super) fn feed_parser(parser: &mut dyn ToolParser, chunks: &[&str]) -> (Stri
 }
 
 pub(super) fn feed_external_parser(
-    parser: &mut ExternalQwenCoderParser,
+    parser: &mut impl ExternalToolParser,
     tools: &[OpenAiTool],
     chunks: &[&str],
 ) -> (String, usize) {
