@@ -347,3 +347,23 @@ fn drop_thinking_false_keeps_prior_assistant_reasoning() {
     )
     .assert_eq(&rendered);
 }
+
+#[test]
+fn continue_final_assistant_omits_final_eos() {
+    let request = ChatRequest {
+        messages: vec![
+            ChatMessage::user("write"),
+            ChatMessage::assistant_text("partial answer"),
+        ],
+        chat_options: crate::request::ChatOptions {
+            generation_prompt_mode: GenerationPromptMode::ContinueFinalAssistant,
+            ..Default::default()
+        },
+        ..ChatRequest::for_test()
+    };
+
+    let rendered = render_request(&request);
+
+    expect!["<｜begin▁of▁sentence｜><｜User｜>write<｜Assistant｜></think>partial answer"]
+        .assert_eq(&rendered);
+}

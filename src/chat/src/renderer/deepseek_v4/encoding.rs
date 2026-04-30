@@ -96,7 +96,9 @@ pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
                 // strictly after the last user turn.
                 let emit_thinking_block = thinking_mode == ThinkingMode::Thinking
                     && (!drop_thinking || current_render_index > last_user_render_index);
-                render_assistant_message(&mut out, emit_thinking_block, content)?;
+                let append_eos = !(message_index + 1 == request.messages.len()
+                    && request.chat_options.continue_final_message());
+                render_assistant_message(&mut out, emit_thinking_block, append_eos, content)?;
             }
             ChatMessage::ToolResponse { .. } => {
                 render_tool_response_block(&mut out, request.messages.as_slice(), message_index)?;
@@ -429,6 +431,7 @@ fn write_assistant_transition(
 fn render_assistant_message(
     out: &mut String,
     emit_thinking_block: bool,
+    append_eos: bool,
     content: &[AssistantContentBlock],
 ) -> Result<()> {
     let has_tool_calls = content.has_tool_calls();
@@ -453,7 +456,9 @@ fn render_assistant_message(
         out.push_str("\n</｜DSML｜tool_calls>");
     }
 
-    out.push_str(EOS_TOKEN);
+    if append_eos {
+        out.push_str(EOS_TOKEN);
+    }
     Ok(())
 }
 
