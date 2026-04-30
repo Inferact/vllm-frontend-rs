@@ -1,12 +1,12 @@
 use winnow::ascii::{multispace0 as ws0, multispace1 as ws1};
 use winnow::combinator::{alt, delimited, eof, repeat, terminated};
-use winnow::error::{ErrMode, Needed};
+use winnow::error::ErrMode;
 use winnow::prelude::*;
 use winnow::stream::{Offset, Partial, Stream};
 use winnow::token::{literal, rest, take_until};
 
 use super::parameters::ToolSchemas;
-use super::utils::partial_prefix_len;
+use super::utils::safe_text_len;
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
@@ -253,24 +253,7 @@ fn ignored_rest_event(input: &mut DsmlInput<'_>) -> ModalResult<DsmlEvent> {
 
 /// Parse a safe text run before the next DSML marker.
 fn safe_text_event(input: &mut DsmlInput<'_>, tokens: DsmlTokens) -> ModalResult<DsmlEvent> {
-    let text = **input;
-    if text.is_empty() {
-        return incomplete();
-    }
-
-    if let Some(start_idx) = text.find(tokens.tool_calls_start) {
-        input.next_slice(start_idx);
-        return Ok(DsmlEvent::Text { len: start_idx });
-    }
-
-    let keep_len = partial_prefix_len(text, tokens.tool_calls_start);
-    let emit_len = text.len().saturating_sub(keep_len);
-    if emit_len == 0 {
-        return incomplete();
-    }
-
-    input.next_slice(emit_len);
-    Ok(DsmlEvent::Text { len: emit_len })
+    safe_text_len(input, tokens.tool_calls_start).map(|len| DsmlEvent::Text { len })
 }
 
 /// Parse a DSML invoke block.
@@ -328,11 +311,6 @@ fn string_attr<'i>(input: &mut &'i str) -> ModalResult<&'i str> {
 /// Parse a DSML name attribute.
 fn dsml_name_attr<'i>(input: &mut DsmlInput<'i>) -> ModalResult<&'i str> {
     delimited("name=\"", take_until(1.., "\""), "\"").parse_next(input)
-}
-
-/// Parse an incomplete streaming boundary.
-fn incomplete<T>() -> ModalResult<T> {
-    Err(ErrMode::Incomplete(Needed::Unknown))
 }
 
 #[cfg(test)]
