@@ -38,9 +38,6 @@ enum QwenCoderEvent {
 
 /// Tool parser for Qwen Coder XML-style tool calls.
 ///
-/// Original Python implementation:
-/// <https://github.com/vllm-project/vllm/blob/bf45e6d0a558da2b8d7b60efb07b4aa394f3b60b/vllm/tool_parsers/qwen3coder_tool_parser.py>
-///
 /// Example tool call content:
 ///
 /// ```text
@@ -51,11 +48,7 @@ enum QwenCoderEvent {
 /// </tool_call>
 /// ```
 ///
-/// Streaming strategy: **buffer until one complete tool call closes**
-///
-/// Qwen Coder arguments are emitted only after a full
-/// `<tool_call>...</tool_call>` block is available. Plain assistant text is
-/// still emitted incrementally before the next possible tool-call marker.
+/// Arguments are emitted only after a full `tool_call` block is parsed.
 pub struct Qwen3CoderToolParser {
     buffer: String,
     mode: QwenCoderMode,
@@ -236,40 +229,7 @@ mod tests {
     use thiserror_ext::AsReport;
 
     use super::{Qwen3CoderToolParser, ToolParser};
-    use crate::request::ChatTool;
-
-    fn test_tools() -> Vec<ChatTool> {
-        vec![
-            ChatTool {
-                name: "get_weather".to_string(),
-                description: None,
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "location": { "type": "string" },
-                        "date": { "type": "string" },
-                        "days": { "type": "integer" }
-                    }
-                }),
-                strict: None,
-            },
-            ChatTool {
-                name: "convert".to_string(),
-                description: None,
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "whole": { "type": "number" },
-                        "flag": { "type": "boolean" },
-                        "payload": { "type": "object" },
-                        "items": { "type": "array" },
-                        "empty": { "type": "string" }
-                    }
-                }),
-                strict: None,
-            },
-        ]
-    }
+    use crate::parser::tool::test_utils::{collect_stream, split_by_chars, test_tools};
 
     fn build_tool_call(function_name: &str, params: &[(&str, &str)]) -> String {
         let params = params
@@ -278,37 +238,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         format!("<tool_call>\n<function={function_name}>\n{params}\n</function>\n</tool_call>")
-    }
-
-    fn collect_stream(chunks: &[&str], tools: &[ChatTool]) -> crate::parser::tool::ToolParseResult {
-        let mut parser = Qwen3CoderToolParser::new(tools);
-        let mut result = crate::parser::tool::ToolParseResult::default();
-        for chunk in chunks {
-            result.append(parser.push(chunk).unwrap());
-        }
-        result.append(parser.finish().unwrap());
-        result.coalesce_calls()
-    }
-
-    fn split_by_chars(text: &str, chunk_chars: usize) -> Vec<&str> {
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        let mut count = 0;
-
-        for (index, _) in text.char_indices() {
-            if count == chunk_chars {
-                chunks.push(&text[start..index]);
-                start = index;
-                count = 0;
-            }
-            count += 1;
-        }
-
-        if start < text.len() {
-            chunks.push(&text[start..]);
-        }
-
-        chunks
     }
 
     #[test]
@@ -385,8 +314,131 @@ mod tests {
     }
 
     #[test]
+    fn qwen_coder_parse_complete_extracts_empty_arguments() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = parser
+            .parse_complete(&build_tool_call("get_weather", &[]))
+            .unwrap();
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn qwen_coder_parse_complete_handles_upstream_multiline_typed_params() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = parser
+            .parse_complete(
+                "<tool_call>\n\
+                 <function=calculate_area>\n\
+                 <parameter=shape>\n\
+                 rectangle\n\
+                 </parameter>\n\
+                 <parameter=dimensions>\n\
+                 {\"width\": 10,\n\
+                  \"height\": 20}\n\
+                 </parameter>\n\
+                 <parameter=precision>\n\
+                 2\n\
+                 </parameter>\n\
+                 </function>\n\
+                 </tool_call>",
+            )
+            .unwrap();
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(result.calls[0].name.as_deref(), Some("calculate_area"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({
+                "shape": "rectangle",
+                "dimensions": { "width": 10, "height": 20 },
+                "precision": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn qwen_coder_parse_complete_handles_nested_json_parameter() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = parser
+            .parse_complete(&build_tool_call(
+                "convert",
+                &[(
+                    "payload",
+                    r#"{"nested":{"value":[1,2,3],"child":{"enabled":true}}}"#,
+                )],
+            ))
+            .unwrap();
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({
+                "payload": {
+                    "nested": {
+                        "value": [1, 2, 3],
+                        "child": { "enabled": true },
+                    },
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn qwen_coder_parse_complete_preserves_xml_like_parameter_values() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = parser
+            .parse_complete(&build_tool_call(
+                "process",
+                &[
+                    (
+                        "html_content",
+                        r#"<div class="test"><span>Hello</span></div>"#,
+                    ),
+                    ("xml_snippet", r#"<root><child attr="value"/></root>"#),
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({
+                "html_content": r#"<div class="test"><span>Hello</span></div>"#,
+                "xml_snippet": r#"<root><child attr="value"/></root>"#,
+            })
+        );
+    }
+
+    #[test]
+    fn qwen_coder_parse_complete_does_not_double_encode_anyof_object() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = parser
+            .parse_complete(&build_tool_call(
+                "update_record",
+                &[("data", r#"{"key":"value","count":42}"#)],
+            ))
+            .unwrap();
+
+        assert_eq!(result.calls.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({
+                "data": { "key": "value", "count": 42 },
+            })
+        );
+    }
+
+    #[test]
     fn qwen_coder_streaming_extracts_single_tool_call() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
         let result = collect_stream(
+            &mut parser,
             &[
                 "<tool_call>\n",
                 "<function=get_weather>\n",
@@ -394,7 +446,6 @@ mod tests {
                 "</function>\n",
                 "</tool_call>",
             ],
-            &test_tools(),
         );
 
         assert!(result.normal_text.is_empty());
@@ -408,7 +459,9 @@ mod tests {
 
     #[test]
     fn qwen_coder_streaming_preserves_prefix_text() {
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
         let result = collect_stream(
+            &mut parser,
             &[
                 "Thinking... ",
                 "<tool_call>\n",
@@ -417,7 +470,6 @@ mod tests {
                 "</function>\n",
                 "</tool_call>",
             ],
-            &test_tools(),
         );
 
         assert_eq!(result.normal_text, "Thinking... ");
@@ -426,7 +478,8 @@ mod tests {
 
     #[test]
     fn qwen_coder_streaming_without_tool_call_emits_text_incrementally() {
-        let result = collect_stream(&["Hello, ", "world!"], &test_tools());
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = collect_stream(&mut parser, &["Hello, ", "world!"]);
 
         assert_eq!(result.normal_text, "Hello, world!");
         assert!(result.calls.is_empty());
@@ -439,7 +492,8 @@ mod tests {
             build_tool_call("get_weather", &[("location", "SF")]),
             build_tool_call("get_weather", &[("location", "NYC")])
         );
-        let result = collect_stream(&[&text], &test_tools());
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = collect_stream(&mut parser, &[&text]);
 
         assert_eq!(result.calls.len(), 2);
         assert_eq!(result.calls[0].name.as_deref(), Some("get_weather"));
@@ -457,10 +511,37 @@ mod tests {
     }
 
     #[test]
+    fn qwen_coder_streaming_preserves_text_between_tool_calls() {
+        let text = format!(
+            "I'll check two cities.{}Between calls.{}Done.",
+            build_tool_call("get_weather", &[("city", "Dallas"), ("state", "TX")]),
+            build_tool_call("get_weather", &[("city", "Orlando"), ("state", "FL")])
+        );
+        let chunks = split_by_chars(&text, 5);
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = collect_stream(&mut parser, &chunks);
+
+        assert_eq!(
+            result.normal_text,
+            "I'll check two cities.Between calls.Done."
+        );
+        assert_eq!(result.calls.len(), 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
+            json!({ "city": "Dallas", "state": "TX" })
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.calls[1].arguments).unwrap(),
+            json!({ "city": "Orlando", "state": "FL" })
+        );
+    }
+
+    #[test]
     fn qwen_coder_streaming_handles_start_token_split_across_chunks() {
         let text = build_tool_call("get_weather", &[("location", "SF")]);
         let chunks = split_by_chars(&text, 3);
-        let result = collect_stream(&chunks, &test_tools());
+        let mut parser = Qwen3CoderToolParser::new(&test_tools());
+        let result = collect_stream(&mut parser, &chunks);
 
         assert_eq!(result.calls.len(), 1);
         assert_eq!(
