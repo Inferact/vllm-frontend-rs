@@ -216,7 +216,7 @@ fn parameter(input: &mut MinimaxM2Input<'_>) -> ModalResult<(String, String)> {
     )
         .parse_next(input)?;
 
-    Ok((name.trim().to_string(), value.trim().to_string()))
+    Ok((name.trim().to_string(), value.to_string()))
 }
 
 /// Parse a quoted or unquoted XML attribute value.
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&result.calls[0].arguments).unwrap(),
             json!({
-                "shape": "rectangle",
+                "shape": "\nrectangle\n",
                 "dimensions": { "width": 10, "height": 20 },
                 "precision": 2,
             })
