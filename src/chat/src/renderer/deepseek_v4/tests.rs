@@ -1,13 +1,15 @@
 use std::fs;
 use std::path::PathBuf;
 
-use expect_test::{ExpectFile, expect_file};
+use expect_test::{ExpectFile, expect, expect_file};
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::DeepSeekV4ChatRenderer;
 use crate::event::{AssistantContentBlock, AssistantToolCall};
-use crate::request::{ChatMessage, ChatRequest, ChatTool, ChatToolChoice, GenerationPromptMode};
+use crate::request::{
+    ChatMessage, ChatRequest, ChatTool, ChatToolChoice, GenerationPromptMode, ReasoningEffort,
+};
 use crate::{ChatRenderer, ChatRole};
 
 #[derive(Debug, Deserialize)]
@@ -210,4 +212,65 @@ fn renders_v4_fixture_2_multi_turn_drop_thinking() {
         "test_input_2.json",
         expect_file!["fixtures/test_output_2.txt"],
     );
+}
+
+#[test]
+fn reasoning_effort_max_adds_prefix_when_thinking_is_enabled() {
+    let mut request = ChatRequest {
+        messages: vec![ChatMessage::user("solve it")],
+        ..ChatRequest::for_test()
+    };
+    request
+        .chat_options
+        .template_kwargs
+        .insert("thinking".to_string(), Value::Bool(true));
+    request.chat_options.reasoning_effort = Some(ReasoningEffort::Max);
+
+    let rendered = render_request(&request);
+
+    expect![[r#"
+        <｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.
+        You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.
+        Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.
+
+        <｜User｜>solve it<｜Assistant｜><think>"#]]
+    .assert_eq(&rendered);
+}
+
+#[test]
+fn reasoning_effort_none_disables_thinking() {
+    let mut request = ChatRequest {
+        messages: vec![ChatMessage::user("answer directly")],
+        ..ChatRequest::for_test()
+    };
+    request
+        .chat_options
+        .template_kwargs
+        .insert("thinking".to_string(), Value::Bool(true));
+    request.chat_options.reasoning_effort = Some(ReasoningEffort::None);
+
+    let rendered = render_request(&request);
+
+    expect!["<｜begin▁of▁sentence｜><｜User｜>answer directly<｜Assistant｜></think>"]
+        .assert_eq(&rendered);
+}
+
+#[test]
+fn reasoning_effort_template_kwarg_is_ignored() {
+    let mut request = ChatRequest {
+        messages: vec![ChatMessage::user("solve it")],
+        ..ChatRequest::for_test()
+    };
+    request
+        .chat_options
+        .template_kwargs
+        .insert("thinking".to_string(), Value::Bool(true));
+    request.chat_options.template_kwargs.insert(
+        "reasoning_effort".to_string(),
+        Value::String("max".to_string()),
+    );
+
+    let rendered = render_request(&request);
+
+    expect!["<｜begin▁of▁sentence｜><｜User｜>solve it<｜Assistant｜><think>"].assert_eq(&rendered);
 }

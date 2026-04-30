@@ -10,7 +10,7 @@ use serde_json::Value;
 use serde_json_fmt::JsonFormat;
 
 use crate::error::{Error, Result};
-use crate::request::{ChatContent, ChatMessage, ChatRequest, ChatTool};
+use crate::request::{ChatContent, ChatMessage, ChatRequest, ChatTool, ReasoningEffort};
 use crate::{AssistantContentBlock, AssistantMessageExt, AssistantToolCall};
 
 const BOS_TOKEN: &str = "<｜begin▁of▁sentence｜>";
@@ -20,6 +20,11 @@ const THINKING_END_TOKEN: &str = "</think>";
 const DSML_TOKEN: &str = "｜DSML｜";
 const USER_SP_TOKEN: &str = "<｜User｜>";
 const ASSISTANT_SP_TOKEN: &str = "<｜Assistant｜>";
+const REASONING_EFFORT_MAX: &str = concat!(
+    "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n",
+    "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n",
+    "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n",
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThinkingMode {
@@ -39,16 +44,16 @@ struct RenderedToolSchema<'a> {
 
 /// Render one chat request into the final prompt string.
 pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
-    let thinking_mode = match request.enable_thinking()?.unwrap_or(false) {
-        true => ThinkingMode::Thinking,
-        false => ThinkingMode::Chat,
-    };
+    let (thinking_mode, max_reasoning_effort) = resolve_thinking_options(request)?;
     let request_tools = request_tools(request);
     let synthetic_tool_system = needs_synthetic_tool_system(request, request_tools);
     let drop_thinking = !rendered_tools_present(request, request_tools);
     let last_user_render_index =
         find_last_user_render_index(request.messages.as_slice(), synthetic_tool_system);
     let mut out = String::from(BOS_TOKEN);
+    if thinking_mode == ThinkingMode::Thinking && max_reasoning_effort {
+        out.push_str(REASONING_EFFORT_MAX);
+    }
 
     let mut request_tools_attached = false;
     let mut render_index = 0isize;
@@ -107,6 +112,25 @@ pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     }
 
     Ok(out)
+}
+
+/// Resolve DeepSeek V4's thinking controls. Unlike the Python tokenizer wrapper,
+/// the Rust renderer only consumes the typed top-level `reasoning_effort`; the
+/// generic template-kwargs map is left for HF templates.
+fn resolve_thinking_options(request: &ChatRequest) -> Result<(ThinkingMode, bool)> {
+    let mut thinking_mode = match request.enable_thinking()?.unwrap_or(false) {
+        true => ThinkingMode::Thinking,
+        false => ThinkingMode::Chat,
+    };
+    let mut max_reasoning_effort = false;
+
+    match request.chat_options.reasoning_effort {
+        Some(ReasoningEffort::None) => thinking_mode = ThinkingMode::Chat,
+        Some(ReasoningEffort::Max | ReasoningEffort::XHigh) => max_reasoning_effort = true,
+        Some(_) | None => {}
+    }
+
+    Ok((thinking_mode, max_reasoning_effort))
 }
 
 /// Return request-level tools only when native tool parsing is enabled.
