@@ -3,6 +3,7 @@
 //! Original Python implementation:
 //! <https://github.com/vllm-project/vllm/blob/main/vllm/tokenizers/deepseek_v4_encoding.py>
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use serde::Serialize;
@@ -47,7 +48,10 @@ pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     let (thinking_mode, max_reasoning_effort) = resolve_thinking_options(request)?;
     let request_tools = request_tools(request);
     let synthetic_tool_system = needs_synthetic_tool_system(request, request_tools);
-    let drop_thinking = !rendered_tools_present(request, request_tools);
+    let drop_thinking = request
+        .parse_template_bool("drop_thinking")?
+        .unwrap_or(true)
+        && !rendered_tools_present(request, request_tools);
     let last_user_render_index =
         find_last_user_render_index(request.messages.as_slice(), synthetic_tool_system);
     let mut out = String::from(BOS_TOKEN);
@@ -321,14 +325,15 @@ fn render_tool_response_block(
     messages: &[ChatMessage],
     message_index: usize,
 ) -> Result<()> {
-    let (_, block_end) = tool_response_block_bounds(messages, message_index);
+    let (block_start, block_end) = tool_response_block_bounds(messages, message_index);
+    let sorted_indices = sorted_tool_response_indices(messages, block_start, block_end);
 
     out.push_str(USER_SP_TOKEN);
-    for (offset, message) in messages[message_index..block_end].iter().enumerate() {
+    for (offset, message_index) in sorted_indices.iter().enumerate() {
         if offset > 0 {
             out.push_str("\n\n");
         }
-        let ChatMessage::ToolResponse { content, .. } = message else {
+        let ChatMessage::ToolResponse { content, .. } = &messages[*message_index] else {
             unreachable!("tool response block should only contain tool messages");
         };
         write_tool_result(out, content)?;
@@ -352,6 +357,48 @@ fn tool_response_block_bounds(messages: &[ChatMessage], actual_index: usize) -> 
     }
 
     (block_start, block_end)
+}
+
+fn sorted_tool_response_indices(
+    messages: &[ChatMessage],
+    block_start: usize,
+    block_end: usize,
+) -> Vec<usize> {
+    let Some(tool_call_order) = last_tool_call_order_before(messages, block_start) else {
+        return (block_start..block_end).collect();
+    };
+
+    let mut indices = (block_start..block_end).collect::<Vec<_>>();
+    indices.sort_by_key(|index| {
+        let ChatMessage::ToolResponse { tool_call_id, .. } = &messages[*index] else {
+            unreachable!("tool response block should only contain tool messages");
+        };
+        tool_call_order
+            .get(tool_call_id.as_str())
+            .copied()
+            .unwrap_or(0)
+    });
+    indices
+}
+
+fn last_tool_call_order_before(
+    messages: &[ChatMessage],
+    message_index: usize,
+) -> Option<HashMap<&str, usize>> {
+    let mut tool_call_order = None;
+    for message in &messages[..message_index] {
+        if let ChatMessage::Assistant { content } = message {
+            let order = content
+                .tool_calls()
+                .enumerate()
+                .map(|(index, tool_call)| (tool_call.id.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            if !order.is_empty() {
+                tool_call_order = Some(order);
+            }
+        }
+    }
+    tool_call_order
 }
 
 /// Render one tool response payload inside a V4 `<tool_result>` block.

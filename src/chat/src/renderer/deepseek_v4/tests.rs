@@ -274,3 +274,76 @@ fn reasoning_effort_template_kwarg_is_ignored() {
 
     expect!["<｜begin▁of▁sentence｜><｜User｜>solve it<｜Assistant｜><think>"].assert_eq(&rendered);
 }
+
+#[test]
+fn tool_results_are_sorted_by_previous_assistant_tool_call_order() {
+    let request = ChatRequest {
+        messages: vec![
+            ChatMessage::assistant_blocks(vec![
+                AssistantContentBlock::ToolCall(AssistantToolCall {
+                    id: "second".to_string(),
+                    name: "second_tool".to_string(),
+                    arguments: "{}".to_string(),
+                }),
+                AssistantContentBlock::ToolCall(AssistantToolCall {
+                    id: "first".to_string(),
+                    name: "first_tool".to_string(),
+                    arguments: "{}".to_string(),
+                }),
+            ]),
+            ChatMessage::tool_response("first result", "first"),
+            ChatMessage::tool_response("second result", "second"),
+        ],
+        ..ChatRequest::for_test()
+    };
+
+    let rendered = render_request(&request);
+
+    expect![[r#"
+        <｜begin▁of▁sentence｜>
+
+        <｜DSML｜tool_calls>
+        <｜DSML｜invoke name="second_tool">
+
+        </｜DSML｜invoke>
+        <｜DSML｜invoke name="first_tool">
+
+        </｜DSML｜invoke>
+        </｜DSML｜tool_calls><｜end▁of▁sentence｜><｜User｜><tool_result>second result</tool_result>
+
+        <tool_result>first result</tool_result><｜Assistant｜></think>"#]]
+    .assert_eq(&rendered);
+}
+
+#[test]
+fn drop_thinking_false_keeps_prior_assistant_reasoning() {
+    let mut request = ChatRequest {
+        messages: vec![
+            ChatMessage::assistant_blocks(vec![
+                AssistantContentBlock::Reasoning {
+                    text: "old reasoning".to_string(),
+                },
+                AssistantContentBlock::Text {
+                    text: "old answer".to_string(),
+                },
+            ]),
+            ChatMessage::user("next"),
+        ],
+        ..ChatRequest::for_test()
+    };
+    request
+        .chat_options
+        .template_kwargs
+        .insert("thinking".to_string(), Value::Bool(true));
+    request
+        .chat_options
+        .template_kwargs
+        .insert("drop_thinking".to_string(), Value::Bool(false));
+
+    let rendered = render_request(&request);
+
+    expect!(
+        "<｜begin▁of▁sentence｜>old reasoning</think>old answer<｜end▁of▁sentence｜><｜User｜>next<｜Assistant｜><think>"
+    )
+    .assert_eq(&rendered);
+}
