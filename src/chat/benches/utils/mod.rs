@@ -4,7 +4,7 @@ use futures::FutureExt as _;
 use openai_protocol::common::{Function as OpenAiFunction, Tool as OpenAiTool};
 use tool_parser::parsers::QwenCoderParser as ExternalQwenCoderParser;
 use tool_parser::traits::ToolParser as ExternalToolParser;
-use vllm_chat::test_utils::collect_stream;
+use vllm_chat::test_utils::tool_parser::collect_stream;
 use vllm_chat::{ChatTool, ToolParser};
 
 pub(super) fn openai_tools(tools: &[ChatTool]) -> Vec<OpenAiTool> {
