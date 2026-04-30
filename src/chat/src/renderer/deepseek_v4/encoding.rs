@@ -37,197 +37,162 @@ struct RenderedToolSchema<'a> {
     strict: Option<bool>,
 }
 
-/// One pre-processed entry, mirroring Python's post-merge message list.
-///
-/// Tool-response messages are folded into a preceding pseudo-`User` entry that
-/// carries `<tool_result>...</tool_result>` blocks alongside any plain user
-/// text, matching `merge_tool_messages()` in the Python encoder.
-enum RenderEntry<'a> {
-    System {
-        content: Option<&'a ChatContent>,
-        tools: &'a [ChatTool],
-    },
-    Developer {
-        content: &'a ChatContent,
-        tools: &'a [ChatTool],
-    },
-    User {
-        blocks: Vec<UserBlock<'a>>,
-    },
-    Assistant {
-        content: &'a [AssistantContentBlock],
-    },
-}
-
-enum UserBlock<'a> {
-    Text(&'a ChatContent),
-    ToolResult(&'a ChatContent),
-}
-
-impl<'a> RenderEntry<'a> {
-    fn is_user_like(&self) -> bool {
-        matches!(
-            self,
-            RenderEntry::User { .. } | RenderEntry::Developer { .. }
-        )
-    }
-}
-
 /// Render one chat request into the final prompt string.
 pub(super) fn render_request(request: &ChatRequest) -> Result<String> {
     let thinking_mode = match request.enable_thinking()?.unwrap_or(false) {
         true => ThinkingMode::Thinking,
         false => ThinkingMode::Chat,
     };
-
-    let entries = preprocess_messages(request)?;
-
-    // Mirror Python: if any rendered message carries tools, keep historical
-    // assistant reasoning instead of dropping it.
-    let any_tools = entries.iter().any(|entry| match entry {
-        RenderEntry::System { tools, .. } | RenderEntry::Developer { tools, .. } => {
-            !tools.is_empty()
-        }
-        _ => false,
-    });
-    let drop_thinking = !any_tools;
-
-    let last_user_idx = entries
-        .iter()
-        .rposition(RenderEntry::is_user_like)
-        .map(|idx| idx as isize)
-        .unwrap_or(-1);
-
+    let request_tools = request_tools(request);
+    let synthetic_tool_system = needs_synthetic_tool_system(request, request_tools);
+    let drop_thinking = !rendered_tools_present(request, request_tools);
+    let last_user_render_index =
+        find_last_user_render_index(request.messages.as_slice(), synthetic_tool_system);
     let mut out = String::from(BOS_TOKEN);
 
-    for (idx, entry) in entries.iter().enumerate() {
-        let idx_isize = idx as isize;
-        let opens_thinking = idx_isize >= last_user_idx;
+    let mut request_tools_attached = false;
+    let mut render_index = 0isize;
+    if synthetic_tool_system {
+        render_system_message(&mut out, None, request_tools)?;
+        request_tools_attached = true;
+        render_index += 1;
+    }
 
-        match entry {
-            RenderEntry::System { content, tools } => {
-                render_system_message(&mut out, *content, tools)?;
+    for (message_index, message) in request.messages.iter().enumerate() {
+        if is_following_tool_response(request.messages.as_slice(), message_index) {
+            continue;
+        }
+
+        let current_render_index = render_index;
+        render_index += 1;
+
+        match message {
+            ChatMessage::System { content } => {
+                let tools = if !request_tools_attached {
+                    request_tools_attached = true;
+                    request_tools
+                } else {
+                    &[]
+                };
+                render_system_message(&mut out, Some(content), tools)?;
             }
-            RenderEntry::Developer { content, tools } => {
-                render_developer_message(&mut out, content, tools)?;
+            ChatMessage::Developer { content, tools } => {
+                render_developer_message(&mut out, content, tools.as_deref().unwrap_or(&[]))?;
             }
-            RenderEntry::User { blocks } => {
-                render_user_message(&mut out, blocks)?;
-            }
-            RenderEntry::Assistant { content } => {
+            ChatMessage::User { content } => render_user_message(&mut out, content)?,
+            ChatMessage::Assistant { content } => {
                 // Mirror Python: thinking block (reasoning + </think>) is
                 // emitted whenever thinking is active and reasoning isn't
-                // dropped — i.e. drop_thinking is off OR this turn lies
+                // dropped - i.e. drop_thinking is off OR this turn lies
                 // strictly after the last user turn.
                 let emit_thinking_block = thinking_mode == ThinkingMode::Thinking
-                    && (!drop_thinking || idx_isize > last_user_idx);
+                    && (!drop_thinking || current_render_index > last_user_render_index);
                 render_assistant_message(&mut out, emit_thinking_block, content)?;
+            }
+            ChatMessage::ToolResponse { .. } => {
+                render_tool_response_block(&mut out, request.messages.as_slice(), message_index)?;
             }
         }
 
-        // Append the assistant transition after a user-like turn whose
-        // following entry is an assistant turn (or end-of-list).
-        let next_is_assistant = entries
-            .get(idx + 1)
-            .map(|e| matches!(e, RenderEntry::Assistant { .. }))
-            .unwrap_or(true);
-
-        if entry.is_user_like() && next_is_assistant {
-            out.push_str(ASSISTANT_SP_TOKEN);
-            let want_thinking_start =
-                thinking_mode == ThinkingMode::Thinking && (!drop_thinking || opens_thinking);
-            if want_thinking_start {
-                out.push_str(THINKING_START_TOKEN);
-            } else {
-                out.push_str(THINKING_END_TOKEN);
-            }
+        if is_user_like_entry(message)
+            && next_rendered_entry_is_assistant_or_end(request.messages.as_slice(), message_index)
+        {
+            write_assistant_transition(
+                &mut out,
+                thinking_mode,
+                drop_thinking,
+                current_render_index >= last_user_render_index,
+            );
         }
     }
 
     Ok(out)
 }
 
-/// Build the post-merge entry list.
-///
-/// `request.tools` are attached to the first system message, mirroring the
-/// fixture-generation convention where top-level tools live on the first
-/// message. If no system message exists, a synthetic empty system entry is
-/// prepended to carry the tools.
-fn preprocess_messages(request: &ChatRequest) -> Result<Vec<RenderEntry<'_>>> {
-    let mut entries: Vec<RenderEntry<'_>> = Vec::with_capacity(request.messages.len() + 1);
-    let mut tools_attached = false;
-    let request_tools = if request.tool_parsing_enabled() {
+/// Return request-level tools only when native tool parsing is enabled.
+fn request_tools(request: &ChatRequest) -> &[ChatTool] {
+    if request.tool_parsing_enabled() {
         request.tools.as_slice()
     } else {
         &[]
-    };
+    }
+}
 
-    // Index of the last entry that owns an active tool-result run, or `None`
-    // when the next ToolResponse should start a fresh user entry.
-    let mut tool_run_idx: Option<usize> = None;
+/// Return whether request tools need a synthetic leading system entry.
+fn needs_synthetic_tool_system(request: &ChatRequest, request_tools: &[ChatTool]) -> bool {
+    !request_tools.is_empty()
+        && !request
+            .messages
+            .iter()
+            .any(|message| matches!(message, ChatMessage::System { .. }))
+}
 
-    for message in &request.messages {
-        match message {
-            ChatMessage::System { content } => {
-                let tools = if !tools_attached {
-                    tools_attached = true;
-                    request_tools
-                } else {
-                    &[][..]
-                };
-                entries.push(RenderEntry::System {
-                    content: Some(content),
-                    tools,
-                });
-                tool_run_idx = None;
-            }
-            ChatMessage::Developer { content, tools } => {
-                let dev_tools = tools.as_deref().unwrap_or(&[]);
-                entries.push(RenderEntry::Developer {
-                    content,
-                    tools: dev_tools,
-                });
-                tool_run_idx = None;
-            }
-            ChatMessage::User { content } => {
-                entries.push(RenderEntry::User {
-                    blocks: vec![UserBlock::Text(content)],
-                });
-                tool_run_idx = None;
-            }
-            ChatMessage::Assistant { content } => {
-                entries.push(RenderEntry::Assistant { content });
-                tool_run_idx = None;
-            }
-            ChatMessage::ToolResponse { content, .. } => {
-                let block = UserBlock::ToolResult(content);
-                if let Some(idx) = tool_run_idx
-                    && let Some(RenderEntry::User { blocks }) = entries.get_mut(idx)
-                {
-                    blocks.push(block);
-                } else {
-                    entries.push(RenderEntry::User {
-                        blocks: vec![block],
-                    });
-                    tool_run_idx = Some(entries.len() - 1);
-                }
-            }
+/// Return whether any rendered message carries tool schemas.
+fn rendered_tools_present(request: &ChatRequest, request_tools: &[ChatTool]) -> bool {
+    !request_tools.is_empty()
+        || request.messages.iter().any(|message| {
+            matches!(
+                message,
+                ChatMessage::Developer {
+                    tools: Some(tools),
+                    ..
+                } if !tools.is_empty()
+            )
+        })
+}
+
+/// Find the last user-like turn after inline tool-response merging.
+fn find_last_user_render_index(messages: &[ChatMessage], synthetic_tool_system: bool) -> isize {
+    let mut render_index = isize::from(synthetic_tool_system);
+    let mut last_user_index = -1;
+
+    for (message_index, message) in messages.iter().enumerate() {
+        if is_following_tool_response(messages, message_index) {
+            continue;
+        }
+
+        if is_user_like_entry(message) {
+            last_user_index = render_index;
+        }
+        render_index += 1;
+    }
+
+    last_user_index
+}
+
+/// Return whether this tool message is already covered by a previous tool run.
+fn is_following_tool_response(messages: &[ChatMessage], message_index: usize) -> bool {
+    matches!(messages[message_index], ChatMessage::ToolResponse { .. })
+        && message_index > 0
+        && matches!(
+            messages[message_index - 1],
+            ChatMessage::ToolResponse { .. }
+        )
+}
+
+/// Return whether one rendered entry should be treated as user-like.
+fn is_user_like_entry(message: &ChatMessage) -> bool {
+    matches!(
+        message,
+        ChatMessage::Developer { .. } | ChatMessage::User { .. } | ChatMessage::ToolResponse { .. }
+    )
+}
+
+/// Return whether the next rendered entry is assistant, or there is no next entry.
+fn next_rendered_entry_is_assistant_or_end(messages: &[ChatMessage], message_index: usize) -> bool {
+    let mut next_index = message_index + 1;
+    if matches!(messages[message_index], ChatMessage::ToolResponse { .. }) {
+        while next_index < messages.len()
+            && matches!(messages[next_index], ChatMessage::ToolResponse { .. })
+        {
+            next_index += 1;
         }
     }
 
-    // If request.tools were never attached (no system message exists), prepend
-    // a synthetic empty system entry to carry them.
-    if !tools_attached && !request_tools.is_empty() {
-        entries.insert(
-            0,
-            RenderEntry::System {
-                content: None,
-                tools: request_tools,
-            },
-        );
-    }
-
-    Ok(entries)
+    messages
+        .get(next_index)
+        .map(|message| matches!(message, ChatMessage::Assistant { .. }))
+        .unwrap_or(true)
 }
 
 /// Render the tool preamble shown to the model, V4 flavor.
@@ -271,6 +236,7 @@ Otherwise, output directly after </think> with tool calls or final response.
     Ok(())
 }
 
+/// Serialize one typed tool schema into the JSON shape embedded in the prompt.
 fn render_tool_schema(out: &mut String, tool: &ChatTool) -> Result<()> {
     out.push_str(&json_dumps(&RenderedToolSchema {
         name: &tool.name,
@@ -281,6 +247,7 @@ fn render_tool_schema(out: &mut String, tool: &ChatTool) -> Result<()> {
     Ok(())
 }
 
+/// Render a system turn, optionally followed by the V4 tool preamble.
 fn render_system_message(
     out: &mut String,
     content: Option<&ChatContent>,
@@ -296,6 +263,7 @@ fn render_system_message(
     Ok(())
 }
 
+/// Developer messages are rendered as user-like turns with optional tools.
 fn render_developer_message(
     out: &mut String,
     content: &ChatContent,
@@ -316,38 +284,77 @@ fn render_developer_message(
     Ok(())
 }
 
-fn render_user_message(out: &mut String, blocks: &[UserBlock<'_>]) -> Result<()> {
+/// Render one plain user turn.
+fn render_user_message(out: &mut String, content: &ChatContent) -> Result<()> {
     out.push_str(USER_SP_TOKEN);
+    write_chat_content(out, content)?;
+    Ok(())
+}
 
-    let only_text = blocks
-        .iter()
-        .all(|block| matches!(block, UserBlock::Text(_)));
+/// Render a contiguous tool-response run as one synthetic user turn.
+fn render_tool_response_block(
+    out: &mut String,
+    messages: &[ChatMessage],
+    message_index: usize,
+) -> Result<()> {
+    let (_, block_end) = tool_response_block_bounds(messages, message_index);
 
-    if only_text {
-        for block in blocks {
-            if let UserBlock::Text(content) = block {
-                write_chat_content(out, content)?;
-            }
+    out.push_str(USER_SP_TOKEN);
+    for (offset, message) in messages[message_index..block_end].iter().enumerate() {
+        if offset > 0 {
+            out.push_str("\n\n");
         }
-    } else {
-        for (index, block) in blocks.iter().enumerate() {
-            if index > 0 {
-                out.push_str("\n\n");
-            }
-            match block {
-                UserBlock::Text(content) => write_chat_content(out, content)?,
-                UserBlock::ToolResult(content) => {
-                    out.push_str("<tool_result>");
-                    write_chat_content(out, content)?;
-                    out.push_str("</tool_result>");
-                }
-            }
-        }
+        let ChatMessage::ToolResponse { content, .. } = message else {
+            unreachable!("tool response block should only contain tool messages");
+        };
+        write_tool_result(out, content)?;
     }
 
     Ok(())
 }
 
+/// Return the contiguous tool-response block containing `actual_index`.
+fn tool_response_block_bounds(messages: &[ChatMessage], actual_index: usize) -> (usize, usize) {
+    let mut block_start = actual_index;
+    while block_start > 0 && matches!(messages[block_start - 1], ChatMessage::ToolResponse { .. }) {
+        block_start -= 1;
+    }
+
+    let mut block_end = actual_index + 1;
+    while block_end < messages.len()
+        && matches!(messages[block_end], ChatMessage::ToolResponse { .. })
+    {
+        block_end += 1;
+    }
+
+    (block_start, block_end)
+}
+
+/// Render one tool response payload inside a V4 `<tool_result>` block.
+fn write_tool_result(out: &mut String, content: &ChatContent) -> Result<()> {
+    out.push_str("<tool_result>");
+    write_chat_content(out, content)?;
+    out.push_str("</tool_result>");
+    Ok(())
+}
+
+/// Append the assistant transition token after a user-like turn.
+fn write_assistant_transition(
+    out: &mut String,
+    thinking_mode: ThinkingMode,
+    drop_thinking: bool,
+    opens_thinking: bool,
+) {
+    out.push_str(ASSISTANT_SP_TOKEN);
+    if thinking_mode == ThinkingMode::Thinking && (!drop_thinking || opens_thinking) {
+        out.push_str(THINKING_START_TOKEN);
+    } else {
+        out.push_str(THINKING_END_TOKEN);
+    }
+}
+
+/// Render one assistant turn, including optional reasoning, DSML tool calls,
+/// and the trailing EOS marker.
 fn render_assistant_message(
     out: &mut String,
     emit_thinking_block: bool,
@@ -379,6 +386,7 @@ fn render_assistant_message(
     Ok(())
 }
 
+/// Render one assistant tool call in DSML XML-like format.
 fn render_tool_call(out: &mut String, tool_call: &AssistantToolCall) -> Result<()> {
     writeln!(out, "<{DSML_TOKEN}invoke name=\"{}\">", tool_call.name)
         .expect("writing to String cannot fail");
@@ -387,6 +395,10 @@ fn render_tool_call(out: &mut String, tool_call: &AssistantToolCall) -> Result<(
     Ok(())
 }
 
+/// Convert one assistant tool-call arguments object into DSML parameter form.
+///
+/// String values are emitted raw with `string="true"`, while all other JSON
+/// values are rendered with JSON syntax and `string="false"`.
 fn encode_arguments_to_dsml(out: &mut String, tool_call: &AssistantToolCall) -> Result<()> {
     let arguments: Value = serde_json::from_str(&tool_call.arguments).map_err(|error| {
         Error::ChatTemplate(format!(
@@ -425,6 +437,8 @@ fn encode_arguments_to_dsml(out: &mut String, tool_call: &AssistantToolCall) -> 
     Ok(())
 }
 
+/// Write chat content directly into the destination buffer without flattening
+/// it into an intermediate `String`.
 fn write_chat_content(out: &mut String, content: &ChatContent) -> Result<()> {
     match content {
         ChatContent::Text(text) => out.push_str(text),
@@ -437,6 +451,7 @@ fn write_chat_content(out: &mut String, content: &ChatContent) -> Result<()> {
     Ok(())
 }
 
+/// Write all reasoning blocks in encounter order.
 fn write_assistant_reasoning(out: &mut String, content: &[AssistantContentBlock]) {
     for block in content {
         if let AssistantContentBlock::Reasoning { text } = block {
@@ -445,6 +460,7 @@ fn write_assistant_reasoning(out: &mut String, content: &[AssistantContentBlock]
     }
 }
 
+/// Write all visible assistant text blocks in encounter order.
 fn write_assistant_text(out: &mut String, content: &[AssistantContentBlock]) {
     for block in content {
         if let AssistantContentBlock::Text { text } = block {
@@ -453,6 +469,7 @@ fn write_assistant_text(out: &mut String, content: &[AssistantContentBlock]) {
     }
 }
 
+/// Compact JSON serialization used by this renderer for exact prompt text.
 fn json_dumps<T: Serialize>(value: &T) -> Result<String> {
     JsonFormat::new()
         .comma(", ")

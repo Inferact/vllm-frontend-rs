@@ -20,7 +20,10 @@ pub use event::{
     AssistantToolCall, ChatEvent,
 };
 use futures::{StreamExt, TryStreamExt as _};
-pub use output::{ChatOutputProcessor, DefaultChatOutputProcessor, DynChatOutputProcessor};
+pub use output::{
+    ChatOutputProcessor, DefaultChatOutputProcessor, DynChatOutputProcessor,
+    HarmonyChatOutputProcessor,
+};
 pub use parser::ParserSelection;
 pub use parser::reasoning::{
     ReasoningDelta, ReasoningError, ReasoningParser, ReasoningParserFactory,
@@ -46,6 +49,13 @@ mod parser;
 mod renderer;
 mod request;
 mod stream;
+
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils {
+    //! Test and benchmark helpers.
+
+    pub use crate::parser::tool::test_utils as tool_parser;
+}
 
 use vllm_engine_core_client::EngineCoreClient;
 use vllm_llm::Llm;

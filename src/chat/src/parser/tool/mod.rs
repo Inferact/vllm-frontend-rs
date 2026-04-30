@@ -11,7 +11,12 @@ mod deepseek_v32;
 mod deepseek_v4;
 mod external;
 mod gemma4;
+mod minimax_m2;
+mod parameters;
+mod qwen_coder;
 pub(super) mod streaming;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils;
 mod utils;
 
 use std::collections::{BTreeMap, btree_map};
@@ -30,6 +35,8 @@ pub use deepseek_v4::DeepSeekV4ToolParser;
 pub use deepseek_v32::DeepSeekV32ToolParser;
 pub use external::*;
 pub use gemma4::Gemma4ToolParser;
+pub use minimax_m2::MinimaxM2ToolParser;
+pub use qwen_coder::Qwen3CoderToolParser;
 
 /// Canonical public names for registered tool parsers.
 pub mod names {
@@ -213,6 +220,7 @@ impl ToolParserFactory {
             .register_pattern("llama-", names::JSON)
             .register_pattern("deepseek-r1", names::DEEPSEEK_V3)
             .register_pattern("deepseek-v4", names::DEEPSEEK_V4)
+            .register_pattern("deepseek_v4", names::DEEPSEEK_V4)
             .register_pattern("deepseek-v3.2", names::DEEPSEEK_V32)
             .register_pattern("deepseek-v3.1", names::DEEPSEEK_V31)
             .register_pattern("deepseek-v3", names::DEEPSEEK_V3)
