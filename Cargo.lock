@@ -266,7 +266,8 @@ dependencies = [
 [[package]]
 name = "asynk-strim-attr"
 version = "0.1.0"
-source = "git+https://github.com/BugenZhao/asynk-strim-attr.git?rev=7434a9e6c98519fc57b8f154254be770d009ce7a#7434a9e6c98519fc57b8f154254be770d009ce7a"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6ccb67be092524ce594e599332719f1cd6d64dcaed8d46f1e8726d466c10bcb"
 dependencies = [
  "asynk-strim",
  "asynk-strim-attr-macro",
@@ -276,7 +277,8 @@ dependencies = [
 [[package]]
 name = "asynk-strim-attr-macro"
 version = "0.1.0"
-source = "git+https://github.com/BugenZhao/asynk-strim-attr.git?rev=7434a9e6c98519fc57b8f154254be770d009ce7a#7434a9e6c98519fc57b8f154254be770d009ce7a"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34e40a2181bb16fb68e25c49c8b3e25bbb9a808bf8f9f83bc596ac4ad70c86a1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
