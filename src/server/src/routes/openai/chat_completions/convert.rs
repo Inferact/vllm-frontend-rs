@@ -344,7 +344,7 @@ mod tests {
 
     use super::prepare_chat_request;
     use crate::routes::openai::chat_completions::types::{
-        ChatCompletionMessage, ChatCompletionRequest,
+        AssistantLiteral, ChatCompletionMessage, ChatCompletionRequest,
     };
     use crate::routes::openai::utils::types::{
         ChatMessage, ContentPart, Function, FunctionCallResponse, ImageUrl, MessageContent, Tool,
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn prepare_chat_request_accepts_assistant_reasoning_history() {
         let message = ChatCompletionMessage {
-            role: "assistant".to_string(),
+            role: AssistantLiteral,
             content: Some("answer".to_string()),
             tool_calls: None,
             reasoning: Some("inner".to_string()),
