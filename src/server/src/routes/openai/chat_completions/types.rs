@@ -352,9 +352,9 @@ pub(super) struct ChatCompletionChoice {
 /// A literal type for the "assistant" role, since the API only allows that specific value in
 /// responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SerializeDisplay)]
-pub(super) struct AssistantLiteral;
+pub(super) struct AssistantRole;
 
-impl fmt::Display for AssistantLiteral {
+impl fmt::Display for AssistantRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("assistant")
     }
@@ -364,7 +364,7 @@ impl fmt::Display for AssistantLiteral {
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ChatCompletionMessage {
-    pub role: AssistantLiteral,
+    pub role: AssistantRole,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub reasoning: Option<String>,
@@ -414,7 +414,7 @@ pub(super) struct ChatCompletionStreamChoice {
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct ChatMessageDelta {
-    pub role: Option<AssistantLiteral>,
+    pub role: Option<AssistantRole>,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCallDelta>>,
     pub reasoning: Option<String>,

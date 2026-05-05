@@ -26,7 +26,7 @@ use vllm_engine_core_client::protocol::StopReason;
 use crate::error::{ApiError, bail_server_error, server_error};
 use crate::routes::openai::chat_completions::convert::prepare_chat_request;
 use crate::routes::openai::chat_completions::types::{
-    AssistantLiteral, ChatCompletionChoice, ChatCompletionMessage, ChatCompletionRequest,
+    AssistantRole, ChatCompletionChoice, ChatCompletionMessage, ChatCompletionRequest,
     ChatCompletionResponse, ChatCompletionStreamChoice, ChatCompletionStreamResponse,
     ChatMessageDelta,
 };
@@ -203,7 +203,7 @@ async fn collect_chat_completion(
         choices: vec![ChatCompletionChoice {
             index: 0,
             message: ChatCompletionMessage {
-                role: AssistantLiteral,
+                role: AssistantRole,
                 content: match &echo {
                     Some(prefix) => Some(format!("{prefix}{}", message.text())),
                     None => Some(message.text()).filter(|t| !t.is_empty()),
@@ -613,7 +613,7 @@ fn start_chunk(
     let mut chunk = ChatCompletionStreamResponse::new(request_id, response_model, created);
     chunk.choices.push(ChatCompletionStreamChoice {
         delta: ChatMessageDelta {
-            role: Some(AssistantLiteral),
+            role: Some(AssistantRole),
             ..Default::default()
         },
         ..Default::default()
