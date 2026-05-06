@@ -4,6 +4,7 @@ members = [
     "src/cmd",
     "src/engine-core-client",
     "src/llm",
+    "src/managed-engine",
     "src/metrics",
     "src/server",
     "src/text",
@@ -95,6 +96,7 @@ validator = { version = "0.20.0", features = ["derive"] }
 vllm-chat = { path = "src/chat" }
 vllm-engine-core-client = { path = "src/engine-core-client" }
 vllm-llm = { path = "src/llm" }
+vllm-managed-engine = { path = "src/managed-engine" }
 vllm-metrics = { path = "src/metrics" }
 vllm-server = { path = "src/server" }
 vllm-text = { path = "src/text" }

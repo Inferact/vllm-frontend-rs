@@ -5454,7 +5454,6 @@ dependencies = [
  "educe",
  "expect-test",
  "itertools 0.14.0",
- "libc",
  "native-tls",
  "serde",
  "serde_json",
@@ -5467,6 +5466,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vllm-engine-core-client",
+ "vllm-managed-engine",
  "vllm-server",
 ]
 
@@ -5528,6 +5528,18 @@ dependencies = [
  "vllm-engine-core-client",
  "vllm-metrics",
  "zeromq",
+]
+
+[[package]]
+name = "vllm-managed-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "expect-test",
+ "libc",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
