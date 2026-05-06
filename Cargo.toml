@@ -101,10 +101,10 @@ vllm-metrics = { path = "src/metrics" }
 vllm-server = { path = "src/server" }
 vllm-text = { path = "src/text" }
 winnow = "1.0.2"
-zeromq = { git = "https://github.com/BugenZhao/zmq.rs", rev = "dde4ee5c48846b0cc22b1f4fad8c7514748180fe", default-features = false, features = [
+zeromq = { version = "0.6.0", default-features = false, features = [
     "tokio-runtime",
     "all-transport",
-] } # TODO: switch to crates.io version after the patch gets released
+] }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
