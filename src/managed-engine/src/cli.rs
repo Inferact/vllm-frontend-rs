@@ -130,35 +130,61 @@ const PYTHON_MULTI_CHAR_ALIASES: &[(&str, &str)] = &[
     ("-ac", "--attention-config"),
 ];
 
-/// If the given arguments match the specified subcommand, repartition them so
-/// Rust-owned flags stay before `--`, while everything else is forwarded to
-/// Python.
+/// Repartition managed-engine argv so Rust-owned flags stay before `--`, while
+/// everything else is forwarded to Python.
 pub fn repartition_managed_engine_args<C>(
     args: &[OsString],
-    subcommand: &str,
+    subcommand: Option<&str>,
 ) -> Result<Vec<OsString>, clap::Error>
 where
     C: CommandFactory,
 {
-    if !matches_subcommand(args, subcommand) {
+    let command = C::command();
+    let (prefix, real_args, command) = match subcommand {
+        Some(subcommand) => {
+            if !matches_subcommand(args, subcommand) {
+                return Ok(args.to_vec());
+            };
+
+            let subcommand = command
+                .find_subcommand(subcommand)
+                .expect("managed-engine subcommand should exist");
+
+            (args[..2].to_vec(), &args[2..], subcommand)
+        }
+        None => {
+            let Some(program) = args.first() else {
+                return Ok(args.to_vec());
+            };
+
+            (vec![program.clone()], &args[1..], &command)
+        }
+    };
+
+    let mut repartitioned = prefix;
+    repartitioned.extend(repartition_real_managed_engine_args(real_args, command)?);
+    Ok(repartitioned)
+}
+
+fn repartition_real_managed_engine_args(
+    args: &[OsString],
+    command: &clap::Command,
+) -> Result<Vec<OsString>, clap::Error> {
+    let Some(model) = args.first() else {
         return Ok(args.to_vec());
     };
 
-    if args.get(2).is_none() {
-        return Ok(args.to_vec());
-    }
-
-    let model = args[2].to_string_lossy();
+    let model = model.to_string_lossy();
     if is_help_flag(&model) {
         return Ok(args.to_vec());
     }
     if model == "--" || is_option_like(&model) {
-        return Err(build_missing_model_error::<C>(subcommand));
+        return Err(build_missing_model_error(command));
     }
 
-    let (front_args, explicit_passthrough, had_separator) = split_managed_engine_args(&args[3..]);
+    let (long_flags, short_flags) = collect_option_names(command);
+    let (front_args, explicit_passthrough, had_separator) = split_managed_engine_args(&args[1..]);
     let normalized_front_args = normalize_python_arg_aliases(front_args);
-    let (long_flags, short_flags) = collect_frontend_option_names::<C>(subcommand);
 
     let mut frontend_chunks = Vec::new();
     let mut python_chunks = Vec::new();
@@ -187,7 +213,7 @@ where
         );
     }
 
-    let mut repartitioned = vec![args[0].clone(), args[1].clone(), args[2].clone()];
+    let mut repartitioned = vec![args[0].clone()];
     repartitioned.extend(frontend_chunks);
     if had_separator || !python_chunks.is_empty() || !explicit_passthrough.is_empty() {
         repartitioned.push("--".into());
@@ -274,18 +300,10 @@ fn chunk_head_is_frontend_owned(
     short_flags.contains(&short)
 }
 
-fn collect_frontend_option_names<C>(subcommand: &str) -> (HashSet<String>, HashSet<char>)
-where
-    C: CommandFactory,
-{
-    let mut command = C::command();
-    let subcommand = command
-        .find_subcommand_mut(subcommand)
-        .expect("managed-engine subcommand should exist");
-
+fn collect_option_names(command: &clap::Command) -> (HashSet<String>, HashSet<char>) {
     let mut long_flags = HashSet::new();
     let mut short_flags = HashSet::new();
-    for arg in subcommand.get_arguments() {
+    for arg in command.get_arguments() {
         if let Some(names) = arg.get_long_and_visible_aliases() {
             long_flags.extend(names.into_iter().map(str::to_owned));
         }
@@ -323,17 +341,9 @@ fn is_help_flag(arg: &str) -> bool {
     arg == "-h" || arg == "--help"
 }
 
-fn build_missing_model_error<C>(subcommand: &str) -> clap::Error
-where
-    C: CommandFactory,
-{
-    let mut command = C::command();
-    let subcommand_name = subcommand.to_string();
-    let subcommand = command
-        .find_subcommand_mut(subcommand)
-        .expect("managed-engine subcommand should exist");
-    subcommand.error(
+fn build_missing_model_error(command: &clap::Command) -> clap::Error {
+    command.clone().error(
         ErrorKind::MissingRequiredArgument,
-        format!("{subcommand_name} requires the model to appear immediately after the subcommand"),
+        "the model must appear immediately after the command",
     )
 }

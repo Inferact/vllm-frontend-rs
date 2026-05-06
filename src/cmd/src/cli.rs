@@ -50,7 +50,7 @@ impl Cli {
         T: Into<OsString>,
     {
         let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
-        let repartitioned_args = repartition_managed_engine_args::<Self>(&args, "serve")?;
+        let repartitioned_args = repartition_managed_engine_args::<Self>(&args, Some("serve"))?;
         <Self as Parser>::try_parse_from(&repartitioned_args).inspect(|cli| {
             if let Command::Serve(serve) = &cli.command
                 && serve.debug_cli
