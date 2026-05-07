@@ -14,6 +14,7 @@ fastokens.workspace = true
 futures.workspace = true
 hf-hub.workspace = true
 itertools.workspace = true
+riptoken.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -38,6 +39,10 @@ vllm-llm = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name = "hf_tokenizer"
+harness = false
+
+[[bench]]
+name = "tiktoken_tokenizer"
 harness = false
 
 [lints]
