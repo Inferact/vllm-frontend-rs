@@ -128,14 +128,6 @@ impl ToolParser for Glm45MoeToolParser {
         Ok(Box::new(Self::new(tools)))
     }
 
-    /// Preserve GLM tool-call XML markers when tool parsing is enabled.
-    fn adjust_request(&self, request: &mut crate::request::ChatRequest) -> Result<()> {
-        if request.tool_parsing_enabled() {
-            request.decode_options.skip_special_tokens = false;
-        }
-        Ok(())
-    }
-
     /// Push one decoded text chunk through the GLM MoE parser.
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
         self.buffer.push_str(chunk);

@@ -26,10 +26,6 @@ impl ToolParser for Glm47MoeToolParser {
         Ok(Box::new(Self::new(tools)))
     }
 
-    fn adjust_request(&self, request: &mut crate::request::ChatRequest) -> Result<()> {
-        self.0.adjust_request(request)
-    }
-
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
         self.0.push(chunk)
     }
