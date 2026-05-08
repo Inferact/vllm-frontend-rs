@@ -1,36 +1,12 @@
-use winnow::ascii::multispace0 as ws0;
-use winnow::combinator::{alt, seq};
-use winnow::error::{ContextError, ErrMode, ModalResult, StrContext, StrContextValue};
-use winnow::prelude::*;
-use winnow::stream::Partial;
-use winnow::token::literal;
-
-use super::utils::{
-    JsonObjectScanState, json_str, parse_buffered_event, safe_text_len, take_json_object,
-};
-use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
+use super::{JsonToolCallConfig, JsonToolCallParser};
+use crate::parser::tool::{Result, ToolParseResult, ToolParser};
 use crate::request::ChatTool;
 
-const TOOL_CALL_START: &str = "<tool_call>\n";
-const TOOL_CALL_END: &str = "\n</tool_call>";
-
-type QwenXmlInput<'i> = Partial<&'i str>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum QwenXmlMode {
-    Text,
-    Header,
-    Arguments { json_scan: JsonObjectScanState },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum QwenXmlEvent {
-    Text { len: usize },
-    ToolCallStart,
-    ToolCallHeader { function_name: String },
-    Arguments { len: usize },
-    ToolCallEnd,
-}
+const QWEN_XML_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
+    parser_name: "Qwen XML",
+    start_marker: "<tool_call>\n",
+    end_marker: "\n</tool_call>",
+};
 
 /// Tool parser for Qwen XML-wrapped JSON tool calls.
 ///
@@ -48,69 +24,15 @@ enum QwenXmlEvent {
 /// Note: parallel calls are represented as repeated
 /// `<tool_call>...</tool_call>` blocks, not as multiple calls inside one tag.
 pub struct Qwen3XmlToolParser {
-    buffer: String,
-    mode: QwenXmlMode,
-    active_tool_index: Option<usize>,
-    emitted_tool_count: usize,
+    inner: JsonToolCallParser,
 }
 
 impl Qwen3XmlToolParser {
     /// Create a Qwen XML tool parser.
     fn new(_tools: &[ChatTool]) -> Self {
         Self {
-            buffer: String::new(),
-            mode: QwenXmlMode::Text,
-            active_tool_index: None,
-            emitted_tool_count: 0,
+            inner: JsonToolCallParser::new(QWEN_XML_CONFIG),
         }
-    }
-
-    /// Apply one parsed Qwen XML event to parser state and output.
-    fn apply_event(&mut self, event: QwenXmlEvent, result: &mut ToolParseResult) -> Result<()> {
-        match event {
-            QwenXmlEvent::Text { len: consumed_len } => {
-                result.normal_text.push_str(&self.buffer[..consumed_len]);
-            }
-            QwenXmlEvent::ToolCallStart => self.mode = QwenXmlMode::Header,
-            QwenXmlEvent::ToolCallHeader { function_name } => {
-                let tool_index = self.emitted_tool_count;
-                self.emitted_tool_count += 1;
-                self.active_tool_index = Some(tool_index);
-                self.mode = QwenXmlMode::Arguments {
-                    json_scan: JsonObjectScanState::default(),
-                };
-                result.calls.push(ToolCallDelta {
-                    tool_index,
-                    name: Some(function_name),
-                    arguments: String::new(),
-                });
-            }
-            QwenXmlEvent::Arguments { len: consumed_len } => {
-                let Some(tool_index) = self.active_tool_index else {
-                    return Err(parsing_failed!(
-                        "Qwen XML arguments without an active tool call"
-                    ));
-                };
-                result.calls.push(ToolCallDelta {
-                    tool_index,
-                    name: None,
-                    arguments: self.buffer[..consumed_len].to_string(),
-                });
-            }
-            QwenXmlEvent::ToolCallEnd => {
-                self.active_tool_index = None;
-                self.mode = QwenXmlMode::Text;
-            }
-        }
-        Ok(())
-    }
-
-    /// Reset all streaming state.
-    fn reset(&mut self) {
-        self.buffer.clear();
-        self.mode = QwenXmlMode::Text;
-        self.active_tool_index = None;
-        self.emitted_tool_count = 0;
     }
 }
 
@@ -125,145 +47,13 @@ impl ToolParser for Qwen3XmlToolParser {
 
     /// Push one decoded text chunk through the Qwen XML parser.
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
-        self.buffer.push_str(chunk);
-        let mut result = ToolParseResult::default();
-
-        while let Some((event, consumed_len)) = parse_buffered_event(&self.buffer, |input| {
-            parse_next_qwen_xml_event(input, &mut self.mode)
-        })? {
-            self.apply_event(event, &mut result)?;
-            self.buffer.drain(..consumed_len);
-        }
-
-        Ok(result)
+        self.inner.push(chunk)
     }
 
     /// Flush buffered text and reset parser state.
     fn finish(&mut self) -> Result<ToolParseResult> {
-        let mut result = ToolParseResult::default();
-        match &self.mode {
-            QwenXmlMode::Text => result.normal_text.push_str(&self.buffer),
-            QwenXmlMode::Header | QwenXmlMode::Arguments { .. } => {
-                return Err(parsing_failed!("incomplete Qwen XML tool call"));
-            }
-        }
-        self.reset();
-        Ok(result)
+        self.inner.finish()
     }
-}
-
-/// Parse a Qwen XML event for the current parser mode.
-fn parse_next_qwen_xml_event(
-    input: &mut QwenXmlInput<'_>,
-    mode: &mut QwenXmlMode,
-) -> ModalResult<QwenXmlEvent> {
-    match mode {
-        QwenXmlMode::Text => parse_text_event(input),
-        QwenXmlMode::Header => tool_call_header_event(input),
-        QwenXmlMode::Arguments { json_scan } => parse_arguments_event(input, json_scan),
-    }
-}
-
-/// Parse a text-mode Qwen XML event.
-fn parse_text_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
-    alt((tool_call_start_event, safe_text_event)).parse_next(input)
-}
-
-/// Parse a Qwen XML tool-call start marker.
-fn tool_call_start_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
-    literal(TOOL_CALL_START).value(QwenXmlEvent::ToolCallStart).parse_next(input)
-}
-
-/// Parse a Qwen XML tool-call header before the raw JSON arguments payload.
-fn tool_call_header_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
-    let (function_name,) = seq!(
-        _: ws0,
-        _: literal("{"),
-        _: ws0,
-        _: name_field,
-        _: ws0,
-        _: literal(":"),
-        _: ws0,
-        json_str,
-        _: ws0,
-        _: literal(","),
-        _: ws0,
-        _: arguments_field,
-        _: ws0,
-        _: literal(":"),
-        _: ws0,
-    )
-    .parse_next(input)?;
-
-    Ok(QwenXmlEvent::ToolCallHeader { function_name })
-}
-
-/// Parse a Qwen XML `name` field key.
-fn name_field(input: &mut QwenXmlInput<'_>) -> ModalResult<()> {
-    json_field(input, "name")
-}
-
-/// Parse a Qwen XML `arguments` field key.
-fn arguments_field(input: &mut QwenXmlInput<'_>) -> ModalResult<()> {
-    json_field(input, "arguments")
-}
-
-/// Parse a Qwen XML fixed-envelope field key.
-fn json_field(input: &mut QwenXmlInput<'_>, expected: &'static str) -> ModalResult<()> {
-    let actual = json_str(input)?;
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(qwen_header_error(StrContextValue::Description(
-            match expected {
-                "name" => "field `name`",
-                "arguments" => "field `arguments`",
-                _ => "expected field",
-            },
-        )))
-    }
-}
-
-/// Parse one event inside a Qwen XML tool-call arguments payload.
-fn parse_arguments_event(
-    input: &mut QwenXmlInput<'_>,
-    json_scan: &mut JsonObjectScanState,
-) -> ModalResult<QwenXmlEvent> {
-    if json_scan.complete() {
-        tool_call_end_event(input)
-    } else {
-        argument_delta_event(input, json_scan)
-    }
-}
-
-/// Parse a Qwen XML raw JSON arguments delta.
-fn argument_delta_event(
-    input: &mut QwenXmlInput<'_>,
-    json_scan: &mut JsonObjectScanState,
-) -> ModalResult<QwenXmlEvent> {
-    take_json_object(input, json_scan).map(|len| QwenXmlEvent::Arguments { len })
-}
-
-/// Parse a Qwen XML tool-call end marker.
-fn tool_call_end_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
-    seq!(
-        _: literal("}"),
-        _: literal(TOOL_CALL_END),
-    )
-    .value(QwenXmlEvent::ToolCallEnd)
-    .parse_next(input)
-}
-
-/// Parse a safe text run before the next Qwen XML tool call.
-fn safe_text_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
-    safe_text_len(input, TOOL_CALL_START).map(|len| QwenXmlEvent::Text { len })
-}
-
-fn qwen_header_error(expected: StrContextValue) -> ErrMode<ContextError> {
-    let mut error = ContextError::new();
-    error.push(StrContext::Label("Qwen XML tool call header"));
-    error.push(StrContext::Expected(expected));
-    ErrMode::Cut(error)
 }
 
 #[cfg(test)]
@@ -271,9 +61,9 @@ mod tests {
     use expect_test::expect;
     use thiserror_ext::AsReport;
 
-    use super::{Qwen3XmlToolParser, ToolParser};
-    use crate::parser::tool::ToolParseResult;
+    use super::Qwen3XmlToolParser;
     use crate::parser::tool::test_utils::{collect_stream, split_by_chars, test_tools};
+    use crate::parser::tool::{ToolParseResult, ToolParser};
 
     fn build_tool_call(function_name: &str, arguments: &str) -> String {
         format!(
@@ -479,7 +269,7 @@ mod tests {
             .unwrap_err();
 
         expect![[r#"
-            tool parser parsing failed: invalid Qwen XML tool call header
+            tool parser parsing failed: invalid Qwen XML
             expected field `name`"#]]
         .assert_eq(&error.to_report_string());
     }
