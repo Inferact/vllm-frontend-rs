@@ -1,6 +1,6 @@
 //! Shared helpers for tool parsers.
 
-use winnow::error::{ErrMode, ModalResult, Needed};
+use winnow::error::{ContextError, ErrMode, ModalResult, Needed};
 use winnow::stream::{Offset, Partial, Stream};
 
 use super::{Result, ToolParserError, parsing_failed};
@@ -49,6 +49,94 @@ pub(super) fn safe_text_len(input: &mut Partial<&str>, marker: &str) -> ModalRes
     Ok(emit_len)
 }
 
+/// Streaming lexical state for a top-level JSON object.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct JsonObjectScanState {
+    object_depth: usize,
+    array_depth: usize,
+    in_string: bool,
+    escape: bool,
+    started: bool,
+    complete: bool,
+}
+
+impl JsonObjectScanState {
+    /// Returns whether the top-level JSON object has closed.
+    pub(super) const fn complete(&self) -> bool {
+        self.complete
+    }
+}
+
+/// Parse a raw top-level JSON object argument prefix.
+///
+/// The returned length is safe to emit as raw argument text. This scans only
+/// lexical boundaries from `{` through the matching `}`, preserving
+/// malformed-but-balanced JSON without deserializing or normalizing it.
+pub(super) fn take_json_object(
+    input: &mut Partial<&str>,
+    state: &mut JsonObjectScanState,
+) -> ModalResult<usize> {
+    let text = **input;
+    if text.is_empty() || state.complete {
+        return incomplete();
+    }
+
+    let bytes = text.as_bytes();
+    let just_started = !state.started;
+    if !state.started {
+        if bytes[0] != b'{' {
+            return Err(ErrMode::Cut(ContextError::new()));
+        }
+        state.started = true;
+        state.object_depth = 1;
+    }
+
+    let mut index = usize::from(just_started);
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        index += 1;
+
+        if state.in_string {
+            if state.escape {
+                state.escape = false;
+            } else if byte == b'\\' {
+                state.escape = true;
+            } else if byte == b'"' {
+                state.in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => state.in_string = true,
+            b'{' => state.object_depth += 1,
+            b'}' => {
+                state.object_depth = state
+                    .object_depth
+                    .checked_sub(1)
+                    .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
+                if state.object_depth == 0 && state.array_depth == 0 {
+                    state.complete = true;
+                    input.next_slice(index);
+                    return Ok(index);
+                }
+            }
+            b'[' => state.array_depth += 1,
+            b']' => {
+                state.array_depth = state
+                    .array_depth
+                    .checked_sub(1)
+                    .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
+            }
+            _ => {}
+        }
+    }
+
+    input.next_slice(text.len());
+    Ok(text.len())
+}
+
 /// Parse one event from a buffered streaming input.
 ///
 /// Returns:
@@ -89,7 +177,7 @@ mod tests {
     use winnow::error::ErrMode;
     use winnow::stream::{Offset, Partial, Stream};
 
-    use super::{partial_prefix_len, safe_text_len};
+    use super::{JsonObjectScanState, partial_prefix_len, safe_text_len, take_json_object};
 
     #[test]
     fn partial_prefix_len_handles_ascii_markers() {
@@ -139,5 +227,85 @@ mod tests {
         let error = safe_text_len(&mut input, "<tool_call>").unwrap_err();
 
         assert!(matches!(error, ErrMode::Incomplete(_)));
+    }
+
+    #[test]
+    fn take_json_object_consumes_simple_object() {
+        let mut state = JsonObjectScanState::default();
+        let buffer = r#"{"location":"Paris"}<end>"#;
+        let mut input = Partial::new(buffer);
+        let checkpoint = input.checkpoint();
+
+        let len = take_json_object(&mut input, &mut state).unwrap();
+
+        assert_eq!(len, r#"{"location":"Paris"}"#.len());
+        assert_eq!(input.offset_from(&checkpoint), len);
+        assert!(state.complete());
+    }
+
+    #[test]
+    fn take_json_object_tracks_nested_values_and_strings() {
+        let mut state = JsonObjectScanState::default();
+        let arguments = r#"{"nested":{"items":[{"text":"} <|tool_call_end|> \" \\"}]}}"#;
+        let buffer = format!("{arguments}<end>");
+        let mut input = Partial::new(buffer.as_str());
+
+        let len = take_json_object(&mut input, &mut state).unwrap();
+
+        assert_eq!(len, arguments.len());
+        assert!(state.complete());
+    }
+
+    #[test]
+    fn take_json_object_rejects_leading_whitespace() {
+        let mut state = JsonObjectScanState::default();
+        let mut input = Partial::new(" {\"x\":1}");
+
+        let error = take_json_object(&mut input, &mut state).unwrap_err();
+
+        assert!(matches!(error, ErrMode::Cut(_)));
+    }
+
+    #[test]
+    fn take_json_object_leaves_trailing_whitespace_to_caller() {
+        let mut state = JsonObjectScanState::default();
+        let mut input = Partial::new("{\"x\":1}\n<end>");
+        let checkpoint = input.checkpoint();
+
+        let len = take_json_object(&mut input, &mut state).unwrap();
+
+        assert_eq!(len, "{\"x\":1}".len());
+        assert_eq!(input.offset_from(&checkpoint), len);
+        assert!(state.complete());
+    }
+
+    #[test]
+    fn take_json_object_continues_across_chunks() {
+        let mut state = JsonObjectScanState::default();
+        let chunks = [
+            r#"{"text":"literal "#,
+            r#"<|tool_call_end|>"#,
+            r#" inside"}<end>"#,
+        ];
+        let mut collected = String::new();
+
+        for chunk in chunks {
+            let mut input = Partial::new(chunk);
+            let len = take_json_object(&mut input, &mut state).unwrap();
+            collected.push_str(&chunk[..len]);
+        }
+
+        assert_eq!(collected, r#"{"text":"literal <|tool_call_end|> inside"}"#);
+        assert!(state.complete());
+    }
+
+    #[test]
+    fn take_json_object_rejects_non_object_top_level() {
+        let mut state = JsonObjectScanState::default();
+        let mut input = Partial::new(r#"[{"x":1}]"#);
+
+        let error = take_json_object(&mut input, &mut state).unwrap_err();
+
+        assert!(matches!(error, ErrMode::Cut(_)));
     }
 }
