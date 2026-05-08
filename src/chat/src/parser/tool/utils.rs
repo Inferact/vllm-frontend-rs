@@ -1,6 +1,6 @@
 //! Shared helpers for tool parsers.
 
-use winnow::error::{ContextError, ErrMode, ModalResult, Needed};
+use winnow::error::{ContextError, ErrMode, ModalResult, Needed, StrContext, StrContextValue};
 use winnow::stream::{Offset, Partial, Stream};
 
 use super::{Result, ToolParserError, parsing_failed};
@@ -56,14 +56,21 @@ pub(super) struct JsonObjectScanState {
     array_depth: usize,
     in_string: bool,
     escape: bool,
-    started: bool,
-    complete: bool,
+    phase: JsonObjectScanPhase,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum JsonObjectScanPhase {
+    #[default]
+    Initial,
+    Scanning,
+    Complete,
 }
 
 impl JsonObjectScanState {
     /// Returns whether the top-level JSON object has closed.
     pub(super) const fn complete(&self) -> bool {
-        self.complete
+        matches!(self.phase, JsonObjectScanPhase::Complete)
     }
 }
 
@@ -77,17 +84,20 @@ pub(super) fn take_json_object(
     state: &mut JsonObjectScanState,
 ) -> ModalResult<usize> {
     let text = **input;
-    if text.is_empty() || state.complete {
+    if text.is_empty() || state.complete() {
         return incomplete();
     }
 
     let bytes = text.as_bytes();
-    let just_started = !state.started;
-    if !state.started {
+    let just_started = matches!(state.phase, JsonObjectScanPhase::Initial);
+    if just_started {
         if bytes[0] != b'{' {
-            return Err(ErrMode::Cut(ContextError::new()));
+            return Err(json_scan_error(
+                "JSON object argument",
+                StrContextValue::CharLiteral('{'),
+            ));
         }
-        state.started = true;
+        state.phase = JsonObjectScanPhase::Scanning;
         state.object_depth = 1;
     }
 
@@ -112,22 +122,34 @@ pub(super) fn take_json_object(
             b'"' => state.in_string = true,
             b'{' => state.object_depth += 1,
             b'}' => {
-                state.object_depth = state
-                    .object_depth
-                    .checked_sub(1)
-                    .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
+                state.object_depth = state.object_depth.checked_sub(1).ok_or_else(|| {
+                    json_scan_error(
+                        "JSON object argument",
+                        StrContextValue::Description("balanced object braces"),
+                    )
+                })?;
                 if state.object_depth == 0 && state.array_depth == 0 {
-                    state.complete = true;
+                    state.phase = JsonObjectScanPhase::Complete;
                     input.next_slice(index);
                     return Ok(index);
+                }
+                if state.object_depth == 0 {
+                    return Err(json_scan_error(
+                        "JSON object argument",
+                        StrContextValue::Description(
+                            "nested arrays to close before the top-level object",
+                        ),
+                    ));
                 }
             }
             b'[' => state.array_depth += 1,
             b']' => {
-                state.array_depth = state
-                    .array_depth
-                    .checked_sub(1)
-                    .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
+                state.array_depth = state.array_depth.checked_sub(1).ok_or_else(|| {
+                    json_scan_error(
+                        "JSON object argument",
+                        StrContextValue::Description("balanced array brackets"),
+                    )
+                })?;
             }
             _ => {}
         }
@@ -135,6 +157,13 @@ pub(super) fn take_json_object(
 
     input.next_slice(text.len());
     Ok(text.len())
+}
+
+fn json_scan_error(label: &'static str, expected: StrContextValue) -> ErrMode<ContextError> {
+    let mut error = ContextError::new();
+    error.push(StrContext::Label(label));
+    error.push(StrContext::Expected(expected));
+    ErrMode::Cut(error)
 }
 
 /// Parse one event from a buffered streaming input.
@@ -174,6 +203,7 @@ pub(super) fn incomplete<T>() -> ModalResult<T> {
 
 #[cfg(test)]
 mod tests {
+    use expect_test::expect;
     use winnow::error::ErrMode;
     use winnow::stream::{Offset, Partial, Stream};
 
@@ -263,7 +293,13 @@ mod tests {
 
         let error = take_json_object(&mut input, &mut state).unwrap_err();
 
-        assert!(matches!(error, ErrMode::Cut(_)));
+        let ErrMode::Cut(error) = error else {
+            panic!("expected cut error");
+        };
+        expect![[r#"
+            invalid JSON object argument
+            expected `{`"#]]
+        .assert_eq(&error.to_string());
     }
 
     #[test]
@@ -306,6 +342,44 @@ mod tests {
 
         let error = take_json_object(&mut input, &mut state).unwrap_err();
 
-        assert!(matches!(error, ErrMode::Cut(_)));
+        let ErrMode::Cut(error) = error else {
+            panic!("expected cut error");
+        };
+        expect![[r#"
+            invalid JSON object argument
+            expected `{`"#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn take_json_object_reports_unbalanced_array() {
+        let mut state = JsonObjectScanState::default();
+        let mut input = Partial::new(r#"{"x":]}"#);
+
+        let error = take_json_object(&mut input, &mut state).unwrap_err();
+
+        let ErrMode::Cut(error) = error else {
+            panic!("expected cut error");
+        };
+        expect![[r#"
+            invalid JSON object argument
+            expected balanced array brackets"#]]
+        .assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn take_json_object_reports_top_level_close_before_nested_array() {
+        let mut state = JsonObjectScanState::default();
+        let mut input = Partial::new(r#"{"x":[}"#);
+
+        let error = take_json_object(&mut input, &mut state).unwrap_err();
+
+        let ErrMode::Cut(error) = error else {
+            panic!("expected cut error");
+        };
+        expect![[r#"
+            invalid JSON object argument
+            expected nested arrays to close before the top-level object"#]]
+        .assert_eq(&error.to_string());
     }
 }
