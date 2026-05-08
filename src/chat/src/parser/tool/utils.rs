@@ -84,8 +84,14 @@ pub(super) fn take_json_object(
     state: &mut JsonObjectScanState,
 ) -> ModalResult<usize> {
     let text = **input;
-    if text.is_empty() || state.complete() {
+    if text.is_empty() {
         return incomplete();
+    }
+    if state.complete() {
+        return Err(json_scan_error(
+            "JSON object argument",
+            StrContextValue::Description("active JSON object scan"),
+        ));
     }
 
     let bytes = text.as_bytes();
