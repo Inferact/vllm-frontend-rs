@@ -57,28 +57,43 @@ pub(super) fn xml_unescape(value: &str) -> Cow<'_, str> {
         return Cow::Borrowed(value);
     }
 
-    let mut output = String::with_capacity(value.len());
+    let mut output: Option<String> = None;
+    let mut copied_len = 0;
     let mut rest = value;
-    let mut changed = false;
 
     while let Some(ampersand) = rest.find('&') {
-        output.push_str(&rest[..ampersand]);
+        let before_ampersand = &rest[..ampersand];
         let after_ampersand = &rest[ampersand + '&'.len_utf8()..];
         if let Some(semicolon) = after_ampersand.find(';') {
             let entity = &after_ampersand[..semicolon];
             if let Some(decoded) = decode_xml_entity(entity) {
+                match &mut output {
+                    Some(output) => output.push_str(before_ampersand),
+                    None => {
+                        let mut new_output = String::with_capacity(value.len());
+                        new_output.push_str(&value[..copied_len + ampersand]);
+                        output = Some(new_output);
+                    }
+                }
+                let output = output.as_mut().expect("output is initialized above");
                 output.push(decoded);
-                rest = &after_ampersand[semicolon + ';'.len_utf8()..];
-                changed = true;
+                let consumed_len = ampersand + '&'.len_utf8() + semicolon + ';'.len_utf8();
+                copied_len += consumed_len;
+                rest = &rest[consumed_len..];
                 continue;
             }
         }
 
-        output.push('&');
+        if let Some(output) = &mut output {
+            output.push_str(before_ampersand);
+            output.push('&');
+        }
+        let consumed_len = ampersand + '&'.len_utf8();
+        copied_len += consumed_len;
         rest = after_ampersand;
     }
 
-    if changed {
+    if let Some(mut output) = output {
         output.push_str(rest);
         Cow::Owned(output)
     } else {
@@ -309,6 +324,8 @@ pub(super) fn incomplete<T>() -> ModalResult<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use expect_test::expect;
     use winnow::error::ErrMode;
     use winnow::stream::{Offset, Partial, Stream};
@@ -383,10 +400,19 @@ mod tests {
 
     #[test]
     fn xml_unescape_preserves_unknown_and_incomplete_entities() {
-        assert_eq!(
-            xml_unescape("Tom & Jerry &unknown; &amp"),
-            "Tom & Jerry &unknown; &amp"
-        );
+        let output = xml_unescape("Tom & Jerry &unknown; &amp");
+
+        assert!(matches!(output, Cow::Borrowed(_)));
+        assert_eq!(output, "Tom & Jerry &unknown; &amp");
+    }
+
+    #[test]
+    fn xml_unescape_borrows_when_no_entity_is_present() {
+        let input = "plain text";
+        let output = xml_unescape(input);
+
+        assert!(matches!(output, Cow::Borrowed(_)));
+        assert_eq!(output, input);
     }
 
     #[test]
