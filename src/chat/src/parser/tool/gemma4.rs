@@ -129,6 +129,7 @@ fn parse_next_gemma4_event(input: &mut Gemma4Input<'_>) -> ModalResult<Gemma4Eve
 }
 
 /// Parse a complete Gemma4 tool call.
+// TODO: incremental parsing arguments to reduce scanning from O(n^2) to O(n).
 fn tool_call_event(input: &mut Gemma4Input<'_>) -> ModalResult<Gemma4Event> {
     let (name, args) = seq!(
         _: literal(TOOL_CALL_START),
