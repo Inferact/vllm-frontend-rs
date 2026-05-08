@@ -1,5 +1,7 @@
 //! Shared helpers for tool parsers.
 
+use std::borrow::Cow;
+
 use winnow::error::{ContextError, ErrMode, ModalResult, Needed, StrContext, StrContextValue};
 use winnow::stream::{Offset, Partial, Stream};
 
@@ -47,6 +49,58 @@ pub(super) fn safe_text_len(input: &mut Partial<&str>, marker: &str) -> ModalRes
 
     input.next_slice(emit_len);
     Ok(emit_len)
+}
+
+/// Decode XML/HTML entities in XML-style parameter values.
+pub(super) fn xml_unescape(value: &str) -> Cow<'_, str> {
+    if !value.as_bytes().contains(&b'&') {
+        return Cow::Borrowed(value);
+    }
+
+    let mut output = String::with_capacity(value.len());
+    let mut rest = value;
+    let mut changed = false;
+
+    while let Some(ampersand) = rest.find('&') {
+        output.push_str(&rest[..ampersand]);
+        let after_ampersand = &rest[ampersand + '&'.len_utf8()..];
+        if let Some(semicolon) = after_ampersand.find(';') {
+            let entity = &after_ampersand[..semicolon];
+            if let Some(decoded) = decode_xml_entity(entity) {
+                output.push(decoded);
+                rest = &after_ampersand[semicolon + ';'.len_utf8()..];
+                changed = true;
+                continue;
+            }
+        }
+
+        output.push('&');
+        rest = after_ampersand;
+    }
+
+    if changed {
+        output.push_str(rest);
+        Cow::Owned(output)
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+fn decode_xml_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        entity if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16).ok().and_then(char::from_u32)
+        }
+        entity if entity.starts_with('#') => {
+            entity[1..].parse::<u32>().ok().and_then(char::from_u32)
+        }
+        _ => None,
+    }
 }
 
 /// Streaming lexical state for a top-level JSON object.
@@ -261,6 +315,7 @@ mod tests {
 
     use super::{
         JsonObjectScanState, json_str, partial_prefix_len, safe_text_len, take_json_object,
+        xml_unescape,
     };
 
     #[test]
@@ -311,6 +366,27 @@ mod tests {
         let error = safe_text_len(&mut input, "<tool_call>").unwrap_err();
 
         assert!(matches!(error, ErrMode::Incomplete(_)));
+    }
+
+    #[test]
+    fn xml_unescape_decodes_common_entities() {
+        assert_eq!(
+            xml_unescape("&lt;tag attr=&quot;value&quot;&gt;Tom &amp; Jerry&apos;s&lt;/tag&gt;"),
+            r#"<tag attr="value">Tom & Jerry's</tag>"#
+        );
+    }
+
+    #[test]
+    fn xml_unescape_decodes_numeric_entities() {
+        assert_eq!(xml_unescape("&#60;tag&#x3E;&#x1F600;"), "<tag>😀");
+    }
+
+    #[test]
+    fn xml_unescape_preserves_unknown_and_incomplete_entities() {
+        assert_eq!(
+            xml_unescape("Tom & Jerry &unknown; &amp"),
+            "Tom & Jerry &unknown; &amp"
+        );
     }
 
     #[test]
