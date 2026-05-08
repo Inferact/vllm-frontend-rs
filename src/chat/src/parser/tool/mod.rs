@@ -16,6 +16,7 @@ mod kimi_k2;
 mod minimax_m2;
 mod parameters;
 mod qwen_coder;
+mod qwen_xml;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_utils;
 mod utils;
@@ -40,6 +41,7 @@ pub use glm_xml::{Glm45MoeToolParser, Glm47MoeToolParser};
 pub use kimi_k2::KimiK2ToolParser;
 pub use minimax_m2::MinimaxM2ToolParser;
 pub use qwen_coder::Qwen3CoderToolParser;
+pub use qwen_xml::Qwen3XmlToolParser;
 
 /// Canonical public names for registered tool parsers.
 pub mod names {
