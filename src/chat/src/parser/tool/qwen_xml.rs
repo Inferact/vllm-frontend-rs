@@ -11,8 +11,8 @@ use super::utils::{
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, parsing_failed};
 use crate::request::ChatTool;
 
-const TOOL_CALL_START: &str = "<tool_call>";
-const TOOL_CALL_END: &str = "</tool_call>";
+const TOOL_CALL_START: &str = "<tool_call>\n";
+const TOOL_CALL_END: &str = "\n</tool_call>";
 
 type QwenXmlInput<'i> = Partial<&'i str>;
 
@@ -247,9 +247,7 @@ fn argument_delta_event(
 /// Parse a Qwen XML tool-call end marker.
 fn tool_call_end_event(input: &mut QwenXmlInput<'_>) -> ModalResult<QwenXmlEvent> {
     seq!(
-        _: ws0,
         _: literal("}"),
-        _: ws0,
         _: literal(TOOL_CALL_END),
     )
     .value(QwenXmlEvent::ToolCallEnd)
@@ -382,10 +380,39 @@ mod tests {
     fn qwen_xml_decodes_escaped_function_name() {
         let mut parser = Qwen3XmlToolParser::new(&test_tools());
         let result = parser
-            .parse_complete(r#"<tool_call>{"name":"say_\"hi","arguments":{}}</tool_call>"#)
+            .parse_complete(
+                r#"<tool_call>
+{"name":"say_\"hi","arguments":{}}
+</tool_call>"#,
+            )
             .unwrap();
 
         assert_eq!(result.calls[0].name.as_deref(), Some("say_\"hi"));
+    }
+
+    #[test]
+    fn qwen_xml_requires_newline_after_tool_call_start() {
+        let mut parser = Qwen3XmlToolParser::new(&test_tools());
+        let input = r#"<tool_call>{"name":"get_weather","arguments":{}}
+</tool_call>"#;
+
+        let result = parser.parse_complete(input).unwrap();
+
+        assert_eq!(result.normal_text, input);
+        assert!(result.calls.is_empty());
+    }
+
+    #[test]
+    fn qwen_xml_requires_newline_before_tool_call_end() {
+        let mut parser = Qwen3XmlToolParser::new(&test_tools());
+        let error = parser
+            .parse_complete(
+                r#"<tool_call>
+{"name":"get_weather","arguments":{}}</tool_call>"#,
+            )
+            .unwrap_err();
+
+        assert!(error.to_report_string().starts_with("tool parser parsing failed:"));
     }
 
     #[test]
@@ -428,7 +455,10 @@ mod tests {
     fn qwen_xml_finish_fails_incomplete_tool_call() {
         let mut parser = Qwen3XmlToolParser::new(&test_tools());
         parser
-            .push(r#"<tool_call>{"name":"get_weather","arguments":{"location""#)
+            .push(
+                r#"<tool_call>
+{"name":"get_weather","arguments":{"location""#,
+            )
             .unwrap();
 
         let error = parser.finish().unwrap_err();
@@ -441,7 +471,11 @@ mod tests {
     fn qwen_xml_malformed_field_order_fails_fast() {
         let mut parser = Qwen3XmlToolParser::new(&test_tools());
         let error = parser
-            .push(r#"<tool_call>{"arguments":{},"name":"get_weather"}</tool_call>"#)
+            .push(
+                r#"<tool_call>
+{"arguments":{},"name":"get_weather"}
+</tool_call>"#,
+            )
             .unwrap_err();
 
         expect![[r#"
