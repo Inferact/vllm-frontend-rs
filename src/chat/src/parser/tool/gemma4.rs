@@ -285,10 +285,10 @@ mod tests {
     use winnow::combinator::{eof, terminated};
     use winnow::error::ErrMode;
     use winnow::prelude::*;
-    use winnow::stream::{Partial, StreamIsPartial as _};
+    use winnow::stream::Partial;
 
     use super::{
-        Gemma4ToolParser, ToolCallDelta, ToolParseResult, ToolParser, gemma4_args,
+        Gemma4ToolParser, ToolCallDelta, ToolParseResult, ToolParser, ToolParserError, gemma4_args,
         gemma4_array_content, parsing_failed,
     };
     use crate::request::{ChatRequest, ChatTool};
@@ -571,6 +571,23 @@ mod tests {
             json!({ "content": "Buy milk" })
         );
         assert!(!first_call(&result).arguments.contains("<|"));
+    }
+
+    #[test]
+    fn gemma4_streaming_handles_end_marker_literal_inside_string() {
+        let result = collect_stream(&[
+            "<|tool_call>",
+            "call:todowrite{",
+            "content:<|\"|>literal }<tool_call|> inside",
+            "<|\"|>}",
+            "<tool_call|>",
+        ]);
+
+        assert_eq!(first_call(&result).name.as_deref(), Some("todowrite"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&first_call(&result).arguments).unwrap(),
+            json!({ "content": "literal }<tool_call|> inside" })
+        );
     }
 
     #[test]
