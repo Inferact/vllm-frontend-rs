@@ -271,22 +271,16 @@ fn tool_call_close_event(
     input: &mut JsonToolInput<'_>,
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
-    let (event,) = match config.delimiter {
-        Some(delimiter) => seq!(
-            _: literal("}"),
-            alt((
-                |input: &mut JsonToolInput<'_>| tool_call_end_event(input, config),
-                |input: &mut JsonToolInput<'_>| tool_call_delimiter_event(input, delimiter),
-            )),
-        )
-        .parse_next(input)?,
-        None => seq!(
-            _: literal("}"),
+    let _ = literal("}").parse_next(input)?;
+
+    match config.delimiter {
+        Some(delimiter) => alt((
             |input: &mut JsonToolInput<'_>| tool_call_end_event(input, config),
-        )
-        .parse_next(input)?,
-    };
-    Ok(event)
+            |input: &mut JsonToolInput<'_>| tool_call_delimiter_event(input, delimiter),
+        ))
+        .parse_next(input),
+        None => tool_call_end_event(input, config),
+    }
 }
 
 /// Parse a marker-wrapped JSON tool-call end marker.
