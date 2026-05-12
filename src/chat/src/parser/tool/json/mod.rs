@@ -24,9 +24,16 @@ struct JsonToolCallConfig {
     parser_name: &'static str,
     start_marker: &'static str,
     end_marker: &'static str,
+    marker_whitespace: JsonToolCallWhitespace,
     delimiter: Option<&'static str>,
     name_key: &'static str,
     arguments_key: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonToolCallWhitespace {
+    Optional,
+    Exact(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,9 +197,12 @@ fn tool_call_start_event(
     input: &mut JsonToolInput<'_>,
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
-    literal(config.start_marker)
-        .value(JsonToolCallEvent::ToolCallStart)
-        .parse_next(input)
+    seq!(
+        _: literal(config.start_marker),
+        _: |input: &mut JsonToolInput<'_>| marker_whitespace(input, config),
+    )
+    .value(JsonToolCallEvent::ToolCallStart)
+    .parse_next(input)
 }
 
 /// Parse a marker-wrapped JSON tool-call header before the raw arguments
@@ -270,7 +280,6 @@ fn tool_call_close_event(
             )),
         )
         .parse_next(input)?,
-
         None => seq!(
             _: literal("}"),
             |input: &mut JsonToolInput<'_>| tool_call_end_event(input, config),
@@ -285,9 +294,12 @@ fn tool_call_end_event(
     input: &mut JsonToolInput<'_>,
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
-    literal(config.end_marker)
-        .value(JsonToolCallEvent::ToolCallEnd)
-        .parse_next(input)
+    seq!(
+        _: |input: &mut JsonToolInput<'_>| marker_whitespace(input, config),
+        _: literal(config.end_marker),
+    )
+    .value(JsonToolCallEvent::ToolCallEnd)
+    .parse_next(input)
 }
 
 /// Parse a delimiter between JSON tool calls inside one marker block.
@@ -295,7 +307,21 @@ fn tool_call_delimiter_event(
     input: &mut JsonToolInput<'_>,
     delimiter: &'static str,
 ) -> ModalResult<JsonToolCallEvent> {
-    literal(delimiter).value(JsonToolCallEvent::ToolCallDelimiter).parse_next(input)
+    seq!(
+        _: ws0,
+        _: literal(delimiter),
+        _: ws0,
+    )
+    .value(JsonToolCallEvent::ToolCallDelimiter)
+    .parse_next(input)
+}
+
+/// Parse configured whitespace around a marker-wrapped JSON tool call.
+fn marker_whitespace(input: &mut JsonToolInput<'_>, config: JsonToolCallConfig) -> ModalResult<()> {
+    match config.marker_whitespace {
+        JsonToolCallWhitespace::Optional => ws0.void().parse_next(input),
+        JsonToolCallWhitespace::Exact(whitespace) => literal(whitespace).void().parse_next(input),
+    }
 }
 
 /// Parse a safe text run before the next marker-wrapped JSON tool call.
@@ -310,14 +336,15 @@ fn safe_text_event(
 mod tests {
     use expect_test::expect;
 
-    use super::{JsonToolCallConfig, JsonToolCallParser};
+    use super::{JsonToolCallConfig, JsonToolCallParser, JsonToolCallWhitespace};
     use crate::parser::tool::ToolParseResult;
 
     const DELIMITED_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
         parser_name: "Delimited JSON",
         start_marker: "<tool_calls>",
-        end_marker: "\n</tool_calls>",
-        delimiter: Some("\n"),
+        end_marker: "</tool_calls>",
+        marker_whitespace: JsonToolCallWhitespace::Optional,
+        delimiter: Some("<"),
         name_key: "function",
         arguments_key: "parameters",
     };
@@ -327,7 +354,7 @@ mod tests {
     }
 
     fn build_tool_calls(tool_calls: &[String]) -> String {
-        format!("<tool_calls>{}\n</tool_calls>", tool_calls.join("\n"))
+        format!("<tool_calls>{}</tool_calls>", tool_calls.join(" <\n"))
     }
 
     fn collect_chunks(parser: &mut JsonToolCallParser, chunks: &[&str]) -> ToolParseResult {
@@ -378,9 +405,9 @@ mod tests {
         let mut parser = JsonToolCallParser::new(DELIMITED_CONFIG);
         let chunks = [
             r#"<tool_calls>{"function":"get_weather","parameters":{"location":"Shanghai"}}"#,
-            "\n",
+            " <\n",
             r#"{"function":"add","parameters":{"x":1,"y":2}}"#,
-            "\n</tool_calls>",
+            "</tool_calls>",
         ];
 
         let result = collect_chunks(&mut parser, &chunks);
@@ -414,7 +441,7 @@ mod tests {
         let mut parser = JsonToolCallParser::new(DELIMITED_CONFIG);
         let chunks = [
             r#"<tool_calls>{"function":"get_weather","parameters":{"location":"Shanghai"}}"#,
-            "\n",
+            " ",
             "</tool_calls> trailing text",
         ];
 

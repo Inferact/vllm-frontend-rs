@@ -1,11 +1,12 @@
-use super::{JsonToolCallConfig, JsonToolCallParser};
+use super::{JsonToolCallConfig, JsonToolCallParser, JsonToolCallWhitespace};
 use crate::parser::tool::{Result, ToolParseResult, ToolParser};
 use crate::request::ChatTool;
 
 const QWEN_XML_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
     parser_name: "Qwen XML",
-    start_marker: "<tool_call>\n",
-    end_marker: "\n</tool_call>",
+    start_marker: "<tool_call>",
+    end_marker: "</tool_call>",
+    marker_whitespace: JsonToolCallWhitespace::Exact("\n"),
     delimiter: None,
     name_key: "name",
     arguments_key: "arguments",
