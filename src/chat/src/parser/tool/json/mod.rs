@@ -24,6 +24,9 @@ struct JsonToolCallConfig {
     parser_name: &'static str,
     start_marker: &'static str,
     end_marker: &'static str,
+    delimiter: Option<&'static str>,
+    name_key: &'static str,
+    arguments_key: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,7 @@ enum JsonToolCallEvent {
     ToolCallStart,
     ToolCallHeader { function_name: String },
     Arguments { len: usize },
+    ToolCallDelimiter,
     ToolCallEnd,
 }
 
@@ -133,6 +137,10 @@ impl JsonToolCallParser {
                     arguments: self.buffer[..consumed_len].to_string(),
                 });
             }
+            JsonToolCallEvent::ToolCallDelimiter => {
+                self.active_tool_index = None;
+                self.mode = JsonToolCallMode::Header;
+            }
             JsonToolCallEvent::ToolCallEnd => {
                 self.active_tool_index = None;
                 self.mode = JsonToolCallMode::Text;
@@ -197,9 +205,7 @@ fn tool_call_header_event(
         _: ws0,
         _: literal("{"),
         _: ws0,
-        _: literal(r#""name""#).context(StrContext::Expected(
-            StrContextValue::Description("field `name`"),
-        )),
+        _: |input: &mut JsonToolInput<'_>| json_key(input, config.name_key),
         _: ws0,
         _: literal(":"),
         _: ws0,
@@ -207,9 +213,7 @@ fn tool_call_header_event(
         _: ws0,
         _: literal(","),
         _: ws0,
-        _: literal(r#""arguments""#).context(StrContext::Expected(
-            StrContextValue::Description("field `arguments`"),
-        )),
+        _: |input: &mut JsonToolInput<'_>| json_key(input, config.arguments_key),
         _: ws0,
         _: literal(":"),
         _: ws0,
@@ -220,6 +224,17 @@ fn tool_call_header_event(
     Ok(JsonToolCallEvent::ToolCallHeader { function_name })
 }
 
+/// Parse a configured JSON object key.
+fn json_key(input: &mut JsonToolInput<'_>, key: &'static str) -> ModalResult<()> {
+    seq!(
+        _: literal("\""),
+        _: literal(key).context(StrContext::Expected(StrContextValue::StringLiteral(key))),
+        _: literal("\""),
+    )
+    .void()
+    .parse_next(input)
+}
+
 /// Parse one event inside a marker-wrapped JSON tool-call arguments payload.
 fn parse_arguments_event(
     input: &mut JsonToolInput<'_>,
@@ -227,7 +242,7 @@ fn parse_arguments_event(
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
     if json_scan.complete() {
-        tool_call_end_event(input, config)
+        tool_call_close_event(input, config)
     } else {
         argument_delta_event(input, json_scan)
     }
@@ -241,17 +256,46 @@ fn argument_delta_event(
     take_json_object(input, json_scan).map(|len| JsonToolCallEvent::Arguments { len })
 }
 
+/// Parse a marker-wrapped JSON tool-call close marker.
+fn tool_call_close_event(
+    input: &mut JsonToolInput<'_>,
+    config: JsonToolCallConfig,
+) -> ModalResult<JsonToolCallEvent> {
+    let (event,) = match config.delimiter {
+        Some(delimiter) => seq!(
+            _: literal("}"),
+            alt((
+                |input: &mut JsonToolInput<'_>| tool_call_end_event(input, config),
+                |input: &mut JsonToolInput<'_>| tool_call_delimiter_event(input, delimiter),
+            )),
+        )
+        .parse_next(input)?,
+
+        None => seq!(
+            _: literal("}"),
+            |input: &mut JsonToolInput<'_>| tool_call_end_event(input, config),
+        )
+        .parse_next(input)?,
+    };
+    Ok(event)
+}
+
 /// Parse a marker-wrapped JSON tool-call end marker.
 fn tool_call_end_event(
     input: &mut JsonToolInput<'_>,
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
-    seq!(
-        _: literal("}"),
-        _: literal(config.end_marker),
-    )
-    .value(JsonToolCallEvent::ToolCallEnd)
-    .parse_next(input)
+    literal(config.end_marker)
+        .value(JsonToolCallEvent::ToolCallEnd)
+        .parse_next(input)
+}
+
+/// Parse a delimiter between JSON tool calls inside one marker block.
+fn tool_call_delimiter_event(
+    input: &mut JsonToolInput<'_>,
+    delimiter: &'static str,
+) -> ModalResult<JsonToolCallEvent> {
+    literal(delimiter).value(JsonToolCallEvent::ToolCallDelimiter).parse_next(input)
 }
 
 /// Parse a safe text run before the next marker-wrapped JSON tool call.
@@ -260,4 +304,136 @@ fn safe_text_event(
     config: JsonToolCallConfig,
 ) -> ModalResult<JsonToolCallEvent> {
     safe_text_len(input, config.start_marker).map(|len| JsonToolCallEvent::Text { len })
+}
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+
+    use super::{JsonToolCallConfig, JsonToolCallParser};
+    use crate::parser::tool::ToolParseResult;
+
+    const DELIMITED_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
+        parser_name: "Delimited JSON",
+        start_marker: "<tool_calls>",
+        end_marker: "\n</tool_calls>",
+        delimiter: Some("\n"),
+        name_key: "function",
+        arguments_key: "parameters",
+    };
+
+    fn build_tool_call(function_name: &str, arguments: &str) -> String {
+        format!(r#"{{"function":"{function_name}","parameters":{arguments}}}"#)
+    }
+
+    fn build_tool_calls(tool_calls: &[String]) -> String {
+        format!("<tool_calls>{}\n</tool_calls>", tool_calls.join("\n"))
+    }
+
+    fn collect_chunks(parser: &mut JsonToolCallParser, chunks: &[&str]) -> ToolParseResult {
+        let mut result = ToolParseResult::default();
+        for chunk in chunks {
+            result.append(parser.push(chunk).unwrap());
+        }
+        result.append(parser.finish().unwrap());
+        result.coalesce_calls()
+    }
+
+    #[test]
+    fn json_tool_call_delimiter_extracts_multiple_calls_in_one_block() {
+        let input = build_tool_calls(&[
+            build_tool_call("get_weather", r#"{"location":"Shanghai"}"#),
+            build_tool_call("add", r#"{"x":1,"y":2}"#),
+        ]);
+        let mut parser = JsonToolCallParser::new(DELIMITED_CONFIG);
+
+        let result = collect_chunks(&mut parser, &[&input]);
+
+        expect![[r#"
+            ToolParseResult {
+                normal_text: "",
+                calls: [
+                    ToolCallDelta {
+                        tool_index: 0,
+                        name: Some(
+                            "get_weather",
+                        ),
+                        arguments: "{\"location\":\"Shanghai\"}",
+                    },
+                    ToolCallDelta {
+                        tool_index: 1,
+                        name: Some(
+                            "add",
+                        ),
+                        arguments: "{\"x\":1,\"y\":2}",
+                    },
+                ],
+            }
+        "#]]
+        .assert_debug_eq(&result);
+    }
+
+    #[test]
+    fn json_tool_call_delimiter_can_arrive_in_later_chunk() {
+        let mut parser = JsonToolCallParser::new(DELIMITED_CONFIG);
+        let chunks = [
+            r#"<tool_calls>{"function":"get_weather","parameters":{"location":"Shanghai"}}"#,
+            "\n",
+            r#"{"function":"add","parameters":{"x":1,"y":2}}"#,
+            "\n</tool_calls>",
+        ];
+
+        let result = collect_chunks(&mut parser, &chunks);
+
+        expect![[r#"
+            ToolParseResult {
+                normal_text: "",
+                calls: [
+                    ToolCallDelta {
+                        tool_index: 0,
+                        name: Some(
+                            "get_weather",
+                        ),
+                        arguments: "{\"location\":\"Shanghai\"}",
+                    },
+                    ToolCallDelta {
+                        tool_index: 1,
+                        name: Some(
+                            "add",
+                        ),
+                        arguments: "{\"x\":1,\"y\":2}",
+                    },
+                ],
+            }
+        "#]]
+        .assert_debug_eq(&result);
+    }
+
+    #[test]
+    fn json_tool_call_end_marker_wins_over_delimiter_prefix() {
+        let mut parser = JsonToolCallParser::new(DELIMITED_CONFIG);
+        let chunks = [
+            r#"<tool_calls>{"function":"get_weather","parameters":{"location":"Shanghai"}}"#,
+            "\n",
+            "</tool_calls> trailing text",
+        ];
+
+        let result = collect_chunks(&mut parser, &chunks);
+
+        expect![[r#"
+            ToolParseResult {
+                normal_text: " trailing text",
+                calls: [
+                    ToolCallDelta {
+                        tool_index: 0,
+                        name: Some(
+                            "get_weather",
+                        ),
+                        arguments: "{\"location\":\"Shanghai\"}",
+                    },
+                ],
+            }
+        "#]]
+        .assert_debug_eq(&result);
+    }
 }

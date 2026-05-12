@@ -6,6 +6,9 @@ const QWEN_XML_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
     parser_name: "Qwen XML",
     start_marker: "<tool_call>\n",
     end_marker: "\n</tool_call>",
+    delimiter: None,
+    name_key: "name",
+    arguments_key: "arguments",
 };
 
 /// Tool parser for Qwen XML-wrapped JSON tool calls.
@@ -270,7 +273,7 @@ mod tests {
 
         expect![[r#"
             tool parser parsing failed: invalid Qwen XML
-            expected field `name`"#]]
+            expected `name`"#]]
         .assert_eq(&error.to_report_string());
     }
 }

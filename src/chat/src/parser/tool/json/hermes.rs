@@ -6,6 +6,9 @@ const HERMES_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
     parser_name: "Hermes",
     start_marker: "<tool_call>",
     end_marker: "</tool_call>",
+    delimiter: None,
+    name_key: "name",
+    arguments_key: "arguments",
 };
 
 /// Tool parser for Hermes XML-wrapped JSON tool calls.
