@@ -1,5 +1,5 @@
-use winnow::ascii::{multispace0 as ws0, multispace1 as ws1};
-use winnow::combinator::{alt, seq};
+use winnow::ascii::multispace0 as ws0;
+use winnow::combinator::seq;
 use winnow::error::{ModalResult, StrContext};
 use winnow::prelude::*;
 use winnow::token::literal;
@@ -29,7 +29,6 @@ enum LlamaJsonEvent {
     Arguments { len: usize },
     ToolCallClose,
     Separator,
-    Whitespace,
 }
 
 /// Tool parser for strict Llama JSON-template tool calls.
@@ -37,7 +36,7 @@ enum LlamaJsonEvent {
 /// Example tool call content:
 ///
 /// ```text
-/// {"name": "get_weather", "parameters": {"location":"Tokyo"}}
+/// {"name":"get_weather","parameters":{"location":"Tokyo"}}; {"name":"add","parameters":{"x":1,"y":2}}
 /// ```
 ///
 /// Arguments are already OpenAI-style JSON text, so they are streamed as raw
@@ -117,7 +116,6 @@ impl Llama3JsonToolParser {
                 self.active_tool_index = None;
                 self.mode = LlamaJsonMode::Header;
             }
-            LlamaJsonEvent::Whitespace => {}
         }
         Ok(())
     }
@@ -240,25 +238,15 @@ fn tool_call_close_event(input: &mut JsonToolInput<'_>) -> ModalResult<LlamaJson
     literal("}").value(LlamaJsonEvent::ToolCallClose).parse_next(input)
 }
 
-/// Parse whitespace or a semicolon separator after one Llama JSON tool call.
+/// Parse a semicolon separator after one Llama JSON tool call.
 fn after_call_event(input: &mut JsonToolInput<'_>) -> ModalResult<LlamaJsonEvent> {
-    alt((after_call_whitespace_event, after_call_separator_event))
-        .context(StrContext::Label("Llama JSON"))
-        .parse_next(input)
-}
-
-/// Parse whitespace after one Llama JSON tool call.
-fn after_call_whitespace_event(input: &mut JsonToolInput<'_>) -> ModalResult<LlamaJsonEvent> {
-    ws1.value(LlamaJsonEvent::Whitespace).parse_next(input)
-}
-
-/// Parse a semicolon separator between Llama JSON tool calls.
-fn after_call_separator_event(input: &mut JsonToolInput<'_>) -> ModalResult<LlamaJsonEvent> {
     seq!(
+        _: ws0,
         _: literal(";"),
         _: ws0,
     )
     .value(LlamaJsonEvent::Separator)
+    .context(StrContext::Label("Llama JSON"))
     .parse_next(input)
 }
 
@@ -355,7 +343,7 @@ mod tests {
     fn llama_json_extracts_multiple_semicolon_separated_calls() {
         let mut parser = Llama3JsonToolParser::new(&test_tools());
         let input = format!(
-            "{}; {}",
+            "{} \n; {}",
             build_tool_call("get_weather", r#"{"location":"Shanghai"}"#),
             build_tool_call("add", r#"{"x":1,"y":2}"#),
         );
