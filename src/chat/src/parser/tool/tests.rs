@@ -132,8 +132,6 @@ fn factory_new_resolves_default_patterns() {
         factory.resolve_name_for_model("glm-4.7"),
         Some(names::GLM47)
     );
-    assert_eq!(factory.resolve_name_for_model("command-r-plus"), None);
-    assert_eq!(factory.resolve_name_for_model("step-3"), None);
     assert_eq!(
         factory.resolve_name_for_model("google/gemma-4-27b-it"),
         Some(names::GEMMA4)

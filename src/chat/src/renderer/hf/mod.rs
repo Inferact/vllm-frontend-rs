@@ -219,7 +219,7 @@ struct TemplateToolFunction {
 #[derive(Debug, Serialize)]
 pub(super) struct TemplateTool {
     #[serde(rename = "type")]
-    r#type: &'static str,
+    tool_type: &'static str,
     function: TemplateToolDefinition,
 }
 
@@ -347,7 +347,7 @@ fn to_template_tools(tools: &[ChatTool]) -> Vec<TemplateTool> {
     tools
         .iter()
         .map(|tool| TemplateTool {
-            r#type: "function",
+            tool_type: "function",
             function: TemplateToolDefinition {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
