@@ -2,7 +2,7 @@
 //!
 //! This stage runs after reasoning separation and before final block assembly.
 //! It only inspects normal assistant text, leaves reasoning deltas untouched,
-//! and translates incremental `tool-parser` output into internal tool-call
+//! and translates incremental tool parsing output into internal tool-call
 //! events while preserving plain-text fallback behavior.
 
 use asynk_strim_attr::{TryYielder, try_stream};
@@ -387,7 +387,9 @@ mod tests {
     use crate::error::Error;
     use crate::event::{AssistantBlockKind, AssistantMessageExt as _};
     use crate::output::structured::structured_chat_event_stream;
-    use crate::parser::tool::{Result, ToolParseResult, ToolParser};
+    use crate::parser::tool::{
+        Result, ToolParseResult, ToolParser, ToolParserError, parsing_failed,
+    };
     use crate::request::ChatTool;
     use crate::stream::ChatEventStream;
 
@@ -411,9 +413,7 @@ mod tests {
         fn push(&mut self, _chunk: &str) -> Result<ToolParseResult> {
             if self.fail_next {
                 self.fail_next = false;
-                return Err(
-                    tool_parser::errors::ParserError::ParsingFailed("boom".to_string()).into(),
-                );
+                return Err(parsing_failed!("boom"));
             }
 
             Ok(ToolParseResult::default())

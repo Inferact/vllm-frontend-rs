@@ -335,8 +335,8 @@ pub struct ChatTool {
 }
 
 impl ChatTool {
-    /// Used internally for template rendering and passed to `tool-parser`
-    /// crate.
+    /// Convert to the OpenAI protocol shape used by template rendering and
+    /// parser benchmarks.
     pub(crate) fn to_openai_tool(&self) -> OpenAiTool {
         OpenAiTool {
             tool_type: "function".to_string(),
