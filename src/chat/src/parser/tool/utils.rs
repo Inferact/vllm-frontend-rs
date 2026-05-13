@@ -26,9 +26,8 @@ pub(super) fn partial_prefix_len(buffer: &str, token: &str) -> usize {
     let buffer_bytes = buffer.as_bytes();
     let token_bytes = token.as_bytes();
 
-    let mut index = buffer.len();
-    while index > tail_start {
-        index -= 1;
+    // Scan from the longest possible suffix to preserve overlapping prefixes.
+    for index in tail_start..buffer.len() {
         if buffer_bytes[index] != first_byte {
             continue;
         }
@@ -360,6 +359,11 @@ mod tests {
             "<|tool".len()
         );
         assert_eq!(partial_prefix_len("hello world", "<|tool_call>"), 0);
+    }
+
+    #[test]
+    fn partial_prefix_len_prefers_longest_overlapping_prefix() {
+        assert_eq!(partial_prefix_len("chunk ending in aba", "ababa"), 3);
     }
 
     #[test]
