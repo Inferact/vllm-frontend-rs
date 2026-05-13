@@ -17,14 +17,32 @@ use super::{Result, ToolParserError, parsing_failed};
 /// can safely slice `&token[..len]` even when markers contain non-ASCII
 /// characters such as DeepSeek's DSML delimiters.
 pub(super) fn partial_prefix_len(buffer: &str, token: &str) -> usize {
-    token
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(token.len()))
-        .filter(|&len| len < token.len())
-        .rev()
-        .find(|&len| buffer.ends_with(&token[..len]))
-        .unwrap_or(0)
+    let Some(first_byte) = token.as_bytes().first().copied() else {
+        return 0;
+    };
+
+    let max_len = buffer.len().min(token.len().saturating_sub(1));
+    let tail_start = buffer.len() - max_len;
+    let buffer_bytes = buffer.as_bytes();
+    let token_bytes = token.as_bytes();
+
+    let mut index = buffer.len();
+    while index > tail_start {
+        index -= 1;
+        if buffer_bytes[index] != first_byte {
+            continue;
+        }
+
+        let len = buffer.len() - index;
+        if buffer.is_char_boundary(index)
+            && token.is_char_boundary(len)
+            && token_bytes[..len] == buffer_bytes[index..]
+        {
+            return len;
+        }
+    }
+
+    0
 }
 
 /// Parse a safe text run before the next marker.
