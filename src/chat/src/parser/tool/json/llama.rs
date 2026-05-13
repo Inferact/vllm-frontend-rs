@@ -34,10 +34,17 @@ enum LlamaJsonEvent {
 
 /// Tool parser for strict Llama JSON-template tool calls.
 ///
-/// The JSON templates ask the model to emit root-level JSON objects such as
-/// `{"name":"get_weather","parameters":{"location":"Tokyo"}}`. Natural text
-/// at the beginning of the stream permanently disables tool parsing for that
-/// assistant output.
+/// Example tool call content:
+///
+/// ```text
+/// {"name": "get_weather", "parameters": {"location":"Tokyo"}}
+/// ```
+///
+/// Arguments are already OpenAI-style JSON text, so they are streamed as raw
+/// argument deltas without schema conversion or JSON normalization.
+///
+/// Natural text at the beginning of the stream permanently disables tool
+/// parsing for that assistant output.
 pub struct Llama3JsonToolParser {
     buffer: String,
     mode: LlamaJsonMode,
@@ -385,8 +392,7 @@ mod tests {
             "{\"name\":\"get_weather\",\"parameters\":",
             "{\"location\":",
             "\"Beijing\"",
-            "}",
-            "}",
+            "}}",
         ];
 
         let mut result = ToolParseResult::default();
