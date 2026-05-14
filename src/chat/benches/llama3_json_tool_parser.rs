@@ -1,38 +1,41 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use tool_parser::parsers::QwenParser as ExternalQwenParser;
+use tool_parser::parsers::LlamaParser as ExternalLlamaParser;
 use vllm_chat::test_utils::tool_parser::{split_by_chars, test_tools};
 use vllm_chat::{ChatTool, ToolParser, ToolParserFactory};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
 
-const PARSER_NAME: &str = "qwen3_xml";
+const PARSER_NAME: &str = "llama3_json";
 const CHUNK_CHARS: usize = 7;
 const LONG_NORMAL_TEXT_REPEATS: usize = 2048;
 
-fn tool_call(function_name: &str, arguments: &str) -> String {
-    format!("<tool_call>\n{{\"name\":\"{function_name}\",\"arguments\":{arguments}}}\n</tool_call>")
+fn tool_call(function_name: &str, parameters: &str) -> String {
+    format!(r#"{{"name":"{function_name}","parameters":{parameters}}}"#)
 }
 
 fn mixed_fixture() -> String {
     format!(
-        "I will check two cities before answering.\n{}{}",
+        "{}; {}",
         tool_call("get_weather", r#"{"location":"Hangzhou","days":3}"#),
-        tool_call("get_weather", r#"{"location":"San Francisco","days":2}"#),
+        tool_call(
+            "convert",
+            r#"{"whole":42.5,"flag":true,"payload":{"nested":["x",null]},"items":[1,2,3],"empty":""}"#
+        ),
     )
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no Qwen XML tool markers at all.\n";
+    let line = "This is ordinary assistant text with no Llama JSON tool call at the root.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn native_parser(tools: &[ChatTool]) -> Box<dyn ToolParser> {
     ToolParserFactory::global()
         .create(PARSER_NAME, tools)
-        .expect("Qwen XML parser should be registered")
+        .expect("Llama JSON parser should be registered")
 }
 
 fn run_stream_group(
@@ -77,7 +80,7 @@ fn run_stream_group(
     });
 
     group.bench_function("external_reuse_parser", |b| {
-        let mut parser = ExternalQwenParser::new();
+        let mut parser = ExternalLlamaParser::new();
         b.iter(|| {
             let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
             black_box(result);
@@ -86,7 +89,7 @@ fn run_stream_group(
 
     group.bench_function("external_create_parser", |b| {
         b.iter_batched(
-            ExternalQwenParser::new,
+            ExternalLlamaParser::new,
             |mut parser| {
                 let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
                 black_box(result);
@@ -98,24 +101,24 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_qwen3_xml_tool_parser(c: &mut Criterion) {
+fn bench_llama3_json_tool_parser(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "qwen3_xml_tool_parser/mixed_text_tool_call",
+        "llama3_json_tool_parser/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
-        "I will check two cities before answering.\n",
+        "",
         2,
     );
 
     run_stream_group(
         c,
-        "qwen3_xml_tool_parser/long_normal_text",
+        "llama3_json_tool_parser/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -124,5 +127,5 @@ fn bench_qwen3_xml_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_qwen3_xml_tool_parser);
+criterion_group!(benches, bench_llama3_json_tool_parser);
 criterion_main!(benches);
