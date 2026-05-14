@@ -1,16 +1,9 @@
 //! Streaming tool parsers for chat completions.
 
-macro_rules! parsing_failed {
-    ($($arg:tt)*) => {
-        $crate::ToolParserError::ParsingFailed {
-            message: format!($($arg)*),
-        }
-    };
-}
-
+#[macro_use]
+mod error;
 mod deepseek_dsml;
 mod deepseek_json;
-mod error;
 mod gemma4;
 mod glm_xml;
 mod json;
