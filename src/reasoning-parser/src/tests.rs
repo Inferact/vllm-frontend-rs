@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use vllm_text::tokenizer::Tokenizer;
+use vllm_tokenizer::Tokenizer;
 
 use super::{
     DeepSeekR1ReasoningParser, DelimitedReasoningParser, Qwen3ReasoningParser, ReasoningParser,
@@ -9,11 +9,15 @@ use super::{
 struct FakeTokenizer;
 
 impl Tokenizer for FakeTokenizer {
-    fn encode(&self, text: &str, _add_special_tokens: bool) -> vllm_text::Result<Vec<u32>> {
+    fn encode(&self, text: &str, _add_special_tokens: bool) -> vllm_tokenizer::Result<Vec<u32>> {
         Ok(text.chars().map(u32::from).collect())
     }
 
-    fn decode(&self, token_ids: &[u32], _skip_special_tokens: bool) -> vllm_text::Result<String> {
+    fn decode(
+        &self,
+        token_ids: &[u32],
+        _skip_special_tokens: bool,
+    ) -> vllm_tokenizer::Result<String> {
         Ok(token_ids
             .iter()
             .map(|token_id| char::from_u32(*token_id).unwrap_or('\u{FFFD}'))
