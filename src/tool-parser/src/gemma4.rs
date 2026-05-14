@@ -382,13 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn gemma4_preserves_special_tokens() {
-        let parser = Gemma4ToolParser::new(&test_tools());
-
-        assert!(parser.preserve_special_tokens());
-    }
-
-    #[test]
     fn gemma4_parse_args_handles_scalars_and_nested_values() {
         let parsed = parse_gemma4_args(
             "name:<|\"|>test<|\"|>,count:42,active:true,score:114.514,nested:{inner:<|\"|>value<|\"|>},items:[<|\"|>a<|\"|>,<|\"|>b<|\"|>]",

@@ -22,15 +22,21 @@ use crate::{ChatTool, Result, ToolParseResult, ToolParser};
 ///
 /// V4 reuses the V3.2 DSML invoke/parameter grammar but wraps calls in
 /// `<｜DSML｜tool_calls>` instead of `<｜DSML｜function_calls>`.
+///
+/// DeepSeek V4 relies on DSML markers such as `｜DSML｜`, which are
+/// represented as special tokens in the tokenizer and therefore must be
+/// preserved during decode for parsing to work.
 pub struct DeepSeekV4ToolParser(DeepSeekDsmlToolParser);
 
 impl DeepSeekV4ToolParser {
+    /// Create a DeepSeek V4 tool parser.
     fn new(tools: &[ChatTool]) -> Self {
         Self(DeepSeekDsmlToolParser::new(tools, DsmlTokens::V4))
     }
 }
 
 impl ToolParser for DeepSeekV4ToolParser {
+    /// Create a boxed DeepSeek V4 tool parser.
     fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
@@ -38,14 +44,17 @@ impl ToolParser for DeepSeekV4ToolParser {
         Ok(Box::new(Self::new(tools)))
     }
 
+    /// Preserve DSML special tokens while decoding.
     fn preserve_special_tokens(&self) -> bool {
-        self.0.preserve_special_tokens()
+        true
     }
 
+    /// Push one decoded text chunk through the DSML parser.
     fn push(&mut self, chunk: &str) -> Result<ToolParseResult> {
         self.0.push(chunk)
     }
 
+    /// Flush buffered text and reset parser state.
     fn finish(&mut self) -> Result<ToolParseResult> {
         self.0.finish()
     }
