@@ -8,7 +8,7 @@ pub use vllm_reasoning_parser::{
     KimiReasoningParser, MiniMaxM2ReasoningParser, NemotronV3ReasoningParser, Qwen3ReasoningParser,
     ReasoningDelta, ReasoningError, ReasoningParser, Step3ReasoningParser,
 };
-use vllm_text::tokenizer::DynTokenizer;
+use vllm_tokenizer::DynTokenizer;
 
 use crate::parser::ParserFactory;
 
