@@ -5507,6 +5507,7 @@ dependencies = [
  "uuid",
  "vllm-engine-core-client",
  "vllm-llm",
+ "vllm-reasoning-parser",
  "vllm-text",
  "vllm-tool-parser",
  "winnow",
@@ -5615,6 +5616,14 @@ name = "vllm-metrics"
 version = "0.1.0"
 dependencies = [
  "prometheus-client",
+]
+
+[[package]]
+name = "vllm-reasoning-parser"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "vllm-text",
 ]
 
 [[package]]

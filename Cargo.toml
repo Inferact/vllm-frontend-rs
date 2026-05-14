@@ -6,6 +6,7 @@ members = [
     "src/llm",
     "src/managed-engine",
     "src/metrics",
+    "src/reasoning-parser",
     "src/server",
     "src/text",
     "src/tool-parser",
@@ -101,6 +102,7 @@ vllm-engine-core-client = { path = "src/engine-core-client" }
 vllm-llm = { path = "src/llm" }
 vllm-managed-engine = { path = "src/managed-engine" }
 vllm-metrics = { path = "src/metrics" }
+vllm-reasoning-parser = { path = "src/reasoning-parser" }
 vllm-server = { path = "src/server" }
 vllm-text = { path = "src/text" }
 vllm-tool-parser = { path = "src/tool-parser" }
