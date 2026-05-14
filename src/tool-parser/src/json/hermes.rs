@@ -1,5 +1,5 @@
 use super::{JsonToolCallConfig, JsonToolCallParser, JsonToolCallWhitespace};
-use crate::{ChatTool, Result, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolParseResult, ToolParser};
 
 const HERMES_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
     parser_name: "Hermes",
@@ -30,7 +30,7 @@ pub struct HermesToolParser {
 
 impl HermesToolParser {
     /// Create a Hermes tool parser.
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self {
             inner: JsonToolCallParser::new(HERMES_CONFIG),
         }
@@ -39,7 +39,7 @@ impl HermesToolParser {
 
 impl ToolParser for HermesToolParser {
     /// Create a boxed Hermes tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

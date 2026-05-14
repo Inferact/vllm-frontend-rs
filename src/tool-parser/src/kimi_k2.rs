@@ -6,7 +6,7 @@ use winnow::token::{literal, rest, take_until, take_while};
 
 use super::utils::{JsonObjectScanState, parse_buffered_event, safe_text_len, take_json_object};
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser};
-use crate::ChatTool;
+use crate::Tool;
 
 const TOOL_CALLS_START: &str = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_END: &str = "<|tool_calls_section_end|>";
@@ -64,7 +64,7 @@ pub struct KimiK2ToolParser {
 
 impl KimiK2ToolParser {
     /// Create a Kimi K2 tool parser.
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self {
             buffer: String::new(),
             mode: KimiK2Mode::Text,
@@ -130,7 +130,7 @@ impl KimiK2ToolParser {
 
 impl ToolParser for KimiK2ToolParser {
     /// Create a boxed Kimi K2 tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

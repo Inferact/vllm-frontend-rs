@@ -1,5 +1,5 @@
 use super::{JsonToolCallConfig, JsonToolCallParser, JsonToolCallWhitespace};
-use crate::{ChatTool, Result, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolParseResult, ToolParser};
 
 const QWEN_XML_CONFIG: JsonToolCallConfig = JsonToolCallConfig {
     parser_name: "Qwen XML",
@@ -32,7 +32,7 @@ pub struct Qwen3XmlToolParser {
 
 impl Qwen3XmlToolParser {
     /// Create a Qwen XML tool parser.
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self {
             inner: JsonToolCallParser::new(QWEN_XML_CONFIG),
         }
@@ -41,7 +41,7 @@ impl Qwen3XmlToolParser {
 
 impl ToolParser for Qwen3XmlToolParser {
     /// Create a boxed Qwen XML tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

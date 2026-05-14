@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Number, Value};
 
-use crate::ChatTool;
+use crate::Tool;
 
 /// Normalized parameter schemas for all tools in one request.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub(super) enum JsonParamType {
 
 impl ToolSchemas {
     /// Normalize OpenAI-style tool parameter JSON schemas for one request.
-    pub(super) fn from_tools(tools: &[ChatTool]) -> Self {
+    pub(super) fn from_tools(tools: &[Tool]) -> Self {
         let tools = tools
             .iter()
             .map(|tool| (tool.name.clone(), ToolSchema::from_schema(&tool.parameters)))
@@ -244,10 +244,10 @@ mod tests {
     use serde_json::json;
 
     use super::{ToolSchema, ToolSchemas};
-    use crate::ChatTool;
+    use crate::Tool;
 
-    fn test_tool(name: &str, parameters: serde_json::Value) -> ChatTool {
-        ChatTool {
+    fn test_tool(name: &str, parameters: serde_json::Value) -> Tool {
+        Tool {
             name: name.to_string(),
             description: None,
             parameters,

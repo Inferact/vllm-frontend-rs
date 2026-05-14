@@ -9,7 +9,7 @@ use super::{
     argument_delta_event, tool_call_header_event,
 };
 use crate::utils::{JsonObjectScanState, parse_buffered_event};
-use crate::{ChatTool, Result, ToolCallDelta, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolCallDelta, ToolParseResult, ToolParser};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LlamaJsonMode {
@@ -50,7 +50,7 @@ pub struct Llama3JsonToolParser {
 
 impl Llama3JsonToolParser {
     /// Create a Llama JSON tool parser.
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self {
             buffer: String::new(),
             mode: LlamaJsonMode::Start,
@@ -128,7 +128,7 @@ impl Llama3JsonToolParser {
 
 impl ToolParser for Llama3JsonToolParser {
     /// Create a boxed Llama JSON tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

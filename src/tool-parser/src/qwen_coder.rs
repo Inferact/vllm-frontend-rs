@@ -7,7 +7,7 @@ use winnow::token::{literal, take_until};
 use super::parameters::ToolSchemas;
 use super::utils::{parse_buffered_event, safe_text_len, xml_unescape};
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser};
-use crate::ChatTool;
+use crate::Tool;
 
 const TOOL_CALL_START: &str = "<tool_call>";
 const TOOL_CALL_END: &str = "</tool_call>";
@@ -61,7 +61,7 @@ pub struct Qwen3CoderToolParser {
 
 impl Qwen3CoderToolParser {
     /// Create a Qwen Coder tool parser.
-    fn new(tools: &[ChatTool]) -> Self {
+    fn new(tools: &[Tool]) -> Self {
         Self {
             buffer: String::new(),
             mode: QwenCoderMode::Text,
@@ -104,7 +104,7 @@ impl Qwen3CoderToolParser {
 
 impl ToolParser for Qwen3CoderToolParser {
     /// Create a boxed Qwen Coder tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

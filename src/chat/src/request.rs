@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use vllm_text::SamplingParams;
 use vllm_text::TextDecodeOptions;
-pub use vllm_tool_parser::ChatTool;
+pub use vllm_tool_parser::Tool as ChatTool;
 
 use crate::AssistantMessageExt;
 use crate::error::{Error, Result};

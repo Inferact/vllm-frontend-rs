@@ -1,5 +1,5 @@
 use super::{DeepSeekJsonFormat, DeepSeekJsonToolParser};
-use crate::{ChatTool, Result, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolParseResult, ToolParser};
 
 /// Tool parser for DeepSeek V3 JSON-fenced tool calls.
 ///
@@ -19,14 +19,14 @@ pub struct DeepSeekV3ToolParser(DeepSeekJsonToolParser);
 
 impl DeepSeekV3ToolParser {
     /// Create a DeepSeek V3 tool parser.
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self(DeepSeekJsonToolParser::new(DeepSeekJsonFormat::V3))
     }
 }
 
 impl ToolParser for DeepSeekV3ToolParser {
     /// Create a boxed DeepSeek V3 tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

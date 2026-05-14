@@ -8,7 +8,7 @@ use winnow::token::{literal, take_till, take_until};
 
 use super::utils::{parse_buffered_event, safe_text_len};
 use super::{Result, ToolCallDelta, ToolParseResult, ToolParser};
-use crate::ChatTool;
+use crate::Tool;
 
 const TOOL_CALL_START: &str = "<|tool_call>";
 const TOOL_CALL_END: &str = "<tool_call|>";
@@ -44,7 +44,7 @@ pub struct Gemma4ToolParser {
 }
 
 impl Gemma4ToolParser {
-    fn new(_tools: &[ChatTool]) -> Self {
+    fn new(_tools: &[Tool]) -> Self {
         Self {
             buffer: String::new(),
             emitted_tool_count: 0,
@@ -78,7 +78,7 @@ impl Gemma4ToolParser {
 }
 
 impl ToolParser for Gemma4ToolParser {
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {
@@ -288,7 +288,7 @@ mod tests {
         Gemma4ToolParser, ToolCallDelta, ToolParseResult, ToolParser, gemma4_args,
         gemma4_array_content,
     };
-    use crate::ChatTool;
+    use crate::Tool;
 
     fn parse_gemma4_args(args: &str) -> super::Result<serde_json::Map<String, Value>> {
         let mut input = Partial::new(args);
@@ -314,51 +314,51 @@ mod tests {
         }
     }
 
-    fn test_tools() -> Vec<ChatTool> {
+    fn test_tools() -> Vec<Tool> {
         vec![
-            ChatTool {
+            Tool {
                 name: "get_weather".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "get_time".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "write_file".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "Edit".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "search".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "set".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "get_status".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),
                 strict: None,
             },
-            ChatTool {
+            Tool {
                 name: "todowrite".to_string(),
                 description: None,
                 parameters: json!({ "type": "object" }),

@@ -7,7 +7,7 @@ use winnow::token::{literal, rest, take_until};
 use super::parameters::ToolSchemas;
 use super::utils::{parse_buffered_event, safe_text_len, xml_unescape};
 use super::{Result, ToolCallDelta, ToolParseResult};
-use crate::ChatTool;
+use crate::Tool;
 
 mod deepseek_v32;
 mod deepseek_v4;
@@ -78,7 +78,7 @@ struct DeepSeekDsmlToolParser {
 
 impl DeepSeekDsmlToolParser {
     /// Create a parser with DSML tokens for one DeepSeek format.
-    fn new(tools: &[ChatTool], tokens: DsmlTokens) -> Self {
+    fn new(tools: &[Tool], tokens: DsmlTokens) -> Self {
         Self {
             buffer: String::new(),
             mode: DsmlMode::Text,

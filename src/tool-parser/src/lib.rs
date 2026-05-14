@@ -38,7 +38,7 @@ use serde_json::Value;
 
 /// One function-style tool made available to the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatTool {
+pub struct Tool {
     pub name: String,
     pub description: Option<String>,
     pub parameters: Value,
@@ -111,7 +111,7 @@ impl ToolParseResult {
 /// Incremental parser that extracts tool calls from assistant output.
 pub trait ToolParser: Send {
     /// Construct a boxed parser instance for one request stream.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static;
 

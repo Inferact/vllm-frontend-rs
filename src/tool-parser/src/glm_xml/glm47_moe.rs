@@ -1,5 +1,5 @@
 use super::{GlmXmlToolParser, Separator};
-use crate::{ChatTool, Result, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolParseResult, ToolParser};
 
 /// Tool parser for GLM-4.7 MoE XML-style tool calls.
 ///
@@ -9,13 +9,13 @@ use crate::{ChatTool, Result, ToolParseResult, ToolParser};
 pub struct Glm47MoeToolParser(GlmXmlToolParser);
 
 impl Glm47MoeToolParser {
-    fn new(tools: &[ChatTool]) -> Self {
+    fn new(tools: &[Tool]) -> Self {
         Self(GlmXmlToolParser::new(tools, Separator::Flexible))
     }
 }
 
 impl ToolParser for Glm47MoeToolParser {
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

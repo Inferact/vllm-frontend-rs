@@ -3,7 +3,7 @@ use std::time::Duration;
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use tool_parser::parsers::MinimaxM2Parser as ExternalMinimaxM2Parser;
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{ChatTool, MinimaxM2ToolParser, ToolParser};
+use vllm_tool_parser::{MinimaxM2ToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
@@ -37,14 +37,14 @@ fn long_normal_text_fixture() -> String {
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
-fn native_parser(tools: &[ChatTool]) -> Box<dyn ToolParser> {
+fn native_parser(tools: &[Tool]) -> Box<dyn ToolParser> {
     MinimaxM2ToolParser::create(tools).expect("MiniMax M2 parser should initialize")
 }
 
 fn run_stream_group(
     c: &mut Criterion,
     name: &str,
-    tools: &[ChatTool],
+    tools: &[Tool],
     text: &str,
     chunk_chars: usize,
     expected_normal_text: &str,

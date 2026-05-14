@@ -1,5 +1,5 @@
 use super::{DeepSeekDsmlToolParser, DsmlTokens};
-use crate::{ChatTool, Result, ToolParseResult, ToolParser};
+use crate::{Result, Tool, ToolParseResult, ToolParser};
 
 /// Tool parser for DeepSeek V3.2 models.
 ///
@@ -27,14 +27,14 @@ pub struct DeepSeekV32ToolParser(DeepSeekDsmlToolParser);
 
 impl DeepSeekV32ToolParser {
     /// Create a DeepSeek V3.2 tool parser.
-    pub(super) fn new(tools: &[ChatTool]) -> Self {
+    pub(super) fn new(tools: &[Tool]) -> Self {
         Self(DeepSeekDsmlToolParser::new(tools, DsmlTokens::V32))
     }
 }
 
 impl ToolParser for DeepSeekV32ToolParser {
     /// Create a boxed DeepSeek V3.2 tool parser.
-    fn create(tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {

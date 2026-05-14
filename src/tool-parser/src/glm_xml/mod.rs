@@ -7,7 +7,7 @@ use winnow::token::{literal, rest, take_until, take_while};
 use super::parameters::ToolSchemas;
 use super::utils::{parse_buffered_event, safe_text_len, xml_unescape};
 use super::{Result, ToolCallDelta, ToolParseResult};
-use crate::ChatTool;
+use crate::Tool;
 
 mod glm45_moe;
 mod glm47_moe;
@@ -65,7 +65,7 @@ struct GlmXmlToolParser {
 
 impl GlmXmlToolParser {
     /// Create a GLM XML tool parser with a function-name separator.
-    fn new(tools: &[ChatTool], separator: Separator) -> Self {
+    fn new(tools: &[Tool], separator: Separator) -> Self {
         Self {
             buffer: String::new(),
             mode: GlmMode::Text,

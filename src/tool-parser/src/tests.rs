@@ -1,9 +1,9 @@
-use super::{ChatTool, Result, ToolCallDelta, ToolParseResult, ToolParser};
+use super::{Result, Tool, ToolCallDelta, ToolParseResult, ToolParser};
 
 struct DefaultParser;
 
 impl ToolParser for DefaultParser {
-    fn create(_tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+    fn create(_tools: &[Tool]) -> Result<Box<dyn ToolParser>>
     where
         Self: Sized + 'static,
     {
@@ -27,7 +27,7 @@ fn default_parse_complete_delegates_through_push_and_finish() {
     struct StreamingParser;
 
     impl ToolParser for StreamingParser {
-        fn create(_tools: &[ChatTool]) -> Result<Box<dyn ToolParser>>
+        fn create(_tools: &[Tool]) -> Result<Box<dyn ToolParser>>
         where
             Self: Sized + 'static,
         {

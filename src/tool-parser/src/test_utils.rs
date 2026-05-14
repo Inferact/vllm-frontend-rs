@@ -1,12 +1,12 @@
 use serde_json::json;
 
 use super::{ToolParseResult, ToolParser};
-use crate::ChatTool;
+use crate::Tool;
 
 /// Build a reusable set of function tools for parser unit tests.
-pub fn test_tools() -> Vec<ChatTool> {
+pub fn test_tools() -> Vec<Tool> {
     vec![
-        ChatTool {
+        Tool {
             name: "get_weather".to_string(),
             description: None,
             parameters: json!({
@@ -22,7 +22,7 @@ pub fn test_tools() -> Vec<ChatTool> {
             }),
             strict: None,
         },
-        ChatTool {
+        Tool {
             name: "add".to_string(),
             description: None,
             parameters: json!({
@@ -34,7 +34,7 @@ pub fn test_tools() -> Vec<ChatTool> {
             }),
             strict: None,
         },
-        ChatTool {
+        Tool {
             name: "convert".to_string(),
             description: None,
             parameters: json!({
@@ -49,7 +49,7 @@ pub fn test_tools() -> Vec<ChatTool> {
             }),
             strict: None,
         },
-        ChatTool {
+        Tool {
             name: "calculate_area".to_string(),
             description: None,
             parameters: json!({
@@ -62,7 +62,7 @@ pub fn test_tools() -> Vec<ChatTool> {
             }),
             strict: None,
         },
-        ChatTool {
+        Tool {
             name: "update_record".to_string(),
             description: None,
             parameters: json!({
