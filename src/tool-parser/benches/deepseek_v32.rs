@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{Gemma4ToolParser, Tool, ToolParser};
+use vllm_tool_parser::{DeepSeekV32ToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::feed_parser;
@@ -12,44 +12,32 @@ const LONG_NORMAL_TEXT_REPEATS: usize = 2048;
 
 fn mixed_fixture() -> String {
     concat!(
-        "I will inspect the data before answering.\n",
-        "<|tool_call>",
-        "call:convert{",
-        "whole:114.514,",
-        "flag:true,",
-        "empty:<|\"|><|\"|>,",
-        "payload:{",
-        "name:<|\"|>demo<|\"|>,",
-        "count:42,",
-        "enabled:false,",
-        "missing:null,",
-        "nested:{level:2,label:<|\"|>deep<|\"|>},",
-        "tags:[<|\"|>red<|\"|>,<|\"|>blue<|\"|>,3,true,null,{kind:<|\"|>leaf<|\"|>}]",
-        "},",
-        "items:[",
-        "<|\"|>alpha<|\"|>,",
-        "{key:<|\"|>value<|\"|>,score:0.75},",
-        "[1,2,3]",
-        "]",
-        "}",
-        "<tool_call|>",
-        "<|tool_call>",
-        "call:update_record{",
-        "data:{id:7,active:true,notes:[<|\"|>keep<|\"|>,<|\"|>review<|\"|>]}",
-        "}",
-        "<tool_call|>",
-        " Finished.",
+        "I will check two cities before answering.\n",
+        "<｜DSML｜function_calls>\n",
+        "<｜DSML｜invoke name=\"get_weather\">\n",
+        "<｜DSML｜parameter name=\"location\" string=\"true\">Hangzhou</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"date\" string=\"true\">2026-04-28</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"unit\" string=\"true\">celsius</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"days\" string=\"false\">3</｜DSML｜parameter>\n",
+        "</｜DSML｜invoke>\n",
+        "<｜DSML｜invoke name=\"get_weather\">\n",
+        "<｜DSML｜parameter name=\"location\" string=\"true\">San Francisco</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"date\" string=\"true\">2026-04-28</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"unit\" string=\"true\">fahrenheit</｜DSML｜parameter>\n",
+        "<｜DSML｜parameter name=\"days\" string=\"false\">2</｜DSML｜parameter>\n",
+        "</｜DSML｜invoke>\n",
+        "</｜DSML｜function_calls>",
     )
     .to_string()
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no Gemma4 tool markers at all.\n";
+    let line = "This is ordinary assistant text with no DSML tool markers at all.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn parser(tools: &[Tool]) -> Box<dyn ToolParser> {
-    Gemma4ToolParser::create(tools).expect("Gemma4 parser should initialize")
+    DeepSeekV32ToolParser::create(tools).expect("DeepSeek V3.2 parser should initialize")
 }
 
 fn run_stream_group(
@@ -95,24 +83,24 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_gemma4_tool_parser(c: &mut Criterion) {
+fn bench_deepseek_v32(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "gemma4_tool_parser/mixed_complex_tool_call",
+        "deepseek_v32/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
-        "I will inspect the data before answering.\n Finished.",
+        "I will check two cities before answering.\n",
         2,
     );
 
     run_stream_group(
         c,
-        "gemma4_tool_parser/long_normal_text",
+        "deepseek_v32/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -121,5 +109,5 @@ fn bench_gemma4_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_gemma4_tool_parser);
+criterion_group!(benches, bench_deepseek_v32);
 criterion_main!(benches);

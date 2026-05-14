@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use tool_parser::parsers::QwenCoderParser as ExternalQwenCoderParser;
+use tool_parser::parsers::LlamaParser as ExternalLlamaParser;
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{Qwen3CoderToolParser, Tool, ToolParser};
+use vllm_tool_parser::{Llama3JsonToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
@@ -11,36 +11,28 @@ use utils::{feed_external_parser, feed_parser, openai_tools};
 const CHUNK_CHARS: usize = 7;
 const LONG_NORMAL_TEXT_REPEATS: usize = 2048;
 
+fn tool_call(function_name: &str, parameters: &str) -> String {
+    format!(r#"{{"name":"{function_name}","parameters":{parameters}}}"#)
+}
+
 fn mixed_fixture() -> String {
-    concat!(
-        "I will check two cities before answering.\n",
-        "<tool_call>\n",
-        "<function=get_weather>\n",
-        "<parameter=location>Hangzhou</parameter>\n",
-        "<parameter=date>2026-04-29</parameter>\n",
-        "<parameter=unit>celsius</parameter>\n",
-        "<parameter=days>3</parameter>\n",
-        "</function>\n",
-        "</tool_call>\n",
-        "<tool_call>\n",
-        "<function=get_weather>\n",
-        "<parameter=location>San Francisco</parameter>\n",
-        "<parameter=date>2026-04-29</parameter>\n",
-        "<parameter=unit>fahrenheit</parameter>\n",
-        "<parameter=days>2</parameter>\n",
-        "</function>\n",
-        "</tool_call>",
+    format!(
+        "{}; {}",
+        tool_call("get_weather", r#"{"location":"Hangzhou","days":3}"#),
+        tool_call(
+            "convert",
+            r#"{"whole":42.5,"flag":true,"payload":{"nested":["x",null]},"items":[1,2,3],"empty":""}"#
+        ),
     )
-    .to_string()
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no Qwen Coder tool markers at all.\n";
+    let line = "This is ordinary assistant text with no Llama JSON tool call at the root.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn native_parser(tools: &[Tool]) -> Box<dyn ToolParser> {
-    Qwen3CoderToolParser::create(tools).expect("Qwen Coder parser should initialize")
+    Llama3JsonToolParser::create(tools).expect("Llama JSON parser should initialize")
 }
 
 fn run_stream_group(
@@ -85,20 +77,18 @@ fn run_stream_group(
     });
 
     group.bench_function("external_reuse_parser", |b| {
-        let mut parser = ExternalQwenCoderParser::new();
+        let mut parser = ExternalLlamaParser::new();
         b.iter(|| {
             let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
-            debug_assert_eq!(result.0, expected_normal_text);
             black_box(result);
         })
     });
 
     group.bench_function("external_create_parser", |b| {
         b.iter_batched(
-            ExternalQwenCoderParser::new,
+            ExternalLlamaParser::new,
             |mut parser| {
                 let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
-                debug_assert_eq!(result.0, expected_normal_text);
                 black_box(result);
             },
             BatchSize::SmallInput,
@@ -108,24 +98,24 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_qwen3_coder_tool_parser(c: &mut Criterion) {
+fn bench_llama3_json(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "qwen3_coder_tool_parser/mixed_text_tool_call",
+        "llama3_json/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
-        "I will check two cities before answering.\n",
+        "",
         2,
     );
 
     run_stream_group(
         c,
-        "qwen3_coder_tool_parser/long_normal_text",
+        "llama3_json/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -134,5 +124,5 @@ fn bench_qwen3_coder_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_qwen3_coder_tool_parser);
+criterion_group!(benches, bench_llama3_json);
 criterion_main!(benches);

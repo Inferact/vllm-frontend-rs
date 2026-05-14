@@ -106,14 +106,14 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_minimax_m2_tool_parser(c: &mut Criterion) {
+fn bench_minimax_m2(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "minimax_m2_tool_parser/mixed_text_tool_call",
+        "minimax_m2/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
@@ -123,7 +123,7 @@ fn bench_minimax_m2_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "minimax_m2_tool_parser/long_normal_text",
+        "minimax_m2/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -132,5 +132,5 @@ fn bench_minimax_m2_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_minimax_m2_tool_parser);
+criterion_group!(benches, bench_minimax_m2);
 criterion_main!(benches);

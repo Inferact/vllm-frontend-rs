@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use tool_parser::parsers::DeepSeekParser as ExternalDeepSeekParser;
+use tool_parser::parsers::DeepSeek31Parser as ExternalDeepSeek31Parser;
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{DeepSeekV3ToolParser, Tool, ToolParser};
+use vllm_tool_parser::{DeepSeekV31ToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
@@ -15,26 +15,24 @@ fn mixed_fixture() -> String {
     concat!(
         "I will check two cities before answering.\n",
         "<｜tool▁calls▁begin｜>",
-        "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n",
-        "```json\n",
+        "<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>",
         "{\"location\":\"Hangzhou\",\"days\":3}",
-        "\n```<｜tool▁call▁end｜>",
-        "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n",
-        "```json\n",
+        "<｜tool▁call▁end｜>",
+        "<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>",
         "{\"location\":\"San Francisco\",\"days\":2}",
-        "\n```<｜tool▁call▁end｜>",
+        "<｜tool▁call▁end｜>",
         "<｜tool▁calls▁end｜>",
     )
     .to_string()
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no DeepSeek V3 tool markers at all.\n";
+    let line = "This is ordinary assistant text with no DeepSeek V3.1 tool markers at all.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn native_parser(tools: &[Tool]) -> Box<dyn ToolParser> {
-    DeepSeekV3ToolParser::create(tools).expect("DeepSeek V3 parser should initialize")
+    DeepSeekV31ToolParser::create(tools).expect("DeepSeek V3.1 parser should initialize")
 }
 
 fn run_stream_group(
@@ -79,7 +77,7 @@ fn run_stream_group(
     });
 
     group.bench_function("external_reuse_parser", |b| {
-        let mut parser = ExternalDeepSeekParser::new();
+        let mut parser = ExternalDeepSeek31Parser::new();
         b.iter(|| {
             let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
             black_box(result);
@@ -88,7 +86,7 @@ fn run_stream_group(
 
     group.bench_function("external_create_parser", |b| {
         b.iter_batched(
-            ExternalDeepSeekParser::new,
+            ExternalDeepSeek31Parser::new,
             |mut parser| {
                 let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
                 black_box(result);
@@ -100,14 +98,14 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_deepseek_v3_tool_parser(c: &mut Criterion) {
+fn bench_deepseek_v31(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "deepseek_v3_tool_parser/mixed_text_tool_call",
+        "deepseek_v31/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
@@ -117,7 +115,7 @@ fn bench_deepseek_v3_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "deepseek_v3_tool_parser/long_normal_text",
+        "deepseek_v31/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -126,5 +124,5 @@ fn bench_deepseek_v3_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_deepseek_v3_tool_parser);
+criterion_group!(benches, bench_deepseek_v31);
 criterion_main!(benches);

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use tool_parser::parsers::QwenParser as ExternalQwenParser;
+use tool_parser::parsers::DeepSeekParser as ExternalDeepSeekParser;
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{Qwen3XmlToolParser, Tool, ToolParser};
+use vllm_tool_parser::{DeepSeekV3ToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
@@ -11,25 +11,30 @@ use utils::{feed_external_parser, feed_parser, openai_tools};
 const CHUNK_CHARS: usize = 7;
 const LONG_NORMAL_TEXT_REPEATS: usize = 2048;
 
-fn tool_call(function_name: &str, arguments: &str) -> String {
-    format!("<tool_call>\n{{\"name\":\"{function_name}\",\"arguments\":{arguments}}}\n</tool_call>")
-}
-
 fn mixed_fixture() -> String {
-    format!(
-        "I will check two cities before answering.\n{}{}",
-        tool_call("get_weather", r#"{"location":"Hangzhou","days":3}"#),
-        tool_call("get_weather", r#"{"location":"San Francisco","days":2}"#),
+    concat!(
+        "I will check two cities before answering.\n",
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n",
+        "```json\n",
+        "{\"location\":\"Hangzhou\",\"days\":3}",
+        "\n```<｜tool▁call▁end｜>",
+        "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n",
+        "```json\n",
+        "{\"location\":\"San Francisco\",\"days\":2}",
+        "\n```<｜tool▁call▁end｜>",
+        "<｜tool▁calls▁end｜>",
     )
+    .to_string()
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no Qwen XML tool markers at all.\n";
+    let line = "This is ordinary assistant text with no DeepSeek V3 tool markers at all.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn native_parser(tools: &[Tool]) -> Box<dyn ToolParser> {
-    Qwen3XmlToolParser::create(tools).expect("Qwen XML parser should initialize")
+    DeepSeekV3ToolParser::create(tools).expect("DeepSeek V3 parser should initialize")
 }
 
 fn run_stream_group(
@@ -74,7 +79,7 @@ fn run_stream_group(
     });
 
     group.bench_function("external_reuse_parser", |b| {
-        let mut parser = ExternalQwenParser::new();
+        let mut parser = ExternalDeepSeekParser::new();
         b.iter(|| {
             let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
             black_box(result);
@@ -83,7 +88,7 @@ fn run_stream_group(
 
     group.bench_function("external_create_parser", |b| {
         b.iter_batched(
-            ExternalQwenParser::new,
+            ExternalDeepSeekParser::new,
             |mut parser| {
                 let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
                 black_box(result);
@@ -95,14 +100,14 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_qwen3_xml_tool_parser(c: &mut Criterion) {
+fn bench_deepseek_v3(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "qwen3_xml_tool_parser/mixed_text_tool_call",
+        "deepseek_v3/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
@@ -112,7 +117,7 @@ fn bench_qwen3_xml_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "qwen3_xml_tool_parser/long_normal_text",
+        "deepseek_v3/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -121,5 +126,5 @@ fn bench_qwen3_xml_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_qwen3_xml_tool_parser);
+criterion_group!(benches, bench_deepseek_v3);
 criterion_main!(benches);

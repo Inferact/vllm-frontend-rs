@@ -22,52 +22,52 @@ thiserror-ext.workspace = true
 tool-parser.workspace = true
 
 [[bench]]
-name = "deepseek_v3_tool_parser"
+name = "deepseek_v3"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "deepseek_v31_tool_parser"
+name = "deepseek_v31"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "deepseek_v32_tool_parser"
+name = "deepseek_v32"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "qwen3_coder_tool_parser"
+name = "qwen3_coder"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "qwen3_xml_tool_parser"
+name = "qwen3_xml"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "llama3_json_tool_parser"
+name = "llama3_json"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "minimax_m2_tool_parser"
+name = "minimax_m2"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "glm45_moe_tool_parser"
+name = "glm45_moe"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "kimi_k2_tool_parser"
+name = "kimi_k2"
 harness = false
 required-features = ["test-util"]
 
 [[bench]]
-name = "gemma4_tool_parser"
+name = "gemma4"
 harness = false
 required-features = ["test-util"]
 

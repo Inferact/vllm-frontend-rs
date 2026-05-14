@@ -155,7 +155,7 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
+fn bench_glm45_moe(c: &mut Criterion) {
     let tools = test_tools();
     let glm45_mixed_text = glm45_mixed_fixture();
     let glm47_mixed_text = glm47_mixed_fixture();
@@ -163,7 +163,7 @@ fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "glm45_tool_parser/mixed_text_tool_call",
+        "glm45/mixed_text_tool_call",
         GLM45_PARSER_NAME,
         &tools,
         &glm45_mixed_text,
@@ -174,7 +174,7 @@ fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "glm47_tool_parser/mixed_text_tool_call",
+        "glm47/mixed_text_tool_call",
         GLM47_PARSER_NAME,
         &tools,
         &glm47_mixed_text,
@@ -185,7 +185,7 @@ fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "glm45_tool_parser/long_normal_text",
+        "glm45/long_normal_text",
         GLM45_PARSER_NAME,
         &tools,
         &long_normal_text,
@@ -196,7 +196,7 @@ fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "glm47_tool_parser/long_normal_text",
+        "glm47/long_normal_text",
         GLM47_PARSER_NAME,
         &tools,
         &long_normal_text,
@@ -206,5 +206,5 @@ fn bench_glm45_moe_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_glm45_moe_tool_parser);
+criterion_group!(benches, bench_glm45_moe);
 criterion_main!(benches);

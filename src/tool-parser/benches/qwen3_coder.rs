@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use tool_parser::parsers::DeepSeek31Parser as ExternalDeepSeek31Parser;
+use tool_parser::parsers::QwenCoderParser as ExternalQwenCoderParser;
 use vllm_tool_parser::test_utils::{split_by_chars, test_tools};
-use vllm_tool_parser::{DeepSeekV31ToolParser, Tool, ToolParser};
+use vllm_tool_parser::{Qwen3CoderToolParser, Tool, ToolParser};
 
 mod utils;
 use utils::{feed_external_parser, feed_parser, openai_tools};
@@ -14,25 +14,33 @@ const LONG_NORMAL_TEXT_REPEATS: usize = 2048;
 fn mixed_fixture() -> String {
     concat!(
         "I will check two cities before answering.\n",
-        "<｜tool▁calls▁begin｜>",
-        "<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>",
-        "{\"location\":\"Hangzhou\",\"days\":3}",
-        "<｜tool▁call▁end｜>",
-        "<｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>",
-        "{\"location\":\"San Francisco\",\"days\":2}",
-        "<｜tool▁call▁end｜>",
-        "<｜tool▁calls▁end｜>",
+        "<tool_call>\n",
+        "<function=get_weather>\n",
+        "<parameter=location>Hangzhou</parameter>\n",
+        "<parameter=date>2026-04-29</parameter>\n",
+        "<parameter=unit>celsius</parameter>\n",
+        "<parameter=days>3</parameter>\n",
+        "</function>\n",
+        "</tool_call>\n",
+        "<tool_call>\n",
+        "<function=get_weather>\n",
+        "<parameter=location>San Francisco</parameter>\n",
+        "<parameter=date>2026-04-29</parameter>\n",
+        "<parameter=unit>fahrenheit</parameter>\n",
+        "<parameter=days>2</parameter>\n",
+        "</function>\n",
+        "</tool_call>",
     )
     .to_string()
 }
 
 fn long_normal_text_fixture() -> String {
-    let line = "This is ordinary assistant text with no DeepSeek V3.1 tool markers at all.\n";
+    let line = "This is ordinary assistant text with no Qwen Coder tool markers at all.\n";
     line.repeat(LONG_NORMAL_TEXT_REPEATS)
 }
 
 fn native_parser(tools: &[Tool]) -> Box<dyn ToolParser> {
-    DeepSeekV31ToolParser::create(tools).expect("DeepSeek V3.1 parser should initialize")
+    Qwen3CoderToolParser::create(tools).expect("Qwen Coder parser should initialize")
 }
 
 fn run_stream_group(
@@ -77,18 +85,20 @@ fn run_stream_group(
     });
 
     group.bench_function("external_reuse_parser", |b| {
-        let mut parser = ExternalDeepSeek31Parser::new();
+        let mut parser = ExternalQwenCoderParser::new();
         b.iter(|| {
             let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
+            debug_assert_eq!(result.0, expected_normal_text);
             black_box(result);
         })
     });
 
     group.bench_function("external_create_parser", |b| {
         b.iter_batched(
-            ExternalDeepSeek31Parser::new,
+            ExternalQwenCoderParser::new,
             |mut parser| {
                 let result = feed_external_parser(&mut parser, &openai_tools, black_box(&chunks));
+                debug_assert_eq!(result.0, expected_normal_text);
                 black_box(result);
             },
             BatchSize::SmallInput,
@@ -98,14 +108,14 @@ fn run_stream_group(
     group.finish();
 }
 
-fn bench_deepseek_v31_tool_parser(c: &mut Criterion) {
+fn bench_qwen3_coder(c: &mut Criterion) {
     let tools = test_tools();
     let mixed_text = mixed_fixture();
     let long_normal_text = long_normal_text_fixture();
 
     run_stream_group(
         c,
-        "deepseek_v31_tool_parser/mixed_text_tool_call",
+        "qwen3_coder/mixed_text_tool_call",
         &tools,
         &mixed_text,
         CHUNK_CHARS,
@@ -115,7 +125,7 @@ fn bench_deepseek_v31_tool_parser(c: &mut Criterion) {
 
     run_stream_group(
         c,
-        "deepseek_v31_tool_parser/long_normal_text",
+        "qwen3_coder/long_normal_text",
         &tools,
         &long_normal_text,
         CHUNK_CHARS,
@@ -124,5 +134,5 @@ fn bench_deepseek_v31_tool_parser(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_deepseek_v31_tool_parser);
+criterion_group!(benches, bench_qwen3_coder);
 criterion_main!(benches);
