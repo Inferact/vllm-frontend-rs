@@ -36,12 +36,19 @@ fn is_false(v: &bool) -> bool {
 mod classfied_outputs;
 pub mod handshake;
 mod logprobs;
+pub mod multimodal;
 pub mod stats;
+pub mod tensor_wire;
 pub use classfied_outputs::{
     ClassifiedEngineCoreOutputs, DpControlMessage, RequestBatchOutputs, UtilityCallOutput,
 };
 pub use logprobs::{
     Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,
+};
+pub use multimodal::{
+    MultiModalBatchedField, MultiModalFeatureSpec, MultiModalFeatures, MultiModalField,
+    MultiModalFieldElem, MultiModalFlatField, MultiModalKwargsItem, MultiModalSharedField,
+    MultiModalSlice, NestedTensorValue, PlaceholderRange, SliceSpec,
 };
 
 /// Request types are encoded as single-byte protocol constants so they can be
@@ -304,9 +311,11 @@ impl EngineCoreSamplingParams {
 pub struct EngineCoreRequest {
     pub request_id: String,
     pub prompt_token_ids: Option<Vec<u32>>,
-    /// Multimodal features are preserved in the schema but not yet strongly
-    /// typed.
-    pub mm_features: Option<OpaqueValue>,
+    /// Multimodal features attached to the request.
+    ///
+    /// Original Python definition:
+    /// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/engine/__init__.py#L86-L89>
+    pub mm_features: Option<MultiModalFeatures>,
     pub sampling_params: Option<EngineCoreSamplingParams>,
     /// Pooling parameters are preserved in the schema but not yet strongly
     /// typed.
