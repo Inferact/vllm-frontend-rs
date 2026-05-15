@@ -5,10 +5,10 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 
 use super::tensor_wire::WireTensor;
 
-/// Multimodal features attached to one engine-core request.
+/// Rust alias for the non-null payload of `EngineCoreRequest.mm_features`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/engine/__init__.py#L80-L89>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/engine/__init__.py#L88>
 pub type MultiModalFeatures = Vec<MultiModalFeatureSpec>;
 
 /// Represents a single multimodal input with its processed data and metadata.
@@ -18,7 +18,7 @@ pub type MultiModalFeatures = Vec<MultiModalFeatureSpec>;
 /// per item.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L301-L332>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L301-L332>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiModalFeatureSpec {
     /// Represents multimodal data for this feature.
@@ -45,7 +45,7 @@ pub struct MultiModalFeatureSpec {
 /// Placeholder location information for multi-modal data.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L118-L145>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L118-L145>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaceholderRange {
     /// The start index of the placeholder in the prompt.
@@ -64,14 +64,14 @@ pub struct PlaceholderRange {
 /// corresponding to a single item in `MultiModalDataItems`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L854-L871>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L854-L871>
 pub type MultiModalKwargsItem = BTreeMap<String, MultiModalFieldElem>;
 
 /// Represents a processed keyword argument to pass to a model for a
 /// `MultiModalKwargsItem`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L348-L369>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L348-L369>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiModalFieldElem {
     /// The tensor data of this field in `MultiModalKwargsItem`, i.e. the value
@@ -88,8 +88,10 @@ pub struct MultiModalFieldElem {
 
 /// Nested tensor payload used by multimodal keyword arguments.
 ///
-/// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L218-L226>
+/// Original Python type alias and wire encoding:
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L218-L226>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L292-L299>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L456-L465>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum NestedTensorValue {
@@ -102,8 +104,10 @@ pub enum NestedTensorValue {
 /// Defines how to interpret tensor data belonging to a keyword argument for
 /// `MultiModalKwargsItems`, and vice versa.
 ///
-/// Original Python definitions:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L385-L630>
+/// Original Python definitions and wire encoding:
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L385-L630>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L301-L310>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L440-L454>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "MultiModalFieldWire", into = "MultiModalFieldWire")]
 pub enum MultiModalField {
@@ -115,7 +119,7 @@ pub enum MultiModalField {
 /// Info: `MultiModalFieldConfig.batched`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L463-L502>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L385-L502>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MultiModalBatchedField {
@@ -128,7 +132,8 @@ pub struct MultiModalBatchedField {
 /// `MultiModalFieldConfig.flat_from_sizes`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L505-L603>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L385-L397>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L505-L603>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MultiModalFlatField {
@@ -147,7 +152,8 @@ pub struct MultiModalFlatField {
 /// Info: `MultiModalFieldConfig.shared`.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/multimodal/inputs.py#L606-L630>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L385-L397>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L606-L630>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MultiModalSharedField {
@@ -160,8 +166,8 @@ pub struct MultiModalSharedField {
 
 /// Python slice encoded as `(start, stop, step)`.
 ///
-/// Original Python encoding:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/serial_utils.py#L199-L204>
+/// Original Python wire encoding:
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L199-L204>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct SliceSpec {
     pub start: Option<isize>,

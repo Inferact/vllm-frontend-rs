@@ -307,9 +307,6 @@ pub struct EngineCoreRequest {
     pub request_id: String,
     pub prompt_token_ids: Option<Vec<u32>>,
     /// Multimodal features attached to the request.
-    ///
-    /// Original Python definition:
-    /// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/engine/__init__.py#L86-L89>
     pub mm_features: Option<MultiModalFeatures>,
     pub sampling_params: Option<EngineCoreSamplingParams>,
     /// Pooling parameters are preserved in the schema but not yet strongly

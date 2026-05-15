@@ -5,7 +5,7 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 /// Tensors and ndarrays are encoded with this extension type in Python.
 ///
 /// Original Python definition:
-/// <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/v1/serial_utils.py#L42>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L41-L43>
 const CUSTOM_TYPE_RAW_VIEW: i8 = 3;
 
 /// Python ndarray/tensor wire tuple encoded as `(dtype, shape, data)`.
@@ -13,8 +13,9 @@ const CUSTOM_TYPE_RAW_VIEW: i8 = 3;
 /// This matches the custom msgpack representation built by Python
 /// `serial_utils.encode_ndarray` / `encode_tensor`.
 ///
-/// Original Python definitions:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/serial_utils.py#L237-L273>
+/// Original Python wire encoders:
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L237-L273>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L389-L425>
 #[derive(Debug, Clone, PartialEq, Serialize_tuple, Deserialize_tuple)]
 pub struct WireNdArray {
     pub dtype: String,
@@ -33,8 +34,9 @@ pub type WireTensor = WireNdArray;
 /// The data can be either an inline msgpack raw-view extension or an index into
 /// the multipart aux-frame list carried alongside the primary msgpack frame.
 ///
-/// Original Python definitions:
-/// <https://github.com/vllm-project/vllm/blob/f22d6e026798a74e6542a52ef776c054f2de572a/vllm/v1/serial_utils.py#L237-L273>
+/// Original Python wire encoders:
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L237-L273>
+/// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L389-L425>
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireArrayData {
     /// The index of the aux frame where the raw bytes of this array/tensor are
