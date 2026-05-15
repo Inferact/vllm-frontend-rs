@@ -72,7 +72,9 @@ impl Serialize for WireArrayData {
     where
         S: Serializer,
     {
-        // For testing purposes only. We don't actually serialize it into aux frames.
+        // TODO: outbound request serialization currently only supports inline
+        // raw-view bytes. Emitting aux frames needs transport-level plumbing;
+        // serializing `AuxIndex` here only preserves an already-built reference.
         match self {
             Self::AuxIndex(index) => serializer.serialize_u64(*index as u64),
             Self::RawView(bytes) => {

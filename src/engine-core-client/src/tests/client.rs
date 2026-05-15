@@ -17,11 +17,12 @@ use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, PushSocket, SocketOptions, SubSocket, XPubSocket, ZmqMessage};
 
 use crate::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
+use crate::protocol::logprobs::MaybeWireLogprobs;
 use crate::protocol::stats::SchedulerStats;
 use crate::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
-    EngineCoreRequestType, EngineCoreSamplingParams, MaybeWireLogprobs, UtilityOutput,
-    UtilityResultEnvelope, decode_engine_core_outputs,
+    EngineCoreRequestType, EngineCoreSamplingParams, UtilityOutput, UtilityResultEnvelope,
+    decode_engine_core_outputs,
 };
 use crate::test_utils::{
     IpcNamespace, setup_bootstrapped_mock_engine, setup_mock_engine_connections,

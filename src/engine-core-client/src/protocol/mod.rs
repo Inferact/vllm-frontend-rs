@@ -11,6 +11,8 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use thiserror_ext::AsReport;
 
 use crate::error::{Error, Result};
+use crate::protocol::logprobs::MaybeWireLogprobs;
+use crate::protocol::multimodal::MultiModalFeatures;
 use crate::protocol::stats::{PrefillStats, SchedulerStats};
 
 // TODO: This module currently mixes reusable frontend-facing semantic types
@@ -35,21 +37,14 @@ fn is_false(v: &bool) -> bool {
 
 mod classfied_outputs;
 pub mod handshake;
-mod logprobs;
+pub mod logprobs;
 pub mod multimodal;
 pub mod stats;
 pub mod tensor_wire;
 pub use classfied_outputs::{
     ClassifiedEngineCoreOutputs, DpControlMessage, RequestBatchOutputs, UtilityCallOutput,
 };
-pub use logprobs::{
-    Logprobs, MaybeWireLogprobs, PositionLogprobs, TokenLogprob, decode_engine_core_outputs,
-};
-pub use multimodal::{
-    MultiModalBatchedField, MultiModalFeatureSpec, MultiModalFeatures, MultiModalField,
-    MultiModalFieldElem, MultiModalFlatField, MultiModalKwargsItem, MultiModalSharedField,
-    MultiModalSlice, NestedTensorValue, PlaceholderRange, SliceSpec,
-};
+pub use logprobs::decode_engine_core_outputs;
 
 /// Request types are encoded as single-byte protocol constants so they can be
 /// sent over the ZMQ socket without an extra encoding step.
