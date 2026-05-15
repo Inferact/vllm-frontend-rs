@@ -23,7 +23,7 @@ use crate::protocol::multimodal::{
     MultiModalSlice, NestedTensorValue, PlaceholderRange, SliceSpec,
 };
 use crate::protocol::stats::SchedulerStats;
-use crate::protocol::tensor_wire::{WireArrayData, WireTensor};
+use crate::protocol::tensor_wire::WireTensor;
 use crate::protocol::{
     EngineCoreFinishReason, EngineCoreOutput, EngineCoreOutputs, EngineCoreRequest,
     EngineCoreRequestType, EngineCoreSamplingParams, UtilityOutput, UtilityResultEnvelope,
@@ -161,8 +161,6 @@ fn sample_request_with_id(request_id: &str) -> EngineCoreRequest {
 }
 
 fn sample_multimodal_request() -> EngineCoreRequest {
-    let tensor_bytes = [1.0_f32, 2.0, 3.5, 4.25].into_iter().flat_map(f32::to_ne_bytes).collect();
-
     EngineCoreRequest {
         request_id: "req-mm".to_string(),
         prompt_token_ids: Some(vec![101, 102, 103, 104]),
@@ -170,11 +168,10 @@ fn sample_multimodal_request() -> EngineCoreRequest {
             data: Some(BTreeMap::from([(
                 "pixel_values".to_string(),
                 MultiModalFieldElem {
-                    data: Some(NestedTensorValue::Tensor(WireTensor {
-                        dtype: "float32".to_string(),
-                        shape: vec![2, 2],
-                        data: WireArrayData::RawView(tensor_bytes),
-                    })),
+                    data: Some(NestedTensorValue::Tensor(
+                        WireTensor::from_f32(vec![2, 2], vec![1.0, 2.0, 3.5, 4.25])
+                            .expect("valid tensor shape"),
+                    )),
                     field: MultiModalField::Flat(MultiModalFlatField {
                         slices: vec![MultiModalSlice::Slice(SliceSpec {
                             start: Some(0),
@@ -2155,12 +2152,12 @@ fn python_msgpack_fixtures_match_rust_encoding() {
 
     let decoded_multimodal_request: EngineCoreRequest =
         rmp_serde::from_slice(&multimodal_request_bytes).unwrap();
-    let expected_multimodal_request = sample_multimodal_request();
-    assert_eq!(decoded_multimodal_request, expected_multimodal_request);
+    assert_eq!(decoded_multimodal_request, sample_multimodal_request());
 
     // The decode assertion above proves Python wire -> Rust struct. Also compare
     // Rust struct -> wire for the multimodal subtree, which is the frontend's
     // production direction when sending requests to Python EngineCore.
+    let expected_multimodal_request = sample_multimodal_request();
     let decode_value = |bytes: &[u8]| {
         rmpv::decode::read_value(&mut Cursor::new(bytes)).expect("decode msgpack value")
     };

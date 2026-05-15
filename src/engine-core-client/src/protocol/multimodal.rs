@@ -5,7 +5,7 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 
 use super::tensor_wire::WireTensor;
 
-/// Rust alias for the non-null payload of `EngineCoreRequest.mm_features`.
+/// Multimodal feature payload accepted from higher-level frontend code.
 ///
 /// Original Python definition:
 /// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/engine/__init__.py#L88>
