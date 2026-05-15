@@ -148,6 +148,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn validate_request_compat_rejects_unknown_model() {
         let request = base_request();
         assert!(validate_request_compat(&request, &served_names(&["other-model"])).is_err());
@@ -157,6 +158,18 @@ mod tests {
     fn validate_request_compat_rejects_streaming_prompt_logprobs() {
         let request = CompletionRequest {
             prompt_logprobs: Some(1),
+            ..base_request()
+        };
+        assert!(
+            validate_request_compat(&request, &served_names(&["Qwen/Qwen1.5-0.5B-Chat"])).is_err()
+        );
+
+        // The sentinel value -1 (meaning "return all top tokens") must also be
+        // rejected when streaming, matching the `prompt_logprobs > 0 || == -1`
+        // guard in the production code. Without this assertion, dropping the
+        // `== -1` branch from the guard would go undetected.
+        let request = CompletionRequest {
+            prompt_logprobs: Some(-1),
             ..base_request()
         };
         assert!(
