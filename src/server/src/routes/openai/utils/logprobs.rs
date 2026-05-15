@@ -177,6 +177,12 @@ pub fn collected_logprobs_to_openai(
             .zip(prompt_logprobs.tokens.last())
             .map(|(&offset, token)| offset.saturating_add(text_len(token)))
             .unwrap_or(0);
+        let completion_start = prompt_logprobs
+            .text_offset
+            .last()
+            .zip(prompt_logprobs.tokens.last())
+            .map(|(&offset, token)| offset.saturating_add(text_len(token)))
+            .unwrap_or(0);
         return match collected.logprobs.as_ref() {
             Some(completion_logprobs) => Ok(append_openai_logprobs(
                 prompt_logprobs,
