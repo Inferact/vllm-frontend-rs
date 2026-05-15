@@ -25,7 +25,7 @@ pub struct HfChatBackend {
     model_type: String,
     tokenizer: DynTokenizer,
     chat_renderer: DynChatRenderer,
-    multimodal_model_info: MultimodalModelInfo,
+    multimodal_model_info: Option<MultimodalModelInfo>,
 }
 
 impl HfChatBackend {
@@ -43,9 +43,10 @@ impl HfChatBackend {
             (!model_type.is_empty()).then_some(model_type.to_string()),
             files.config_path.as_deref(),
             files.preprocessor_config_path.as_deref(),
+            tokenizer.as_ref(),
         )?;
         let multimodal_render_info =
-            resolve_multimodal_render_info(&multimodal_model_info, tokenizer.as_ref());
+            resolve_multimodal_render_info(multimodal_model_info.as_ref(), tokenizer.as_ref());
 
         let renderer = options.renderer.resolve(model_type);
         let chat_renderer: DynChatRenderer = match renderer {
@@ -82,7 +83,7 @@ impl ChatBackend for HfChatBackend {
     }
 
     fn multimodal_model_info(&self) -> Option<&MultimodalModelInfo> {
-        Some(&self.multimodal_model_info)
+        self.multimodal_model_info.as_ref()
     }
 
     fn new_chat_output_processor(
@@ -130,10 +131,10 @@ pub(super) async fn load_model_backends(
 }
 
 fn resolve_multimodal_render_info(
-    info: &MultimodalModelInfo,
+    info: Option<&MultimodalModelInfo>,
     tokenizer: &dyn Tokenizer,
 ) -> Option<MultimodalRenderInfo> {
-    crate::multimodal::placeholder_token(info, tokenizer)
+    crate::multimodal::placeholder_token(info?, tokenizer)
         .ok()
         .map(|placeholder_token| MultimodalRenderInfo { placeholder_token })
 }

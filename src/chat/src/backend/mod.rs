@@ -25,7 +25,7 @@ pub trait ChatBackend: Send + Sync {
     fn chat_renderer(&self) -> DynChatRenderer;
 
     /// Return model files/config needed for request-scoped multimodal
-    /// preprocessing.
+    /// preprocessing, if supported.
     fn multimodal_model_info(&self) -> Option<&MultimodalModelInfo> {
         None
     }
