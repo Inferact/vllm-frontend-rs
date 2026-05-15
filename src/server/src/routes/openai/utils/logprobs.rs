@@ -165,12 +165,24 @@ pub fn collected_logprobs_to_openai(
         })?;
         let prompt_logprobs =
             decoded_prompt_logprobs_to_openai(prompt_logprobs, 0, return_tokens_as_token_ids)?;
+        // Derive the completion start offset from the end of the decoded prompt
+        // token sequence, not from the raw prompt char count. Decoded token
+        // strings can differ from the source text (leading-space tokens, byte
+        // fallbacks, stripped special tokens), so using `initial_completion_offset`
+        // (= text_len(raw_prompt)) would produce a gap or overlap in the
+        // concatenated text_offset array.
+        let completion_start = prompt_logprobs
+            .text_offset
+            .last()
+            .zip(prompt_logprobs.tokens.last())
+            .map(|(&offset, token)| offset.saturating_add(text_len(token)))
+            .unwrap_or(0);
         return match collected.logprobs.as_ref() {
             Some(completion_logprobs) => Ok(append_openai_logprobs(
                 prompt_logprobs,
                 decoded_logprobs_to_openai(
                     completion_logprobs,
-                    initial_completion_offset,
+                    completion_start,
                     return_tokens_as_token_ids,
                 )?,
             )),
