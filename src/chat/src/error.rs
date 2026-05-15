@@ -12,6 +12,12 @@ pub enum Error {
     MissingChatTemplate,
     #[error("chat template error: {0}")]
     ChatTemplate(String),
+    #[error("multimodal input is not supported by this chat renderer")]
+    UnsupportedMultimodalRenderer,
+    #[error("unsupported multimodal content: {0}")]
+    UnsupportedMultimodalContent(&'static str),
+    #[error("multimodal preprocessing error: {0}")]
+    Multimodal(String),
     #[error("{kind} parsing is not available for model `{model_id}`")]
     ParserUnavailableForModel {
         kind: &'static str,
