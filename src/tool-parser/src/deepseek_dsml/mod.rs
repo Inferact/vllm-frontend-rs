@@ -159,6 +159,7 @@ impl DeepSeekDsmlToolParser {
             DsmlMode::Text => result.normal_text.push_str(&self.buffer),
             DsmlMode::Done => {}
             DsmlMode::ToolBlock => {
+                self.reset();
                 return Err(parsing_failed!("incomplete DeepSeek DSML tool call"));
             }
         }
