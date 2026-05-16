@@ -5732,6 +5732,7 @@ dependencies = [
  "http-body",
  "itertools 0.14.0",
  "libc",
+ "llm-multimodal",
  "prost",
  "prost-types",
  "rmp-serde",
