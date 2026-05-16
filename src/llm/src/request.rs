@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
-use vllm_engine_core_client::protocol::multimodal::MultiModalFeatures;
+use vllm_engine_core_client::protocol::multimodal::MmFeatures;
 use vllm_engine_core_client::protocol::{EngineCoreRequest, EngineCoreSamplingParams, OpaqueValue};
 
 use crate::error::{Error, Result};
@@ -25,7 +25,7 @@ pub struct GenerateRequest {
     /// Sampling parameters forwarded to engine-core.
     pub sampling_params: EngineCoreSamplingParams,
     /// Optional multimodal features already prepared by `vllm-chat`.
-    pub mm_features: Option<MultiModalFeatures>,
+    pub mm_features: Option<MmFeatures>,
 
     // Fields below are currently likely unused by callers.
     pub arrival_time: Option<f64>,

@@ -4,7 +4,7 @@
 //! it extracts image parts from structured chat messages, fetches and
 //! preprocesses them through `llm-multimodal`, expands rendered prompt
 //! placeholders after tokenization, and builds the engine-facing
-//! `MultiModalFeatures` payload.
+//! `MmFeatures` payload.
 //!
 //! Raw media stays above `vllm-text`; this module lowers it into token IDs and
 //! opaque tensor payloads before the request is handed to text generation.
@@ -23,9 +23,8 @@ use llm_multimodal::{
 };
 use tracing::warn;
 use vllm_engine_core_client::protocol::multimodal::{
-    MultiModalBatchedField, MultiModalFeatureSpec, MultiModalFeatures, MultiModalField,
-    MultiModalFieldElem, MultiModalFlatField, MultiModalKwargsItem, MultiModalSharedField,
-    MultiModalSlice, PlaceholderRange, SliceSpec,
+    MmBatchedField, MmFeatureSpec, MmFeatures, MmField, MmFieldElem, MmFlatField, MmKwargsItem,
+    MmSharedField, MmSlice, PlaceholderRange, SliceSpec,
 };
 use vllm_text::Prompt;
 use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
@@ -235,7 +234,7 @@ pub(crate) async fn finalize_rendered_prompt(
     request: &ChatRequest,
     rendered: RenderedPrompt,
     info: Option<&MultimodalModelInfo>,
-) -> Result<(Prompt, Option<MultiModalFeatures>)> {
+) -> Result<(Prompt, Option<MmFeatures>)> {
     if !request.has_multimodal() {
         return Ok((rendered.prompt, None));
     }
@@ -301,7 +300,7 @@ impl MultimodalModelInfo {
         &self,
         media_parts: Vec<MediaContentPart>,
         prompt_token_ids: &mut Vec<u32>,
-    ) -> Result<MultiModalFeatures> {
+    ) -> Result<MmFeatures> {
         if media_parts.is_empty() {
             return Ok(Vec::new());
         }
@@ -417,27 +416,27 @@ impl MultimodalModelInfo {
 
     /// Convert preprocessed image tensors into engine-core multimodal features.
     ///
-    /// One `MultiModalFeatureSpec` is produced per image. Tensor fields are
+    /// One `MmFeatureSpec` is produced per image. Tensor fields are
     /// sliced according to the model spec's field layout declarations.
     fn build_features(
         &self,
         preprocessed: PreprocessedImages,
         images: FetchedImageMedia,
         ranges: Vec<PlaceholderRange>,
-    ) -> Result<MultiModalFeatures> {
+    ) -> Result<MmFeatures> {
         let len = images.frames.len();
         let tensors = tensor::collect_tensors(preprocessed);
 
         let mut features = Vec::with_capacity(images.frames.len());
         for (index, (frame, uuid, range)) in izip!(images.frames, images.uuids, ranges).enumerate()
         {
-            let mut data = MultiModalKwargsItem::new();
+            let mut data = MmKwargsItem::new();
             for (key, tensor) in &tensors {
                 let keep_on_cpu = self.spec.keep_on_cpu_keys.contains(key);
                 let (value, field) = match self.spec.field_layouts.get(key) {
                     Some(FieldLayout::Batched) => (
                         tensor.batched_value_at(index)?,
-                        MultiModalField::Batched(MultiModalBatchedField { keep_on_cpu }),
+                        MmField::Batched(MmBatchedField { keep_on_cpu }),
                     ),
                     Some(FieldLayout::Flat { sizes_key }) => {
                         let sizes = tensors.get(sizes_key).ok_or_else(|| {
@@ -446,8 +445,8 @@ impl MultimodalModelInfo {
                         let (start, end) = tensor::flat_range_for_index(sizes, sizes_key, index)?;
                         (
                             tensor.flat_value_range(start, end)?,
-                            MultiModalField::Flat(MultiModalFlatField {
-                                slices: vec![MultiModalSlice::Slice(SliceSpec {
+                            MmField::Flat(MmFlatField {
+                                slices: vec![MmSlice::Slice(SliceSpec {
                                     start: Some(0),
                                     stop: Some((end - start) as isize),
                                     step: None,
@@ -459,7 +458,7 @@ impl MultimodalModelInfo {
                     }
                     None => (
                         tensor.clone(),
-                        MultiModalField::Shared(MultiModalSharedField {
+                        MmField::Shared(MmSharedField {
                             batch_size: len,
                             keep_on_cpu,
                         }),
@@ -468,7 +467,7 @@ impl MultimodalModelInfo {
 
                 data.insert(
                     key.clone(),
-                    MultiModalFieldElem {
+                    MmFieldElem {
                         data: Some(value.try_into()?),
                         field,
                     },
@@ -476,7 +475,7 @@ impl MultimodalModelInfo {
             }
 
             let hash = frame.hash.clone();
-            features.push(MultiModalFeatureSpec {
+            features.push(MmFeatureSpec {
                 data: Some(data),
                 modality: "image".to_string(),
                 identifier: uuid.unwrap_or_else(|| hash.clone()),

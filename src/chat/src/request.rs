@@ -63,10 +63,12 @@ impl ChatContentPart {
         }
     }
 
+    /// Return whether this part is a text block with empty content.
     pub(crate) fn is_empty_text(&self) -> bool {
         matches!(self, Self::Text { text } if text.is_empty())
     }
 
+    /// Return whether this part contains any multimodal content.
     pub(crate) fn is_multimodal(&self) -> bool {
         match self {
             Self::Text { .. } => false,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use llm_multimodal::{ModelSpecificValue, PreprocessedImages};
-use vllm_engine_core_client::protocol::multimodal::MultiModalKwargValue as ProtocolKwargValue;
+use vllm_engine_core_client::protocol::multimodal::MmKwargValue as ProtocolKwargValue;
 use vllm_engine_core_client::protocol::tensor_wire::WireTensor;
 
 use crate::error::{Error, Result, bail_multimodal, multimodal};

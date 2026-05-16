@@ -4,7 +4,7 @@ use enum_as_inner::EnumAsInner;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vllm_engine_core_client::protocol::StructuredOutputsParams;
-use vllm_engine_core_client::protocol::multimodal::MultiModalFeatures;
+use vllm_engine_core_client::protocol::multimodal::MmFeatures;
 
 use crate::error::{Error, Result};
 use crate::output::TextDecodeOptions;
@@ -145,7 +145,7 @@ pub struct TextRequest {
     /// Multimodal features prepared by a higher-level frontend. Raw text
     /// requests keep this empty; multimodal chat uses it with pre-tokenized
     /// prompt IDs.
-    pub mm_features: Option<MultiModalFeatures>,
+    pub mm_features: Option<MmFeatures>,
     /// User-facing sampling parameters accepted by `vllm-text`.
     pub sampling_params: SamplingParams,
     /// Incremental detokenization options for the response path.
