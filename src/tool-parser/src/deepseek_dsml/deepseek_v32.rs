@@ -344,20 +344,14 @@ mod tests {
     #[test]
     fn deepseek_v32_streaming_truncated_parameter_does_not_leak_eos() {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
-        let result = collect_stream(
-            &mut parser,
-            &[
-                "<｜DSML｜function_calls>\n",
-                "<｜DSML｜invoke name=\"get_weather\">\n",
-                "<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo",
-                "<｜end▁of▁sentence｜>",
-            ],
-        );
+        parser.push("<｜DSML｜function_calls>\n").unwrap();
+        parser.push("<｜DSML｜invoke name=\"get_weather\">\n").unwrap();
+        parser.push("<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo").unwrap();
+        parser.push("<｜end▁of▁sentence｜>").unwrap();
 
-        assert!(result.calls.is_empty());
-        assert!(!result.normal_text.contains("<｜end▁of▁sentence｜>"));
+        let error = parser.finish().unwrap_err();
+        assert!(error.to_report_string().contains("incomplete DeepSeek DSML tool call"));
     }
-
     #[test]
     fn deepseek_v32_streaming_drops_eos_after_complete_tool_calls() {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
@@ -399,19 +393,13 @@ mod tests {
     #[test]
     fn deepseek_v32_streaming_does_not_emit_incomplete_invoke() {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
-        let result = collect_stream(
-            &mut parser,
-            &[
-                "<｜DSML｜function_calls>\n",
-                "<｜DSML｜invoke name=\"get_weather\">\n",
-                "<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n",
-            ],
-        );
+        parser.push("<｜DSML｜function_calls>\n").unwrap();
+        parser.push("<｜DSML｜invoke name=\"get_weather\">\n").unwrap();
+        parser.push("<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n").unwrap();
 
-        assert!(result.normal_text.is_empty());
-        assert!(result.calls.is_empty());
+        let error = parser.finish().unwrap_err();
+        assert!(error.to_report_string().contains("incomplete DeepSeek DSML tool call"));
     }
-
     #[test]
     fn deepseek_v32_parser_state_resets_after_finish() {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
