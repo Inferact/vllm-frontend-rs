@@ -217,6 +217,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn batched_value_at_drops_first_axis() {
+        let value = KwargValue::F32Tensor {
+            data: vec![1.0, 2.0, 3.0, 4.0],
+            shape: vec![2, 2],
+        };
+
+        let value = value.batched_value_at(1).unwrap();
+
+        assert!(matches!(
+            value,
+            KwargValue::F32Tensor { data, shape }
+                if shape == vec![2] && data == vec![3.0, 4.0]
+        ));
+    }
+
+    #[test]
+    fn flat_value_range_keeps_first_axis() {
+        let value = KwargValue::U32Tensor {
+            data: (0..10).collect(),
+            shape: vec![5, 2],
+        };
+
+        let value = value.flat_value_range(1, 3).unwrap();
+
+        assert!(matches!(
+            value,
+            KwargValue::U32Tensor { data, shape }
+                if shape == vec![2, 2] && data == vec![2, 3, 4, 5]
+        ));
+    }
+
+    #[test]
+    fn flat_range_for_index_uses_size_tensor() {
+        let sizes = KwargValue::I64Tensor {
+            data: vec![2, 3, 4],
+            shape: vec![3],
+        };
+
+        assert_eq!(
+            flat_range_for_index(&sizes, "image_grid_thw", 1).unwrap(),
+            (2, 5)
+        );
+    }
+
+    #[test]
     fn slice_first_axis_range_errors_on_shape_data_mismatch() {
         let error = slice_first_axis_range(&[2, 2], &[1.0_f32, 2.0, 3.0], 0, 1, true).unwrap_err();
 
