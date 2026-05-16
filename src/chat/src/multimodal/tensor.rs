@@ -4,7 +4,7 @@ use llm_multimodal::{ModelSpecificValue, PreprocessedImages};
 use vllm_engine_core_client::protocol::multimodal::MultiModalKwargValue as ProtocolKwargValue;
 use vllm_engine_core_client::protocol::tensor_wire::WireTensor;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, bail_multimodal, multimodal};
 
 /// Representation for multimodal kwarg values for transformation.
 #[derive(Clone)]
@@ -145,9 +145,7 @@ pub(super) fn flat_range_for_index(
 ) -> Result<(usize, usize)> {
     let sizes = tensor_as_usize_vec(sizes)?;
     let size = *sizes.get(index).ok_or_else(|| {
-        Error::Multimodal(format!(
-            "flat tensor sizes key `{sizes_key}` has no entry for image {index}"
-        ))
+        multimodal!("flat tensor sizes key `{sizes_key}` has no entry for image {index}")
     })?;
     let start = sizes[..index].iter().sum::<usize>();
     Ok((start, start + size))
@@ -160,15 +158,13 @@ fn tensor_as_usize_vec(tensor: &KwargValue) -> Result<Vec<usize>> {
             .iter()
             .map(|value| {
                 usize::try_from(*value)
-                    .map_err(|_| Error::Multimodal(format!("negative flat tensor size `{value}`")))
+                    .map_err(|_| multimodal!("negative flat tensor size `{value}`"))
             })
             .collect(),
         KwargValue::U32Tensor { data, .. } => {
             Ok(data.iter().map(|value| *value as usize).collect())
         }
-        _ => Err(Error::Multimodal(
-            "flat tensor sizes must be int64 or uint32".to_string(),
-        )),
+        _ => Err(multimodal!("flat tensor sizes must be int64 or uint32")),
     }
 }
 
@@ -180,24 +176,19 @@ fn slice_first_axis_range<T: Clone>(
     end: usize,
     drop_axis: bool,
 ) -> Result<(Vec<usize>, Vec<T>)> {
-    let first_dim = *shape
-        .first()
-        .ok_or_else(|| Error::Multimodal("tensor has no first dimension".to_string()))?;
+    let first_dim = *shape.first().ok_or_else(|| multimodal!("tensor has no first dimension"))?;
     if start > end || end > first_dim {
-        return Err(Error::Multimodal(format!(
-            "invalid tensor slice {start}..{end} for first dimension {first_dim}"
-        )));
+        bail_multimodal!("invalid tensor slice {start}..{end} for first dimension {first_dim}");
     }
     let expected_len = shape.iter().try_fold(1usize, |acc, dim| {
-        acc.checked_mul(*dim).ok_or_else(|| {
-            Error::Multimodal(format!("tensor shape {shape:?} has too many elements"))
-        })
+        acc.checked_mul(*dim)
+            .ok_or_else(|| multimodal!("tensor shape {shape:?} has too many elements"))
     })?;
     if expected_len != data.len() {
-        return Err(Error::Multimodal(format!(
+        bail_multimodal!(
             "tensor shape {shape:?} expects {expected_len} elements, got {}",
             data.len()
-        )));
+        );
     }
     let stride = shape[1..].iter().product::<usize>();
     let data_start = start * stride;

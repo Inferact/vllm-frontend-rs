@@ -30,7 +30,7 @@ use vllm_engine_core_client::protocol::multimodal::{
 use vllm_text::Prompt;
 use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, bail_multimodal, multimodal};
 use crate::renderer::RenderedPrompt;
 use crate::request::{ChatContent, ChatContentPart, ChatMessage, ChatRequest};
 
@@ -94,9 +94,8 @@ struct ResolvedMultimodalSpec {
 impl ResolvedMultimodalSpec {
     fn new(raw: &'static dyn ModelProcessorSpec, context: &MultimodalModelContext) -> Result<Self> {
         let metadata = context.metadata();
-        let placeholder_token = raw
-            .placeholder_token(&metadata)
-            .map_err(|error| Error::Multimodal(error.to_string()))?;
+        let placeholder_token =
+            raw.placeholder_token(&metadata).map_err(|error| multimodal!("{error}"))?;
         // This is the rendered prompt marker, so resolve it from the token
         // string itself. Do not use `ModelProcessorSpec::placeholder_token_id()`:
         // for specs such as Qwen2-VL and Llama 4 that ID is the replacement
@@ -104,9 +103,9 @@ impl ResolvedMultimodalSpec {
         // `placeholder_token`.
         let placeholder_marker_token_id =
             context.tokenizer().token_to_id(&placeholder_token).ok_or_else(|| {
-                Error::Multimodal(format!(
+                multimodal!(
                     "placeholder token `{placeholder_token}` is not in the tokenizer vocabulary"
-                ))
+                )
             })?;
 
         Ok(Self {
@@ -125,7 +124,7 @@ impl ResolvedMultimodalSpec {
     ) -> Result<Vec<PromptReplacement>> {
         self.raw
             .prompt_replacements(&context.metadata(), preprocessed)
-            .map_err(|error| Error::Multimodal(error.to_string()))
+            .map_err(|error| multimodal!("{error}"))
     }
 }
 
@@ -157,22 +156,20 @@ impl MultimodalModelInfo {
     ) -> Result<Option<Self>> {
         let config = match config_path {
             Some(path) => {
-                let text = fs::read_to_string(path).map_err(|error| {
-                    Error::Multimodal(format!("failed to read config.json: {error}"))
-                })?;
-                serde_json::from_str(&text).map_err(|error| {
-                    Error::Multimodal(format!("failed to parse config.json: {error}"))
-                })?
+                let text = fs::read_to_string(path)
+                    .map_err(|error| multimodal!("failed to read config.json: {error}"))?;
+                serde_json::from_str(&text)
+                    .map_err(|error| multimodal!("failed to parse config.json: {error}"))?
             }
             None => serde_json::Value::Object(Default::default()),
         };
         let preprocessor_config = match preprocessor_config_path {
             Some(path) => {
                 let text = fs::read_to_string(path).map_err(|error| {
-                    Error::Multimodal(format!("failed to read preprocessor_config.json: {error}"))
+                    multimodal!("failed to read preprocessor_config.json: {error}")
                 })?;
                 PreProcessorConfig::from_json(&text).map_err(|error| {
-                    Error::Multimodal(format!("failed to parse preprocessor_config.json: {error}"))
+                    multimodal!("failed to parse preprocessor_config.json: {error}")
                 })?
             }
             None => PreProcessorConfig::default(),
@@ -206,7 +203,7 @@ impl MultimodalModelInfo {
 
         let media_connector = Arc::new(
             MediaConnector::new(reqwest::Client::new(), MediaConnectorConfig::default())
-                .map_err(|error| Error::Multimodal(error.to_string()))?,
+                .map_err(|error| multimodal!("{error}"))?,
         );
 
         Ok(Some(Self {
@@ -244,9 +241,7 @@ pub(crate) async fn finalize_rendered_prompt(
     }
     let info = info.ok_or(Error::UnsupportedMultimodalRenderer)?;
     let Prompt::Text(prompt) = rendered.prompt else {
-        return Err(Error::Multimodal(
-            "multimodal chat renderer must return a text prompt before expansion".to_string(),
-        ));
+        bail_multimodal!("multimodal chat renderer must return a text prompt before expansion");
     };
     let media_parts = extract_media_parts(request)?;
 
@@ -254,7 +249,7 @@ pub(crate) async fn finalize_rendered_prompt(
         .context
         .tokenizer()
         .encode(&prompt, request.add_special_tokens)
-        .map_err(|error| Error::Multimodal(error.to_string()))?;
+        .map_err(|error| multimodal!("{error}"))?;
     let prepared = info.prepare_multimodal(media_parts, &mut prompt_token_ids).await?;
 
     Ok((Prompt::TokenIds(prompt_token_ids), Some(prepared)))
@@ -318,11 +313,11 @@ impl MultimodalModelInfo {
 
         let features = self.build_features(preprocessed, fetched, ranges)?;
         if features.len() != media_parts.len() {
-            return Err(Error::Multimodal(format!(
+            bail_multimodal!(
                 "number of built multimodal features {} does not match number of media parts {}",
                 features.len(),
                 media_parts.len()
-            )));
+            );
         }
         Ok(features)
     }
@@ -331,13 +326,10 @@ impl MultimodalModelInfo {
     async fn fetch_images(&self, media_parts: &[MediaContentPart]) -> Result<FetchedImageMedia> {
         let mut tracker = AsyncMultiModalTracker::new(Arc::clone(&self.media_connector));
         for part in media_parts {
-            tracker
-                .push_part(part.clone())
-                .map_err(|error| Error::Multimodal(error.to_string()))?;
+            tracker.push_part(part.clone()).map_err(|error| multimodal!("{error}"))?;
         }
 
-        let tracker_output =
-            tracker.finalize().await.map_err(|error| Error::Multimodal(error.to_string()))?;
+        let tracker_output = tracker.finalize().await.map_err(|error| multimodal!("{error}"))?;
         let images = tracker_output.data.get(&Modality::Image).cloned().unwrap_or_default();
         let uuids = tracker_output.uuids.get(&Modality::Image).cloned().unwrap_or_default();
 
@@ -367,12 +359,10 @@ impl MultimodalModelInfo {
         let images = image_frames.iter().map(|frame| frame.data().clone()).collect::<Vec<_>>();
 
         tokio::task::spawn_blocking(move || {
-            processor
-                .preprocess(&images, &config)
-                .map_err(|error| Error::Multimodal(error.to_string()))
+            processor.preprocess(&images, &config).map_err(|error| multimodal!("{error}"))
         })
         .await
-        .map_err(|error| Error::Multimodal(format!("image preprocessing task failed: {error}")))?
+        .map_err(|error| multimodal!("image preprocessing task failed: {error}"))?
     }
 
     /// Replace rendered placeholder markers with model-specific replacement
@@ -389,10 +379,10 @@ impl MultimodalModelInfo {
         let mut ranges = Vec::with_capacity(replacements.len());
         for replacement in replacements {
             if replacement.modality != Modality::Image {
-                return Err(Error::Multimodal(format!(
+                bail_multimodal!(
                     "unsupported prompt replacement modality `{}`",
                     replacement.modality
-                )));
+                );
             }
             let offset = find_next_token(
                 prompt_token_ids,
@@ -400,18 +390,18 @@ impl MultimodalModelInfo {
                 cursor,
             )
             .ok_or_else(|| {
-                Error::Multimodal(format!(
+                multimodal!(
                     "placeholder token `{}` was not found in tokenized prompt",
                     self.spec.placeholder_token
-                ))
+                )
             })?;
             let replacement_tokens =
                 replacement.tokens.iter().map(|&token| token as u32).collect::<Vec<_>>();
             if replacement_tokens.is_empty() {
-                return Err(Error::Multimodal(format!(
+                bail_multimodal!(
                     "placeholder token `{}` expanded to no tokens",
                     self.spec.placeholder_token
-                )));
+                );
             }
             let replacement_len = replacement_tokens.len();
             prompt_token_ids.splice(offset..offset + 1, replacement_tokens);
@@ -451,9 +441,7 @@ impl MultimodalModelInfo {
                     ),
                     Some(FieldLayout::Flat { sizes_key }) => {
                         let sizes = tensors.get(sizes_key).ok_or_else(|| {
-                            Error::Multimodal(format!(
-                                "flat tensor sizes key `{sizes_key}` is missing"
-                            ))
+                            multimodal!("flat tensor sizes key `{sizes_key}` is missing")
                         })?;
                         let (start, end) = tensor::flat_range_for_index(sizes, sizes_key, index)?;
                         (
