@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
+use itertools::izip;
 use llm_multimodal::{
     AsyncMultiModalTracker, FieldLayout, ImagePreProcessor, ImageProcessorRegistry, MediaConnector,
     MediaConnectorConfig, MediaContentPart, Modality, ModelMetadata, ModelProcessorSpec,
@@ -35,24 +36,109 @@ use crate::renderer::RenderedPrompt;
 use crate::request::{ChatContent, ChatContentPart, ChatMessage, ChatRequest};
 
 /// Resolved multimodal support for one loaded model.
-///
-/// A value of this type means the model has both a registered prompt/spec
-/// handler and an image preprocessor. Unsupported models are represented by
-/// `None` at the backend boundary rather than by partially initialized fields.
 #[derive(Clone)]
 pub struct MultimodalModelInfo {
-    /// Model identifier used for registry matching and diagnostics.
-    pub model_id: String,
-    /// Model type from `config.json`, when available.
-    pub model_type: Option<String>,
-    /// Raw model config passed to model-specific multimodal specs.
-    pub config: serde_json::Value,
-    /// Parsed preprocessor config passed to image preprocessors.
-    pub preprocessor_config: PreProcessorConfig,
-    /// Static model-specific prompt/tensor-layout spec.
-    spec: &'static dyn ModelProcessorSpec,
-    /// Static model-specific image preprocessor.
-    image_processor: &'static dyn ImagePreProcessor,
+    context: MultimodalModelContext,
+    spec: ResolvedMultimodalSpec,
+    image_processor: ResolvedImageProcessor,
+    media_connector: Arc<MediaConnector>,
+}
+
+/// Model metadata and tokenizer access shared by all multimodal specs.
+#[derive(Clone)]
+struct MultimodalModelContext {
+    model_id: String,
+    model_type: Option<String>,
+    config: serde_json::Value,
+    tokenizer: TokenizerResolver,
+}
+
+impl MultimodalModelContext {
+    fn metadata(&self) -> ModelMetadata<'_> {
+        ModelMetadata {
+            model_id: &self.model_id,
+            tokenizer: &self.tokenizer,
+            config: &self.config,
+        }
+    }
+
+    fn tokenizer(&self) -> &dyn Tokenizer {
+        self.tokenizer.0.as_ref()
+    }
+
+    /// Resolve a static model processor spec for one loaded model.
+    fn resolve_model_spec(&self) -> Option<&'static dyn ModelProcessorSpec> {
+        static REGISTRY: LazyLock<ModelRegistry> = LazyLock::new(ModelRegistry::new);
+        REGISTRY.lookup(&self.metadata())
+    }
+
+    /// Resolve a static image preprocessor for one loaded model.
+    fn resolve_image_processor(&self) -> Option<&'static dyn ImagePreProcessor> {
+        static REGISTRY: LazyLock<ImageProcessorRegistry> =
+            LazyLock::new(ImageProcessorRegistry::new);
+        REGISTRY.find(&self.model_id, self.model_type.as_deref())
+    }
+}
+
+/// Static model-specific prompt and tensor-layout behavior.
+#[derive(Clone)]
+struct ResolvedMultimodalSpec {
+    raw: &'static dyn ModelProcessorSpec,
+    placeholder_token: String,
+    placeholder_marker_token_id: u32,
+    field_layouts: HashMap<String, FieldLayout>,
+    keep_on_cpu_keys: HashSet<String>,
+}
+
+impl ResolvedMultimodalSpec {
+    fn new(raw: &'static dyn ModelProcessorSpec, context: &MultimodalModelContext) -> Result<Self> {
+        let metadata = context.metadata();
+        let placeholder_token = raw
+            .placeholder_token(&metadata)
+            .map_err(|error| Error::Multimodal(error.to_string()))?;
+        // This is the rendered prompt marker, so resolve it from the token
+        // string itself. Do not use `ModelProcessorSpec::placeholder_token_id()`:
+        // for specs such as Qwen2-VL and Llama 4 that ID is the replacement
+        // vision/pad/patch token, not necessarily the token ID of
+        // `placeholder_token`.
+        let placeholder_marker_token_id =
+            context.tokenizer().token_to_id(&placeholder_token).ok_or_else(|| {
+                Error::Multimodal(format!(
+                    "placeholder token `{placeholder_token}` is not in the tokenizer vocabulary"
+                ))
+            })?;
+
+        Ok(Self {
+            raw,
+            placeholder_token,
+            placeholder_marker_token_id,
+            field_layouts: raw.field_layouts(),
+            keep_on_cpu_keys: raw.keep_on_cpu_keys().into_iter().collect(),
+        })
+    }
+
+    fn prompt_replacements(
+        &self,
+        context: &MultimodalModelContext,
+        preprocessed: &PreprocessedImages,
+    ) -> Result<Vec<PromptReplacement>> {
+        self.raw
+            .prompt_replacements(&context.metadata(), preprocessed)
+            .map_err(|error| Error::Multimodal(error.to_string()))
+    }
+}
+
+/// Static image preprocessor plus its loaded config.
+#[derive(Clone)]
+struct ResolvedImageProcessor {
+    raw: &'static dyn ImagePreProcessor,
+    config: PreProcessorConfig,
+}
+
+/// Request-scoped fetched media, kept together with tracker UUID metadata.
+struct FetchedImageMedia {
+    frames: Vec<Arc<llm_multimodal::ImageFrame>>,
+    uuids: Vec<Option<String>>,
 }
 
 impl MultimodalModelInfo {
@@ -66,7 +152,7 @@ impl MultimodalModelInfo {
         model_type: Option<String>,
         config_path: Option<&Path>,
         preprocessor_config_path: Option<&Path>,
-        tokenizer: &dyn Tokenizer,
+        tokenizer: DynTokenizer,
     ) -> Result<Option<Self>> {
         let config = match config_path {
             Some(path) => {
@@ -91,57 +177,55 @@ impl MultimodalModelInfo {
             None => PreProcessorConfig::default(),
         };
 
-        let Some(spec) = lookup_model_spec(&model_id, &config, tokenizer) else {
+        let context = MultimodalModelContext {
+            model_id,
+            model_type,
+            config,
+            tokenizer: TokenizerResolver(tokenizer),
+        };
+
+        let Some(spec) = context.resolve_model_spec() else {
             warn!(
-                model_id = %model_id,
-                model_type = ?model_type,
+                model_id = %context.model_id,
+                model_type = ?context.model_type,
                 "multimodal model spec is not registered; disabling multimodal support for this model"
             );
             return Ok(None);
         };
-        let image_processor = lookup_image_processor(&model_id, model_type.as_deref());
-        let Some(image_processor) = image_processor else {
+        let spec = ResolvedMultimodalSpec::new(spec, &context)?;
+
+        let Some(image_processor) = context.resolve_image_processor() else {
             warn!(
-                model_id = %model_id,
-                model_type = ?model_type,
+                model_id = context.model_id,
+                model_type = context.model_type,
                 "image processor is not registered; disabling multimodal support for this model"
             );
             return Ok(None);
         };
 
+        let media_connector = Arc::new(
+            MediaConnector::new(reqwest::Client::new(), MediaConnectorConfig::default())
+                .map_err(|error| Error::Multimodal(error.to_string()))?,
+        );
+
         Ok(Some(Self {
-            model_id,
-            model_type,
-            config,
-            preprocessor_config,
+            context,
             spec,
-            image_processor,
+            image_processor: ResolvedImageProcessor {
+                raw: image_processor,
+                config: preprocessor_config,
+            },
+            media_connector,
         }))
     }
 
-    /// Build the borrowed metadata object required by `llm-multimodal` specs.
-    fn metadata<'a>(&'a self, resolver: &'a TokenizerResolver<'a>) -> ModelMetadata<'a> {
-        ModelMetadata {
-            model_id: &self.model_id,
-            tokenizer: resolver,
-            config: &self.config,
-        }
+    /// Return the template-visible placeholder token for this model.
+    ///
+    /// The HF renderer uses this token while flattening image content in string
+    /// content format.
+    pub(crate) fn placeholder_token(&self) -> &str {
+        &self.spec.placeholder_token
     }
-}
-
-/// Return the template-visible placeholder token for this model.
-///
-/// The HF renderer uses this token while flattening image content in string
-/// content format.
-pub(crate) fn placeholder_token(
-    info: &MultimodalModelInfo,
-    tokenizer: &dyn Tokenizer,
-) -> Result<String> {
-    let resolver = TokenizerResolver { tokenizer };
-    let metadata = info.metadata(&resolver);
-    info.spec
-        .placeholder_token(&metadata)
-        .map_err(|error| Error::Multimodal(error.to_string()))
 }
 
 /// Finalize a rendered chat prompt into text-generation input.
@@ -152,7 +236,6 @@ pub(crate) fn placeholder_token(
 pub(crate) async fn finalize_rendered_prompt(
     request: &ChatRequest,
     rendered: RenderedPrompt,
-    tokenizer: DynTokenizer,
     info: Option<&MultimodalModelInfo>,
 ) -> Result<(Prompt, Option<MultiModalFeatures>)> {
     if !request.has_multimodal() {
@@ -166,117 +249,22 @@ pub(crate) async fn finalize_rendered_prompt(
     };
     let media_parts = extract_media_parts(request)?;
 
-    let mut prompt_token_ids = tokenizer
+    let mut prompt_token_ids = info
+        .context
+        .tokenizer()
         .encode(&prompt, request.add_special_tokens)
         .map_err(|error| Error::Multimodal(error.to_string()))?;
-    let prepared =
-        prepare_multimodal(info, &*tokenizer, media_parts, &mut prompt_token_ids).await?;
+    let prepared = info.prepare_multimodal(media_parts, &mut prompt_token_ids).await?;
 
     Ok((Prompt::TokenIds(prompt_token_ids), Some(prepared)))
 }
-
-// ============================================================================
-// Pipeline orchestration
-// ============================================================================
-
-/// Model-specific plan derived after image preprocessing.
-///
-/// The prompt replacements depend on preprocessed image metadata, while field
-/// layouts and CPU placement hints come from the static model spec.
-struct MultimodalSpecPlan {
-    /// Per-image token sequences that replace the rendered placeholder marker.
-    replacements: Vec<PromptReplacement>,
-    /// Mapping from tensor key to per-item slicing semantics.
-    field_layouts: HashMap<String, FieldLayout>,
-    /// Tensor keys that should remain on CPU in the backend.
-    keep_on_cpu_keys: Vec<String>,
-}
-
-/// Run media fetch, image preprocessing, prompt expansion, and feature build.
-///
-/// `prompt_token_ids` is mutated in place because placeholder expansion changes
-/// both the final prompt and the offsets recorded in `PlaceholderRange`.
-async fn prepare_multimodal(
-    info: &MultimodalModelInfo,
-    tokenizer: &dyn Tokenizer,
-    media_parts: Vec<MediaContentPart>,
-    prompt_token_ids: &mut Vec<u32>,
-) -> Result<MultiModalFeatures> {
-    if media_parts.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let connector = Arc::new(
-        MediaConnector::new(reqwest::Client::new(), MediaConnectorConfig::default())
-            .map_err(|error| Error::Multimodal(error.to_string()))?,
-    );
-    let mut tracker = AsyncMultiModalTracker::new(connector);
-    for part in &media_parts {
-        tracker
-            .push_part(part.clone())
-            .map_err(|error| Error::Multimodal(error.to_string()))?;
-    }
-    let tracker_output =
-        tracker.finalize().await.map_err(|error| Error::Multimodal(error.to_string()))?;
-
-    let images = tracker_output.data.get(&Modality::Image).cloned().unwrap_or_default();
-    if images.len() != media_parts.len() {
-        return Err(Error::Multimodal(format!(
-            "expected {} fetched images, got {}",
-            media_parts.len(),
-            images.len()
-        )));
-    }
-    let image_frames = images
-        .into_iter()
-        .map(|media| match media {
-            TrackedMedia::Image(frame) => Ok(frame),
-            _ => Err(Error::UnsupportedMultimodalContent("non-image")),
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let preprocessed = preprocess_images(info, &image_frames).await?;
-    let resolver = TokenizerResolver { tokenizer };
-    let metadata = info.metadata(&resolver);
-    let replacements = info
-        .spec
-        .prompt_replacements(&metadata, &preprocessed)
-        .map_err(|error| Error::Multimodal(error.to_string()))?;
-    let spec_plan = MultimodalSpecPlan {
-        replacements,
-        field_layouts: info.spec.field_layouts(),
-        keep_on_cpu_keys: info.spec.keep_on_cpu_keys(),
-    };
-    if spec_plan.replacements.len() != media_parts.len() {
-        return Err(Error::Multimodal(format!(
-            "expected {} prompt replacements, got {}",
-            media_parts.len(),
-            spec_plan.replacements.len()
-        )));
-    }
-
-    let ranges = expand_prompt_tokens(prompt_token_ids, tokenizer, &spec_plan.replacements)?;
-
-    build_features(
-        &preprocessed,
-        &image_frames,
-        &tracker_output.uuids,
-        &ranges,
-        &spec_plan.field_layouts,
-        &spec_plan.keep_on_cpu_keys,
-    )
-}
-
-// ============================================================================
-// Stage 1: extract media parts from the chat request
-// ============================================================================
 
 /// Extract image media parts from chat messages in message/content order.
 ///
 /// Assistant history is skipped because generated assistant blocks are already
 /// represented as text for prompt rendering in this crate.
 fn extract_media_parts(request: &ChatRequest) -> Result<Vec<MediaContentPart>> {
-    let mut parts = Vec::new();
+    let mut all_parts = Vec::new();
     for message in &request.messages {
         let content = match message {
             ChatMessage::System { content }
@@ -285,230 +273,237 @@ fn extract_media_parts(request: &ChatRequest) -> Result<Vec<MediaContentPart>> {
             | ChatMessage::ToolResponse { content, .. } => content,
             ChatMessage::Assistant { .. } => continue,
         };
-        extract_media_parts_from_content(content, &mut parts)?;
-    }
-    Ok(parts)
-}
-
-/// Append media parts found in one structured chat content value.
-fn extract_media_parts_from_content(
-    content: &ChatContent,
-    out: &mut Vec<MediaContentPart>,
-) -> Result<()> {
-    let ChatContent::Parts(parts) = content else {
-        return Ok(());
-    };
-    for part in parts {
-        match part {
-            ChatContentPart::Text { .. } => {}
-            ChatContentPart::ImageUrl {
-                image_url,
-                detail,
-                uuid,
-            } => out.push(MediaContentPart::ImageUrl {
-                url: image_url.clone(),
-                detail: *detail,
-                uuid: uuid.clone(),
-            }),
+        let ChatContent::Parts(parts) = content else {
+            continue;
+        };
+        for part in parts {
+            match part {
+                ChatContentPart::Text { .. } => {}
+                ChatContentPart::ImageUrl {
+                    image_url,
+                    detail,
+                    uuid,
+                } => all_parts.push(MediaContentPart::ImageUrl {
+                    url: image_url.clone(),
+                    detail: *detail,
+                    uuid: uuid.clone(),
+                }),
+            }
         }
     }
-    Ok(())
+    Ok(all_parts)
 }
 
-// ============================================================================
-// Stage 2: image preprocessing
-// ============================================================================
+impl MultimodalModelInfo {
+    /// Run media fetch, image preprocessing, prompt expansion, and feature
+    /// build.
+    ///
+    /// `prompt_token_ids` is mutated in place because placeholder expansion
+    /// changes both the final prompt and the offsets recorded in
+    /// `PlaceholderRange`.
+    async fn prepare_multimodal(
+        &self,
+        media_parts: Vec<MediaContentPart>,
+        prompt_token_ids: &mut Vec<u32>,
+    ) -> Result<MultiModalFeatures> {
+        if media_parts.is_empty() {
+            return Ok(Vec::new());
+        }
 
-/// Preprocess fetched image frames with the model's resolved image processor.
-///
-/// The processor work is CPU-heavy relative to request wiring, so it runs in a
-/// blocking task and returns owned tensors ready for wire conversion.
-async fn preprocess_images(
-    info: &MultimodalModelInfo,
-    image_frames: &[Arc<llm_multimodal::ImageFrame>],
-) -> Result<PreprocessedImages> {
-    let config = info.preprocessor_config.clone();
-    let processor = info.image_processor;
-    let images = image_frames.iter().map(|frame| frame.data().clone()).collect::<Vec<_>>();
+        let fetched = self.fetch_images(&media_parts).await?;
+        let preprocessed = self.preprocess_images(&fetched.frames).await?;
+        let replacements = self.spec.prompt_replacements(&self.context, &preprocessed)?;
+        let ranges = self.expand_prompt_tokens(prompt_token_ids, &replacements)?;
 
-    tokio::task::spawn_blocking(move || {
-        processor
-            .preprocess(&images, &config)
-            .map_err(|error| Error::Multimodal(error.to_string()))
-    })
-    .await
-    .map_err(|error| Error::Multimodal(format!("image preprocessing task failed: {error}")))?
-}
-
-// ============================================================================
-// Stage 3: expand placeholder tokens into the tokenized prompt
-// ============================================================================
-
-/// Replace rendered placeholder markers with model-specific replacement tokens.
-///
-/// Replacements are consumed in order, matching the original media-part order.
-/// The returned ranges point into the already-expanded prompt.
-fn expand_prompt_tokens(
-    prompt_token_ids: &mut Vec<u32>,
-    tokenizer: &dyn Tokenizer,
-    replacements: &[PromptReplacement],
-) -> Result<Vec<PlaceholderRange>> {
-    let mut cursor = 0;
-    let mut ranges = Vec::with_capacity(replacements.len());
-    for replacement in replacements {
-        if replacement.modality != Modality::Image {
+        let features = self.build_features(preprocessed, fetched, ranges)?;
+        if features.len() != media_parts.len() {
             return Err(Error::Multimodal(format!(
-                "unsupported prompt replacement modality `{}`",
-                replacement.modality
+                "number of built multimodal features {} does not match number of media parts {}",
+                features.len(),
+                media_parts.len()
             )));
         }
-        let marker = marker_tokens(&replacement.placeholder_token, tokenizer)?;
-        let offset = find_subsequence(prompt_token_ids, &marker, cursor).ok_or_else(|| {
-            Error::Multimodal(format!(
-                "placeholder token `{}` was not found in tokenized prompt",
-                replacement.placeholder_token
-            ))
-        })?;
-        let replacement_tokens = replacement
-            .tokens
-            .iter()
-            .map(|token| {
-                u32::try_from(*token).map_err(|_| {
-                    Error::Multimodal(format!("negative replacement token id `{token}`"))
-                })
+        Ok(features)
+    }
+
+    /// Fetch all image parts and preserve their request-order UUID metadata.
+    async fn fetch_images(&self, media_parts: &[MediaContentPart]) -> Result<FetchedImageMedia> {
+        let mut tracker = AsyncMultiModalTracker::new(Arc::clone(&self.media_connector));
+        for part in media_parts {
+            tracker
+                .push_part(part.clone())
+                .map_err(|error| Error::Multimodal(error.to_string()))?;
+        }
+
+        let tracker_output =
+            tracker.finalize().await.map_err(|error| Error::Multimodal(error.to_string()))?;
+        let images = tracker_output.data.get(&Modality::Image).cloned().unwrap_or_default();
+        let uuids = tracker_output.uuids.get(&Modality::Image).cloned().unwrap_or_default();
+
+        let frames = images
+            .into_iter()
+            .map(|media| match media {
+                TrackedMedia::Image(frame) => Ok(frame),
+                _ => Err(Error::UnsupportedMultimodalContent("non-image")),
             })
             .collect::<Result<Vec<_>>>()?;
-        if replacement_tokens.is_empty() {
-            return Err(Error::Multimodal(format!(
-                "placeholder token `{}` expanded to no tokens",
-                replacement.placeholder_token
-            )));
-        }
-        let replacement_len = replacement_tokens.len();
-        prompt_token_ids.splice(offset..offset + marker.len(), replacement_tokens);
-        ranges.push(PlaceholderRange {
-            offset,
-            length: replacement_len,
-            is_embed: None,
-        });
-        cursor = offset + replacement_len;
-    }
-    Ok(ranges)
-}
 
-/// Resolve the tokenized marker sequence for a placeholder string.
-///
-/// Most supported models use a single special token, but this accepts a
-/// multi-token marker if the tokenizer does not expose the string as one ID.
-fn marker_tokens(placeholder_token: &str, tokenizer: &dyn Tokenizer) -> Result<Vec<u32>> {
-    if let Some(token_id) = tokenizer.token_to_id(placeholder_token) {
-        return Ok(vec![token_id]);
+        Ok(FetchedImageMedia { frames, uuids })
     }
-    let ids = tokenizer
-        .encode(placeholder_token, false)
-        .map_err(|error| Error::Multimodal(error.to_string()))?;
-    if ids.is_empty() {
-        return Err(Error::Multimodal(format!(
-            "placeholder token `{placeholder_token}` encoded to no tokens"
-        )));
+
+    /// Preprocess fetched image frames with the model's resolved image
+    /// processor.
+    ///
+    /// The processor work is CPU-heavy relative to request wiring, so it runs
+    /// in a blocking task and returns owned tensors ready for wire
+    /// conversion.
+    async fn preprocess_images(
+        &self,
+        image_frames: &[Arc<llm_multimodal::ImageFrame>],
+    ) -> Result<PreprocessedImages> {
+        let config = self.image_processor.config.clone();
+        let processor = self.image_processor.raw;
+        let images = image_frames.iter().map(|frame| frame.data().clone()).collect::<Vec<_>>();
+
+        tokio::task::spawn_blocking(move || {
+            processor
+                .preprocess(&images, &config)
+                .map_err(|error| Error::Multimodal(error.to_string()))
+        })
+        .await
+        .map_err(|error| Error::Multimodal(format!("image preprocessing task failed: {error}")))?
     }
-    Ok(ids)
+
+    /// Replace rendered placeholder markers with model-specific replacement
+    /// tokens.
+    ///
+    /// Replacements are consumed in order, matching the original media-part
+    /// order. The returned ranges point into the already-expanded prompt.
+    fn expand_prompt_tokens(
+        &self,
+        prompt_token_ids: &mut Vec<u32>,
+        replacements: &[PromptReplacement],
+    ) -> Result<Vec<PlaceholderRange>> {
+        let mut cursor = 0;
+        let mut ranges = Vec::with_capacity(replacements.len());
+        for replacement in replacements {
+            if replacement.modality != Modality::Image {
+                return Err(Error::Multimodal(format!(
+                    "unsupported prompt replacement modality `{}`",
+                    replacement.modality
+                )));
+            }
+            let offset = find_next_token(
+                prompt_token_ids,
+                self.spec.placeholder_marker_token_id,
+                cursor,
+            )
+            .ok_or_else(|| {
+                Error::Multimodal(format!(
+                    "placeholder token `{}` was not found in tokenized prompt",
+                    self.spec.placeholder_token
+                ))
+            })?;
+            let replacement_tokens =
+                replacement.tokens.iter().map(|&token| token as u32).collect::<Vec<_>>();
+            if replacement_tokens.is_empty() {
+                return Err(Error::Multimodal(format!(
+                    "placeholder token `{}` expanded to no tokens",
+                    self.spec.placeholder_token
+                )));
+            }
+            let replacement_len = replacement_tokens.len();
+            prompt_token_ids.splice(offset..offset + 1, replacement_tokens);
+            ranges.push(PlaceholderRange {
+                offset,
+                length: replacement_len,
+                is_embed: None,
+            });
+            cursor = offset + replacement_len;
+        }
+        Ok(ranges)
+    }
+
+    /// Convert preprocessed image tensors into engine-core multimodal features.
+    ///
+    /// One `MultiModalFeatureSpec` is produced per image. Tensor fields are
+    /// sliced according to the model spec's field layout declarations.
+    fn build_features(
+        &self,
+        preprocessed: PreprocessedImages,
+        images: FetchedImageMedia,
+        ranges: Vec<PlaceholderRange>,
+    ) -> Result<MultiModalFeatures> {
+        let len = images.frames.len();
+        let tensors = collect_tensors(&preprocessed);
+
+        let mut features = Vec::with_capacity(images.frames.len());
+        for (index, (frame, uuid, range)) in izip!(images.frames, images.uuids, ranges).enumerate()
+        {
+            let mut data = MultiModalKwargsItem::new();
+            for (key, tensor) in &tensors {
+                let keep_on_cpu = self.spec.keep_on_cpu_keys.contains(key);
+                let (value, field) = match self.spec.field_layouts.get(key) {
+                    Some(FieldLayout::Batched) => (
+                        slice_batched_tensor_value(tensor, index)?,
+                        MultiModalField::Batched(MultiModalBatchedField { keep_on_cpu }),
+                    ),
+                    Some(FieldLayout::Flat { sizes_key }) => {
+                        let (start, end) = flat_range_for_index(&tensors, sizes_key, index)?;
+                        (
+                            slice_flat_tensor_value(tensor, start, end)?,
+                            MultiModalField::Flat(MultiModalFlatField {
+                                slices: vec![MultiModalSlice::Slice(SliceSpec {
+                                    start: Some(0),
+                                    stop: Some((end - start) as isize),
+                                    step: None,
+                                })],
+                                dim: 0,
+                                keep_on_cpu,
+                            }),
+                        )
+                    }
+                    None => (
+                        full_tensor_value(tensor)?,
+                        MultiModalField::Shared(MultiModalSharedField {
+                            batch_size: len,
+                            keep_on_cpu,
+                        }),
+                    ),
+                };
+                data.insert(
+                    key.clone(),
+                    MultiModalFieldElem {
+                        data: Some(value),
+                        field,
+                    },
+                );
+            }
+
+            let hash = frame.hash.clone();
+            features.push(MultiModalFeatureSpec {
+                data: Some(data),
+                modality: "image".to_string(),
+                identifier: uuid.unwrap_or_else(|| hash.clone()),
+                mm_position: range,
+                mm_hash: Some(hash),
+            });
+        }
+
+        Ok(features)
+    }
 }
 
 /// Find `needle` in `haystack`, starting at `start`.
 ///
 /// This is intentionally order-preserving rather than a global replace: each
 /// image consumes the next placeholder occurrence.
-fn find_subsequence(haystack: &[u32], needle: &[u32], start: usize) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    (start..=haystack.len() - needle.len())
-        .find(|&index| &haystack[index..index + needle.len()] == needle)
-}
-
-// ============================================================================
-// Stage 4: build MultiModalFeatures from preprocessed tensors
-// ============================================================================
-
-/// Convert preprocessed image tensors into engine-core multimodal features.
-///
-/// One `MultiModalFeatureSpec` is produced per image. Tensor fields are sliced
-/// according to the model spec's field layout declarations.
-fn build_features(
-    preprocessed: &PreprocessedImages,
-    image_frames: &[Arc<llm_multimodal::ImageFrame>],
-    uuids: &llm_multimodal::MultiModalUUIDs,
-    ranges: &[PlaceholderRange],
-    field_layouts: &HashMap<String, FieldLayout>,
-    keep_on_cpu_keys: &[String],
-) -> Result<MultiModalFeatures> {
-    if image_frames.len() != ranges.len() {
-        return Err(Error::Multimodal(format!(
-            "expected {} placeholder ranges, got {}",
-            image_frames.len(),
-            ranges.len()
-        )));
-    }
-
-    let keep_on_cpu_keys = keep_on_cpu_keys.iter().cloned().collect::<HashSet<_>>();
-    let tensors = collect_tensors(preprocessed);
-    let image_uuids = uuids.get(&Modality::Image);
-
-    let mut features = Vec::with_capacity(image_frames.len());
-    for (index, frame) in image_frames.iter().enumerate() {
-        let mut data = MultiModalKwargsItem::new();
-        for (key, tensor) in &tensors {
-            let keep_on_cpu = keep_on_cpu_keys.contains(key);
-            let (value, field) = match field_layouts.get(key) {
-                Some(FieldLayout::Batched) => (
-                    slice_batched_tensor_value(tensor, index)?,
-                    MultiModalField::Batched(MultiModalBatchedField { keep_on_cpu }),
-                ),
-                Some(FieldLayout::Flat { sizes_key }) => {
-                    let (start, end) = flat_range_for_index(&tensors, sizes_key, index)?;
-                    (
-                        slice_flat_tensor_value(tensor, start, end)?,
-                        MultiModalField::Flat(MultiModalFlatField {
-                            slices: vec![MultiModalSlice::Slice(SliceSpec {
-                                start: Some(0),
-                                stop: Some((end - start) as isize),
-                                step: None,
-                            })],
-                            dim: 0,
-                            keep_on_cpu,
-                        }),
-                    )
-                }
-                None => (
-                    full_tensor_value(tensor)?,
-                    MultiModalField::Shared(MultiModalSharedField {
-                        batch_size: image_frames.len(),
-                        keep_on_cpu,
-                    }),
-                ),
-            };
-            data.insert(
-                key.clone(),
-                MultiModalFieldElem {
-                    data: Some(value),
-                    field,
-                },
-            );
-        }
-
-        let uuid = image_uuids.and_then(|values| values.get(index)).and_then(|value| value.clone());
-        let hash = frame.hash.clone();
-        features.push(MultiModalFeatureSpec {
-            data: Some(data),
-            modality: "image".to_string(),
-            identifier: uuid.unwrap_or_else(|| hash.clone()),
-            mm_position: ranges[index].clone(),
-            mm_hash: Some(hash),
-        });
-    }
-
-    Ok(features)
+fn find_next_token(haystack: &[u32], needle: u32, start: usize) -> Option<usize> {
+    haystack
+        .get(start..)?
+        .iter()
+        .position(|token| *token == needle)
+        .map(|offset| start + offset)
 }
 
 // ============================================================================
@@ -743,59 +738,17 @@ fn slice_first_axis_range<T: Clone>(
     Ok((out_shape, data[data_start..data_end].to_vec()))
 }
 
-// ============================================================================
-// Model spec & registry lookup
-// ============================================================================
-
-/// Resolve a static model processor spec for one loaded model.
-fn lookup_model_spec(
-    model_id: &str,
-    config: &serde_json::Value,
-    tokenizer: &dyn Tokenizer,
-) -> Option<&'static dyn ModelProcessorSpec> {
-    let resolver = TokenizerResolver { tokenizer };
-    let metadata = ModelMetadata {
-        model_id,
-        tokenizer: &resolver,
-        config,
-    };
-    model_registry().lookup(&metadata)
-}
-
-/// Return the process-wide model spec registry.
-fn model_registry() -> &'static ModelRegistry {
-    static REGISTRY: LazyLock<ModelRegistry> = LazyLock::new(ModelRegistry::new);
-    &REGISTRY
-}
-
-/// Resolve a static image preprocessor for one loaded model.
-fn lookup_image_processor(
-    model_id: &str,
-    model_type: Option<&str>,
-) -> Option<&'static dyn ImagePreProcessor> {
-    image_processor_registry().find(model_id, model_type)
-}
-
-/// Return the process-wide image preprocessor registry.
-fn image_processor_registry() -> &'static ImageProcessorRegistry {
-    static REGISTRY: LazyLock<ImageProcessorRegistry> =
-        LazyLock::new(ImageProcessorRegistry::with_defaults);
-    &REGISTRY
-}
-
 /// Adapter from the frontend tokenizer trait to `llm-multimodal`.
-struct TokenizerResolver<'a> {
-    /// Tokenizer used for placeholder/string token lookup.
-    tokenizer: &'a dyn Tokenizer,
-}
+#[derive(Clone)]
+struct TokenizerResolver(DynTokenizer);
 
-impl TokenResolver for TokenizerResolver<'_> {
+impl TokenResolver for TokenizerResolver {
     fn token_to_id(&self, token: &str) -> Option<u32> {
-        self.tokenizer.token_to_id(token)
+        self.0.token_to_id(token)
     }
 
     fn id_to_token(&self, id: u32) -> Option<String> {
-        self.tokenizer.id_to_token(id)
+        self.0.id_to_token(id)
     }
 }
 
@@ -865,30 +818,42 @@ mod tests {
             "model_type": "qwen2_vl",
             "vision_token_id": 151655
         });
-        let spec =
-            lookup_model_spec(&model_id, &config, &TestTokenizer).expect("qwen spec should match");
-        let image_processor = lookup_image_processor(&model_id, Some("qwen2_vl"))
-            .expect("qwen image processor should match");
-
-        MultimodalModelInfo {
+        let context = MultimodalModelContext {
             model_id,
             model_type: Some("qwen2_vl".to_string()),
             config,
-            preprocessor_config: PreProcessorConfig::default(),
+            tokenizer: TokenizerResolver(Arc::new(TestTokenizer)),
+        };
+        let spec = context.resolve_model_spec().expect("qwen spec should match");
+        let spec = ResolvedMultimodalSpec::new(spec, &context).unwrap();
+        let raw_image_processor =
+            context.resolve_image_processor().expect("qwen image processor should match");
+        let media_connector = Arc::new(
+            MediaConnector::new(reqwest::Client::new(), MediaConnectorConfig::default()).unwrap(),
+        );
+
+        MultimodalModelInfo {
+            context,
             spec,
-            image_processor,
+            image_processor: ResolvedImageProcessor {
+                raw: raw_image_processor,
+                config: PreProcessorConfig::default(),
+            },
+            media_connector,
         }
     }
 
     #[test]
     fn resolves_qwen_placeholder_token() {
-        let placeholder = placeholder_token(&qwen_info(), &TestTokenizer).unwrap();
+        let info = qwen_info();
+        let placeholder = info.placeholder_token();
 
         assert_eq!(placeholder, "<image>");
     }
 
     #[test]
     fn expand_prompt_tokens_replaces_placeholder_marker() {
+        let info = qwen_info();
         let mut prompt_token_ids = vec![1, 999, 2];
         let replacements = vec![PromptReplacement::sequence(
             Modality::Image,
@@ -896,8 +861,7 @@ mod tests {
             vec![151655, 151655, 151655],
         )];
 
-        let ranges =
-            expand_prompt_tokens(&mut prompt_token_ids, &TestTokenizer, &replacements).unwrap();
+        let ranges = info.expand_prompt_tokens(&mut prompt_token_ids, &replacements).unwrap();
 
         assert_eq!(prompt_token_ids, vec![1, 151655, 151655, 151655, 2]);
         assert_eq!(ranges[0].offset, 1);
@@ -906,6 +870,7 @@ mod tests {
 
     #[test]
     fn expand_prompt_tokens_errors_when_placeholder_missing() {
+        let info = qwen_info();
         let mut prompt_token_ids = vec![1, 2, 3];
         let replacements = vec![PromptReplacement::sequence(
             Modality::Image,
@@ -913,64 +878,21 @@ mod tests {
             vec![151655],
         )];
 
-        let error =
-            expand_prompt_tokens(&mut prompt_token_ids, &TestTokenizer, &replacements).unwrap_err();
+        let error = info.expand_prompt_tokens(&mut prompt_token_ids, &replacements).unwrap_err();
 
         assert!(matches!(error, Error::Multimodal(message) if message.contains("not found")));
     }
 
     #[test]
-    fn expand_prompt_tokens_uses_each_replacement_placeholder() {
-        struct MultiMarkerTokenizer;
-
-        impl Tokenizer for MultiMarkerTokenizer {
-            fn encode(
-                &self,
-                text: &str,
-                _add_special_tokens: bool,
-            ) -> std::result::Result<Vec<u32>, TokenizerError> {
-                Ok(match text {
-                    "<image_a>" => vec![900],
-                    "<image_b>" => vec![901],
-                    text => text.bytes().map(u32::from).collect(),
-                })
-            }
-
-            fn decode(
-                &self,
-                _token_ids: &[u32],
-                _skip_special_tokens: bool,
-            ) -> std::result::Result<String, TokenizerError> {
-                Ok(String::new())
-            }
-
-            fn token_to_id(&self, token: &str) -> Option<u32> {
-                match token {
-                    "<image_a>" => Some(900),
-                    "<image_b>" => Some(901),
-                    _ => None,
-                }
-            }
-
-            fn create_decode_stream(
-                &self,
-                _prompt_token_ids: &[u32],
-                _skip_special_tokens: bool,
-                _min_bytes_to_buffer: usize,
-            ) -> Box<dyn IncrementalDecoder + '_> {
-                unreachable!("not used")
-            }
-        }
-
-        let mut prompt_token_ids = vec![1, 900, 2, 901, 3];
+    fn expand_prompt_tokens_uses_cached_model_placeholder() {
+        let info = qwen_info();
+        let mut prompt_token_ids = vec![1, 999, 2, 999, 3];
         let replacements = vec![
-            PromptReplacement::sequence(Modality::Image, "<image_a>", vec![151655, 151655]),
-            PromptReplacement::sequence(Modality::Image, "<image_b>", vec![151656]),
+            PromptReplacement::sequence(Modality::Image, "<image>", vec![151655, 151655]),
+            PromptReplacement::sequence(Modality::Image, "<image>", vec![151656]),
         ];
 
-        let ranges =
-            expand_prompt_tokens(&mut prompt_token_ids, &MultiMarkerTokenizer, &replacements)
-                .unwrap();
+        let ranges = info.expand_prompt_tokens(&mut prompt_token_ids, &replacements).unwrap();
 
         assert_eq!(prompt_token_ids, vec![1, 151655, 151655, 2, 151656, 3]);
         assert_eq!(ranges[0].offset, 1);
@@ -981,6 +903,7 @@ mod tests {
 
     #[test]
     fn expand_prompt_tokens_rejects_negative_replacement_token() {
+        let info = qwen_info();
         let mut prompt_token_ids = vec![999];
         let replacements = vec![PromptReplacement::sequence(
             Modality::Image,
@@ -988,8 +911,7 @@ mod tests {
             vec![-1],
         )];
 
-        let error =
-            expand_prompt_tokens(&mut prompt_token_ids, &TestTokenizer, &replacements).unwrap_err();
+        let error = info.expand_prompt_tokens(&mut prompt_token_ids, &replacements).unwrap_err();
 
         assert!(
             matches!(error, Error::Multimodal(message) if message.contains("negative replacement token id"))
@@ -1007,7 +929,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalizes_qwen_image_data_url_into_token_ids_and_features() {
-        let tokenizer: DynTokenizer = Arc::new(TestTokenizer);
+        let info = qwen_info();
         let request = ChatRequest {
             messages: vec![ChatMessage::user(vec![ChatContentPart::ImageUrl {
                 image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_string(),
@@ -1021,9 +943,7 @@ mod tests {
         };
 
         let (prompt, features) =
-            finalize_rendered_prompt(&request, rendered, tokenizer, Some(&qwen_info()))
-                .await
-                .unwrap();
+            finalize_rendered_prompt(&request, rendered, Some(&info)).await.unwrap();
 
         let token_ids = prompt.into_token_ids().unwrap();
         assert!(!token_ids.is_empty());

@@ -5575,6 +5575,7 @@ dependencies = [
  "easy-ext",
  "expect-test",
  "futures",
+ "itertools 0.14.0",
  "llm-multimodal",
  "minijinja",
  "minijinja-contrib",

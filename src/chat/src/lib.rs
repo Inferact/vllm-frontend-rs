@@ -161,7 +161,6 @@ impl ChatLlm {
         let (prompt, mm_features) = multimodal::finalize_rendered_prompt(
             &request,
             rendered,
-            self.text.tokenizer(),
             self.backend.multimodal_model_info(),
         )
         .await?;

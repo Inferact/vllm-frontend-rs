@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tracing::info;
 use vllm_text::backend::hf::{HfTextBackend, ResolvedModelFiles, load_model_config};
-use vllm_text::tokenizer::{DynTokenizer, Tokenizer};
+use vllm_text::tokenizer::DynTokenizer;
 use vllm_text::{DynTextBackend, TextBackend as _};
 
 use crate::backend::{
@@ -43,10 +43,9 @@ impl HfChatBackend {
             (!model_type.is_empty()).then_some(model_type.to_string()),
             files.config_path.as_deref(),
             files.preprocessor_config_path.as_deref(),
-            tokenizer.as_ref(),
+            tokenizer.clone(),
         )?;
-        let multimodal_render_info =
-            resolve_multimodal_render_info(multimodal_model_info.as_ref(), tokenizer.as_ref());
+        let multimodal_render_info = resolve_multimodal_render_info(multimodal_model_info.as_ref());
 
         let renderer = options.renderer.resolve(model_type);
         let chat_renderer: DynChatRenderer = match renderer {
@@ -132,11 +131,10 @@ pub(super) async fn load_model_backends(
 
 fn resolve_multimodal_render_info(
     info: Option<&MultimodalModelInfo>,
-    tokenizer: &dyn Tokenizer,
 ) -> Option<MultimodalRenderInfo> {
-    crate::multimodal::placeholder_token(info?, tokenizer)
-        .ok()
-        .map(|placeholder_token| MultimodalRenderInfo { placeholder_token })
+    info.map(|info| MultimodalRenderInfo {
+        placeholder_token: info.placeholder_token().to_string(),
+    })
 }
 
 #[cfg(test)]
