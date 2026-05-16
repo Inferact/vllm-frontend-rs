@@ -64,6 +64,7 @@ mod tests {
     use super::DeepSeekV32ToolParser;
     use crate::ToolParser;
     use crate::test_utils::{collect_stream, split_by_chars, test_tools};
+    use thiserror_ext::AsReport;
 
     fn build_tool_call(function_name: &str, params: &[(&str, &str)]) -> String {
         let params = params
@@ -346,7 +347,9 @@ mod tests {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
         parser.push("<｜DSML｜function_calls>\n").unwrap();
         parser.push("<｜DSML｜invoke name=\"get_weather\">\n").unwrap();
-        parser.push("<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo").unwrap();
+        parser
+            .push("<｜DSML｜parameter name=\"location\" string=\"true\">Tokyo")
+            .unwrap();
         parser.push("<｜end▁of▁sentence｜>").unwrap();
 
         let error = parser.finish().unwrap_err();
@@ -395,7 +398,9 @@ mod tests {
         let mut parser = DeepSeekV32ToolParser::new(&test_tools());
         parser.push("<｜DSML｜function_calls>\n").unwrap();
         parser.push("<｜DSML｜invoke name=\"get_weather\">\n").unwrap();
-        parser.push("<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n").unwrap();
+        parser
+            .push("<｜DSML｜parameter name=\"location\" string=\"true\">SF</｜DSML｜parameter>\n")
+            .unwrap();
 
         let error = parser.finish().unwrap_err();
         assert!(error.to_report_string().contains("incomplete DeepSeek DSML tool call"));
