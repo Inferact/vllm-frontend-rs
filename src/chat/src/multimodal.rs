@@ -436,7 +436,7 @@ impl MultimodalModelInfo {
         ranges: Vec<PlaceholderRange>,
     ) -> Result<MultiModalFeatures> {
         let len = images.frames.len();
-        let tensors = tensor::collect_tensors(&preprocessed);
+        let tensors = tensor::collect_tensors(preprocessed);
 
         let mut features = Vec::with_capacity(images.frames.len());
         for (index, (frame, uuid, range)) in izip!(images.frames, images.uuids, ranges).enumerate()
@@ -446,14 +446,18 @@ impl MultimodalModelInfo {
                 let keep_on_cpu = self.spec.keep_on_cpu_keys.contains(key);
                 let (value, field) = match self.spec.field_layouts.get(key) {
                     Some(FieldLayout::Batched) => (
-                        tensor::slice_batched_tensor_value(tensor, index)?,
+                        tensor.batched_value_at(index)?,
                         MultiModalField::Batched(MultiModalBatchedField { keep_on_cpu }),
                     ),
                     Some(FieldLayout::Flat { sizes_key }) => {
-                        let (start, end) =
-                            tensor::flat_range_for_index(&tensors, sizes_key, index)?;
+                        let sizes = tensors.get(sizes_key).ok_or_else(|| {
+                            Error::Multimodal(format!(
+                                "flat tensor sizes key `{sizes_key}` is missing"
+                            ))
+                        })?;
+                        let (start, end) = tensor::flat_range_for_index(sizes, sizes_key, index)?;
                         (
-                            tensor::slice_flat_tensor_value(tensor, start, end)?,
+                            tensor.flat_value_range(start, end)?,
                             MultiModalField::Flat(MultiModalFlatField {
                                 slices: vec![MultiModalSlice::Slice(SliceSpec {
                                     start: Some(0),
@@ -466,17 +470,18 @@ impl MultimodalModelInfo {
                         )
                     }
                     None => (
-                        tensor::full_tensor_value(tensor)?,
+                        tensor.clone(),
                         MultiModalField::Shared(MultiModalSharedField {
                             batch_size: len,
                             keep_on_cpu,
                         }),
                     ),
                 };
+
                 data.insert(
                     key.clone(),
                     MultiModalFieldElem {
-                        data: Some(value),
+                        data: Some(value.try_into()?),
                         field,
                     },
                 );

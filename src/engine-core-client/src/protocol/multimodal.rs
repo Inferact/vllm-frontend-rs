@@ -74,31 +74,31 @@ pub type MultiModalKwargsItem = BTreeMap<String, MultiModalFieldElem>;
 /// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L348-L369>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiModalFieldElem {
-    /// The tensor data of this field in `MultiModalKwargsItem`, i.e. the value
-    /// of the keyword argument to be passed to the model.
+    /// The processed value of this field in `MultiModalKwargsItem`, i.e. the
+    /// keyword argument value to be passed to the model.
     ///
     /// It may be set to `None` if it is determined that the item is cached
     /// in `EngineCore`.
-    pub data: Option<NestedTensorValue>,
+    pub data: Option<MultiModalKwargValue>,
 
-    /// Defines how to combine the tensor data of this field with others
-    /// in order to batch multi-modal items together for model inference.
+    /// Defines how to combine this field's processed values with others in
+    /// order to batch multi-modal items together for model inference.
     pub field: MultiModalField,
 }
 
-/// Nested tensor payload used by multimodal keyword arguments.
+/// Processed multimodal keyword argument value.
 ///
-/// Original Python type alias and wire encoding:
+/// Original Python definition (`NestedTensors`) and wire encoding:
 /// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/multimodal/inputs.py#L218-L226>
 /// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L292-L299>
 /// <https://github.com/vllm-project/vllm/blob/5a0a8fc1ea7542394ff315138bd5677b7b53bca1/vllm/v1/serial_utils.py#L456-L465>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum NestedTensorValue {
+pub enum MultiModalKwargValue {
     Tensor(WireTensor),
     Int(i64),
     Float(f64),
-    List(Vec<NestedTensorValue>),
+    List(Vec<MultiModalKwargValue>),
 }
 
 /// Defines how to interpret tensor data belonging to a keyword argument for

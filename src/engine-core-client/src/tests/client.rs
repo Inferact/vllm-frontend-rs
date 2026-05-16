@@ -20,7 +20,7 @@ use crate::protocol::handshake::{HandshakeInitMessage, ReadyMessage};
 use crate::protocol::logprobs::MaybeWireLogprobs;
 use crate::protocol::multimodal::{
     MultiModalFeatureSpec, MultiModalField, MultiModalFieldElem, MultiModalFlatField,
-    MultiModalSlice, NestedTensorValue, PlaceholderRange, SliceSpec,
+    MultiModalKwargValue, MultiModalSlice, PlaceholderRange, SliceSpec,
 };
 use crate::protocol::stats::SchedulerStats;
 use crate::protocol::tensor_wire::WireTensor;
@@ -168,7 +168,7 @@ fn sample_multimodal_request() -> EngineCoreRequest {
             data: Some(BTreeMap::from([(
                 "pixel_values".to_string(),
                 MultiModalFieldElem {
-                    data: Some(NestedTensorValue::Tensor(
+                    data: Some(MultiModalKwargValue::Tensor(
                         WireTensor::from_f32(vec![2, 2], vec![1.0, 2.0, 3.5, 4.25])
                             .expect("valid tensor shape"),
                     )),
