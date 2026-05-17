@@ -183,8 +183,8 @@ impl MultimodalModelInfo {
 
         let Some(spec) = context.resolve_model_spec() else {
             warn!(
-                model_id = %context.model_id,
-                model_type = ?context.model_type,
+                model_id = context.model_id,
+                model_type = context.model_type,
                 "multimodal model spec is not registered; disabling multimodal support for this model"
             );
             return Ok(None);
